@@ -142,9 +142,17 @@ pdo_pers  = float(d['pdo'].iloc[-12:].mean())
 # Se hoje já passou de junho, usar próximo junho
 ano_base = TODAY.year if TODAY.month >= 6 else TODAY.year - 1
 H_start  = pd.Period(f'{ano_base}-06', 'M')
-last_end  = endog.index[-1]                          # último mês treinado
-skip      = int(H_start - (last_end + 1))            # passos a pular
-total_fc  = skip + 12                                 # total de passos gerados
+# Último mês da série de treino como Period explícito
+last_end  = pd.Period(str(endog.index[-1]), 'M')
+first_fc  = last_end + 1                             # primeiro passo do forecast
+# Calcular skip via ordinal — evita ambiguidade com MonthEnd offsets do pandas
+skip      = H_start.ordinal - first_fc.ordinal       # passos a pular até jun
+if skip < 0:
+    # H_start já passou — avançar um ano
+    ano_base += 1
+    H_start   = pd.Period(f'{ano_base}-06', 'M')
+    skip      = H_start.ordinal - first_fc.ordinal
+total_fc  = skip + 12                                # total de passos gerados
 
 print(f"  Horizonte: {H_start} → {H_start + 11}")
 print(f"  Último mês treinado: {last_end}  →  skip={skip}, total={total_fc}")
