@@ -58,12 +58,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
 
       - name: Configurar Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -101,13 +101,13 @@ jobs:
 
       # GitHub Pages — repositório público, plano Free
       - name: Preparar pasta para Pages
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v3.0.1
         with:
           path: docs/
 
       - name: Publicar no GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v4.0.5
 
       - name: Sumário da execução
         if: always()
