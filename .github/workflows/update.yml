@@ -1,0 +1,130 @@
+name: Atualização Dashboard Clima — 3ª Quinta-feira
+
+on:
+  # ── Agendamento automático ─────────────────────────────────────────────
+  # 3ª quinta-feira do mês às 12:00 BRT = 15:00 UTC
+  # O cron dispara toda quinta-feira dos dias 15–21.
+  # O job verifica se é de fato a 3ª quinta antes de rodar.
+  schedule:
+    - cron: '0 15 15-21 * 4'
+
+  # ── Execução manual (teste ou atualização fora do ciclo) ───────────────
+  workflow_dispatch:
+    inputs:
+      motivo:
+        description: 'Motivo da execução manual'
+        required: false
+        default: 'Atualização manual'
+
+permissions:
+  contents: write   # commit dos dados atualizados
+  pages:    write   # publicar no GitHub Pages
+  id-token: write   # autenticação OIDC para Pages
+
+jobs:
+  # ── Job 1: confirmar que é a 3ª quinta-feira ────────────────────────────
+  verificar-data:
+    name: Verificar 3ª quinta-feira
+    runs-on: ubuntu-latest
+    outputs:
+      executar: ${{ steps.check.outputs.executar }}
+    steps:
+      - name: Checar semana do mês
+        id: check
+        run: |
+          DIA=$(date +%d)
+          DIA_SEM=$(date +%u)   # 1=seg 2=ter 3=qua 4=qui 5=sex 6=sab 7=dom
+          echo "Hoje: dia $DIA do mês, dia da semana $DIA_SEM"
+          if [ "$DIA_SEM" = "4" ] && [ "$DIA" -ge 15 ] && [ "$DIA" -le 21 ]; then
+            echo "✅ É a 3ª quinta-feira"
+            echo "executar=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "🔧 Execução manual — prosseguindo"
+            echo "executar=true" >> $GITHUB_OUTPUT
+          else
+            echo "⏭ Não é a 3ª quinta-feira (dia $DIA) — nada a fazer"
+            echo "executar=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Job 2: recalcular e publicar ────────────────────────────────────────
+  atualizar:
+    name: Recalcular e publicar dashboard
+    needs: verificar-data
+    if: needs.verificar-data.outputs.executar == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Rodar update_dashboard.py
+        run: python scripts/update_dashboard.py
+        env:
+          TZ: America/Araguaina
+
+      - name: Verificar se houve alterações
+        id: diff
+        run: |
+          git diff --quiet docs/ data/ && \
+            echo "alterado=false" >> $GITHUB_OUTPUT || \
+            echo "alterado=true"  >> $GITHUB_OUTPUT
+
+      - name: Commit dos dados atualizados
+        if: steps.diff.outputs.alterado == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
+          git add docs/index.html data/
+          git commit -m "auto: atualização dashboard — $DATA
+
+          - Série Sinobras+MERRA-2 atualizada
+          - SARIMAX(N34+TSA+PDO) reestimado
+          - Cenários e BH recalculados"
+          git push
+
+      # GitHub Pages — repositório público, plano Free
+      - name: Preparar pasta para Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+      - name: Publicar no GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Sumário da execução
+        if: always()
+        run: |
+          echo "## 📊 Atualização Dashboard Clima" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Data** | $(TZ='America/Araguaina' date +'%d/%m/%Y') |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Hora** | $(TZ='America/Araguaina' date +'%H:%M') BRT |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Alterações** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
+          if [ -f data/meta_best.json ]; then
+            MEDIA=$(python3 -c \
+              "import json;d=json.load(open('data/meta_best.json'));print(f\"{d.get('media',0):.0f} mm\")" \
+              2>/dev/null || echo "—")
+            echo "| **Média anual série** | $MEDIA |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🌐 **Dashboard:** ${{ steps.deploy.outputs.page_url }}" >> $GITHUB_STEP_SUMMARY
