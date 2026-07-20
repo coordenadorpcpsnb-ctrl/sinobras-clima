@@ -142,9 +142,17 @@ pdo_pers  = float(d['pdo'].iloc[-12:].mean())
 # Se hoje já passou de junho, usar próximo junho
 ano_base = TODAY.year if TODAY.month >= 6 else TODAY.year - 1
 H_start  = pd.Period(f'{ano_base}-06', 'M')
-last_end  = endog.index[-1]                          # último mês treinado
-skip      = int(H_start - (last_end + 1))            # passos a pular
-total_fc  = skip + 12                                 # total de passos gerados
+# Último mês da série de treino como Period explícito
+last_end  = pd.Period(str(endog.index[-1]), 'M')
+first_fc  = last_end + 1                             # primeiro passo do forecast
+# Calcular skip via ordinal — evita ambiguidade com MonthEnd offsets do pandas
+skip      = H_start.ordinal - first_fc.ordinal       # passos a pular até jun
+if skip < 0:
+    # H_start já passou — avançar um ano
+    ano_base += 1
+    H_start   = pd.Period(f'{ano_base}-06', 'M')
+    skip      = H_start.ordinal - first_fc.ordinal
+total_fc  = skip + 12                                # total de passos gerados
 
 print(f"  Horizonte: {H_start} → {H_start + 11}")
 print(f"  Último mês treinado: {last_end}  →  skip={skip}, total={total_fc}")
@@ -354,18 +362,19 @@ for sc in cenarios_bh:
     fc_parts.append(f'    "{sc}":{{prec:{json.dumps(dfc["prec"])},'
                     f'lo95:{json.dumps(dfc["lo95"])},hi95:{json.dumps(dfc["hi95"])},'
                     f'p5:{json.dumps(dfc["p5"])},p95:{json.dumps(dfc["p95"])}}}')
-new_fc = '  fc:{\n' + ',\n'.join(fc_parts) + '\n  }'
+new_fc = '  fc:{\n' + ',\n'.join(fc_parts) + '\n  },'
 fc_s = html.find('  fc:{\n    "El Nino forte"')
-fc_e = html.find('\n  },\n  summary:', fc_s)
+fc_e = html.find('\n  summary:', fc_s)   # pular direto para summary (sem o },)
 if fc_s>=0 and fc_e>=0:
-    html = html[:fc_s] + new_fc + html[fc_e:]
+    html = html[:fc_s] + new_fc + '\n' + html[fc_e:]
 
 # D.summary
-sum_s = html.find('summary:{\n'); sum_e = html.find('\n  }', sum_s) + 4
+sum_s = html.find('summary:{\n')
+sum_e = html.find('\n};', sum_s)  # fecha o const D
 parts = [f'    "{r.cenario}":{{tot:{r.total12m},anom:{r.anom_pct},'
          f'lo:{r.lo95},hi:{r.hi95},pseca:{r.p_seca},pexc:{r.p_excesso}}}'
          for _, r in scen_df.iterrows()]
-html = html[:sum_s] + 'summary:{\n' + ',\n'.join(parts) + '\n  }' + html[sum_e:]
+html = html[:sum_s] + 'summary:{\n' + ',\n'.join(parts) + '\n  }\n' + html[sum_e:]
 
 # SARIMAX_DATA
 TRI={'AMJ':[(ano_base,4),(ano_base,5),(ano_base,6)],
@@ -451,9 +460,12 @@ new_bundle = json.dumps({
     'bh_final':    bh_final,
 }, ensure_ascii=False, separators=(',',':'))
 
-html = re.sub(r'const EMBEDDED_BUNDLE = \{.*?\};',
-              f'const EMBEDDED_BUNDLE = {new_bundle};',
-              html, flags=re.DOTALL)
+# Usar str.replace (não re.sub) para preservar os \n escapados do JSON
+old_bundle_match = re.search(r'const EMBEDDED_BUNDLE = \{.*?\};', html, re.DOTALL)
+if old_bundle_match:
+    html = html[:old_bundle_match.start()] + \
+           f'const EMBEDDED_BUNDLE = {new_bundle};' + \
+           html[old_bundle_match.end():]
 
 DASHBOARD.write_text(html, encoding='utf-8')
 print(f"  ✅ docs/index.html atualizado ({len(html)//1024} KB)")
