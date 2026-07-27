@@ -1,15 +1,10 @@
 name: Atualização Dashboard Clima — 3ª Quinta-feira
 
 on:
-  # ── Agendamento automático ─────────────────────────────────────────────
-  # 3ª quinta-feira do mês às 12:00 BRT = 15:00 UTC
-  # O cron dispara toda quinta-feira dos dias 15–21.
-  # O job verifica se é de fato a 3ª quinta antes de rodar.
   schedule:
-    - cron: '0 15 15-21 * 4'
+    - cron: '0 15 15-21 * 4'   # toda quinta-feira dias 15-21, 15h UTC (12h BRT)
 
-  # ── Execução manual (teste ou atualização fora do ciclo) ───────────────
-  workflow_dispatch:
+  workflow_dispatch:             # execução manual — sem verificação de data
     inputs:
       motivo:
         description: 'Motivo da execução manual'
@@ -17,12 +12,12 @@ on:
         default: 'Atualização manual'
 
 permissions:
-  contents: write   # commit dos dados atualizados
-  pages:    write   # publicar no GitHub Pages
-  id-token: write   # autenticação OIDC para Pages
+  contents: write
+  pages:    write
+  id-token: write
 
 jobs:
-  # ── Job 1: confirmar que é a 3ª quinta-feira ────────────────────────────
+  # ── Verificar data apenas no agendamento automático ────────────────────
   verificar-data:
     name: Verificar 3ª quinta-feira
     runs-on: ubuntu-latest
@@ -32,21 +27,25 @@ jobs:
       - name: Checar semana do mês
         id: check
         run: |
-          DIA=$(date +%d)
-          DIA_SEM=$(date +%u)   # 1=seg 2=ter 3=qua 4=qui 5=sex 6=sab 7=dom
-          echo "Hoje: dia $DIA do mês, dia da semana $DIA_SEM"
-          if [ "$DIA_SEM" = "4" ] && [ "$DIA" -ge 15 ] && [ "$DIA" -le 21 ]; then
-            echo "✅ É a 3ª quinta-feira"
+          # Execução manual: sempre prosseguir
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "executar=true" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "🔧 Execução manual — prosseguindo"
+            exit 0
+          fi
+          # Agendamento: verificar se é a 3ª quinta-feira (dia 15-21)
+          DIA=$(date +%d)
+          DIA_SEM=$(date +%u)
+          echo "Hoje: dia $DIA, dia_semana=$DIA_SEM"
+          if [ "$DIA_SEM" = "4" ] && [ "$DIA" -ge 15 ] && [ "$DIA" -le 21 ]; then
+            echo "✅ 3ª quinta-feira confirmada"
             echo "executar=true" >> $GITHUB_OUTPUT
           else
-            echo "⏭ Não é a 3ª quinta-feira (dia $DIA) — nada a fazer"
+            echo "⏭ Não é a 3ª quinta-feira — pulando"
             echo "executar=false" >> $GITHUB_OUTPUT
           fi
 
-  # ── Job 2: recalcular e publicar ────────────────────────────────────────
+  # ── Recalcular e publicar ───────────────────────────────────────────────
   atualizar:
     name: Recalcular e publicar dashboard
     needs: verificar-data
@@ -92,14 +91,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
           git add docs/index.html data/
-          git commit -m "auto: atualização dashboard — $DATA
-
-          - Série Sinobras+MERRA-2 atualizada
-          - SARIMAX(N34+TSA+PDO) reestimado
-          - Cenários e BH recalculados"
+          git commit -m "auto: atualização dashboard — $DATA"
           git push
 
-      # GitHub Pages — repositório público, plano Free
       - name: Preparar pasta para Pages
         uses: actions/upload-pages-artifact@v3.0.1
         with:
@@ -113,18 +107,9 @@ jobs:
         if: always()
         run: |
           echo "## 📊 Atualização Dashboard Clima" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Data** | $(TZ='America/Araguaina' date +'%d/%m/%Y') |" >> $GITHUB_STEP_SUMMARY
           echo "| **Hora** | $(TZ='America/Araguaina' date +'%H:%M') BRT |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Alterações** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
-          if [ -f data/meta_best.json ]; then
-            MEDIA=$(python3 -c \
-              "import json;d=json.load(open('data/meta_best.json'));print(f\"{d.get('media',0):.0f} mm\")" \
-              2>/dev/null || echo "—")
-            echo "| **Média anual série** | $MEDIA |" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "🌐 **Dashboard:** ${{ steps.deploy.outputs.page_url }}" >> $GITHUB_STEP_SUMMARY
