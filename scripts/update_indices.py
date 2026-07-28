@@ -1,351 +1,311 @@
 #!/usr/bin/env python3
 """
 update_indices.py — Atualização automática de índices oceânicos
-Sinobras Florestal · executado todo dia 21 às 12h BRT pelo GitHub Actions
+Sinobras Florestal · executado todo dia 21 às 13h BRT pelo GitHub Actions
 
-Fontes (PSL/NOAA — públicas, sem autenticação, sem geobloqueio):
-  Niño 3.4 mensal : https://psl.noaa.gov/data/correlation/nina34.data
-  TSA mensal      : https://psl.noaa.gov/data/correlation/tsa.data
-  PDO mensal      : https://psl.noaa.gov/data/correlation/pdo.data
-  CPC weekly Niño : https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for
-
-Calcula ONI (média móvel 3 meses do Niño 3.4) e atualiza docs/index.html.
+Fontes PSL/NOAA (públicas, sem autenticação):
+  CPC sstoi.indices  : https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices
+  PSL nina34.data    : https://psl.noaa.gov/data/correlation/nina34.data
+  PSL tsa.data       : https://psl.noaa.gov/data/correlation/tsa.data
+  CPC wksst9120.for  : https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for
 """
 
-import re, json, sys
+import re, sys
 from pathlib import Path
 from datetime import date, datetime
 import urllib.request
 
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
-
-MISSING = -999.9   # valor usado pelo PSL para dado ausente
-
-# ══════════════════════════════════════════════════════════════════════════
-# 1. DOWNLOAD DAS SÉRIES PSL/NOAA
-# ══════════════════════════════════════════════════════════════════════════
+MISSING   = -999.9
 
 HEADERS = {
-    'User-Agent': 'sinobras-clima/1.0 (github-actions; contato: github.com)',
-    'Accept': 'text/plain, */*',
+    'User-Agent': 'sinobras-clima/1.0 (github-actions)',
+    'Accept'    : 'text/plain, */*',
 }
 
-def fetch_psl(url: str, timeout: int = 20) -> str:
-    """Baixa um arquivo texto do PSL/NOAA."""
+# ══════════════════════════════════════════════════════
+# DOWNLOAD
+# ══════════════════════════════════════════════════════
+def fetch(url, timeout=20):
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode('utf-8', errors='replace')
 
 
-def parse_psl_annual(text: str) -> dict:
+# ══════════════════════════════════════════════════════
+# PARSERS
+# ══════════════════════════════════════════════════════
+def parse_sstoi(text):
     """
-    Parseia o formato PSL anual:
-      YEAR  JAN  FEB  MAR  APR  MAY  JUN  JUL  AUG  SEP  OCT  NOV  DEC
-      1950  0.1  0.2  ...
-    Retorna {(ano, mes): valor} ignorando -999.9.
+    CPC sstoi.indices — colunas fixas:
+    YR MON NINO1+2 ANOM NINO3 ANOM NINO4 ANOM NINO3.4 ANOM34
+    Retorna {(ano, mes): nino34_anomalia}
     """
     data = {}
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) < 13:
+        if len(parts) < 10:
             continue
         try:
-            year = int(parts[0])
-        except ValueError:
-            continue
-        if year < 1950 or year > date.today().year + 1:
-            continue
-        for m, val_s in enumerate(parts[1:13], start=1):
-            try:
-                val = float(val_s)
-                if abs(val - MISSING) > 1:
-                    data[(year, m)] = round(val, 2)
-            except ValueError:
-                pass
+            y, m = int(parts[0]), int(parts[1])
+            v = float(parts[9])          # ANOM34
+            if 1950 <= y <= 2030 and abs(v - MISSING) > 1:
+                data[(y, m)] = round(v, 2)
+        except (ValueError, IndexError):
+            pass
     return data
 
 
-def fetch_cpc_weekly_nino34() -> tuple[str, float] | tuple[None, None]:
+def parse_psl_anual(text):
     """
-    Lê o arquivo semanal do CPC (wksst9120.for) e extrai o valor
-    mais recente do Niño 3.4.
-    Retorna (label_semana, valor) ou (None, None) se falhar.
+    PSL nina34.data / tsa.data — formato:
+        YYYY          ← linha com apenas o ano
+        v1 v2 ... v12 ← linha com 12 valores mensais
+    Retorna {(ano, mes): valor}
     """
-    url = 'https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for'
-    try:
-        text = fetch_psl(url)
-    except Exception as e:
-        print(f"  ⚠ CPC semanal indisponível: {e}")
-        return None, None
+    data  = {}
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    i = 0
+    while i < len(lines):
+        parts = lines[i].split()
+        if len(parts) == 1:
+            try:
+                y = int(parts[0])
+                if 1950 <= y <= 2030 and i + 1 < len(lines):
+                    vals = lines[i + 1].split()
+                    if len(vals) >= 12:
+                        for m, vs in enumerate(vals[:12], start=1):
+                            try:
+                                v = float(vs)
+                                if abs(v - MISSING) > 1:
+                                    data[(y, m)] = round(v, 2)
+                            except ValueError:
+                                pass
+                        i += 2
+                        continue
+            except ValueError:
+                pass
+        i += 1
+    return data
 
-    # Formato: "04JAN1990   26.0  0.1  25.6  0.0  25.7  0.0  21.3  0.5"
-    # Colunas: data, SST Niño1+2, anom, SST Niño3, anom, SST Niño34, anom, SST Niño4, anom
-    lines = [l for l in text.splitlines() if len(l) > 30 and l[0].isdigit()]
-    if not lines:
-        return None, None
-    last = lines[-1].split()
-    try:
-        label = last[0]          # ex: "15JUL2026"
-        nino34_weekly = float(last[6])   # anomalia Niño 3.4 (coluna 7)
-        return label, round(nino34_weekly, 2)
-    except (IndexError, ValueError):
-        return None, None
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# 2. CALCULAR ONI (média móvel 3 meses)
-# ══════════════════════════════════════════════════════════════════════════
-
-def calc_oni(nino34: dict) -> dict:
+def parse_wksst(text):
     """
-    ONI = média de 3 meses consecutivos do Niño 3.4.
-    Retorna {(ano, mes_central): oni_value}.
-    Nota: mes_central é o mês do meio do trimestre.
+    CPC wksst9120.for — linhas com data + SST/anomalia por região:
+    DDMMMYYYY  SST1 ANOM1 SST2 ANOM2 SST3 ANOM3 SST34 ANOM34
+    Retorna (label_str, nino34_anom) do registro mais recente.
     """
+    ultimo_lbl, ultimo_val = None, None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 9:
+            continue
+        try:
+            datetime.strptime(parts[0], '%d%b%Y')  # valida data
+            v = float(parts[7])                     # ANOM34 (0-indexed col 7)
+            ultimo_lbl = parts[0]
+            ultimo_val = round(v, 2)
+        except (ValueError, IndexError):
+            pass
+    return ultimo_lbl, ultimo_val
+
+
+# ══════════════════════════════════════════════════════
+# ONI
+# ══════════════════════════════════════════════════════
+def calc_oni(nino34):
+    """Média móvel de 3 meses centrada no mês do meio."""
     oni = {}
     for (y, m), v in nino34.items():
-        # mês anterior e posterior
-        ym1 = (y-1, 12) if m == 1  else (y, m-1)
-        yp1 = (y+1,  1) if m == 12 else (y, m+1)
+        ym1 = (y - 1, 12) if m == 1  else (y, m - 1)
+        yp1 = (y + 1,  1) if m == 12 else (y, m + 1)
         if ym1 in nino34 and yp1 in nino34:
             oni[(y, m)] = round((nino34[ym1] + v + nino34[yp1]) / 3, 2)
     return oni
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 3. MONTAR ARRAYS PARA O DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════
-
-def build_series(nino34: dict, tsa: dict,
-                 weekly_label: str | None, weekly_val: float | None
-                 ) -> dict:
-    """
-    Constrói os arrays labels/nino34/oni/tsa para o dashboard.
-    Cobre jan/2023 → mês mais recente disponível.
-    """
+# ══════════════════════════════════════════════════════
+# MONTAR ARRAYS PARA O DASHBOARD
+# ══════════════════════════════════════════════════════
+def build_series(nino34, tsa, wk_lbl, wk_val):
     TODAY = date.today()
     oni   = calc_oni(nino34)
 
-    # Intervalo: jan/2023 até o mês atual (inclusive estimativa semanal)
-    start_y, start_m = 2023, 1
-    end_y,   end_m   = TODAY.year, TODAY.month
-
-    labels_out  = []
-    nino34_out  = []
-    oni_out     = []
-    tsa_out     = []
-
-    y, m = start_y, start_m
-    while (y, m) <= (end_y, end_m):
-        # Label
-        if m >= 6:   # jun em diante: "mm/yy" sem zero
-            lbl = f"{m:02d}/{str(y)[2:]}"
-        else:
-            lbl = f"{m:02d}/{str(y)[2:]}"
-
-        # Niño 3.4 mensal
+    # Jan/2023 até mês atual inclusive
+    labels_o, n34_o, oni_o, tsa_o = [], [], [], []
+    y, m = 2023, 1
+    while (y, m) <= (TODAY.year, TODAY.month):
+        lbl = f'"{m:02d}/{str(y)[2:]}"'
         n34 = nino34.get((y, m))
-
-        # Se é o mês atual e temos valor semanal recente, usar
-        if n34 is None and weekly_val is not None:
+        # mês atual sem dado mensal: usar semanal se disponível
+        if n34 is None and wk_val is not None:
             if y == TODAY.year and m == TODAY.month:
-                n34 = weekly_val
+                n34 = wk_val
+        o   = oni.get((y, m))
+        t   = tsa.get((y, m))
 
-        # ONI
-        o = oni.get((y, m))
+        labels_o.append(lbl)
+        n34_o.append(str(n34) if n34 is not None else 'null')
+        oni_o.append(str(o)   if o   is not None else 'null')
+        tsa_o.append(str(t)   if t   is not None else 'null')
 
-        # TSA
-        t = tsa.get((y, m))
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
 
-        labels_out.append(f'"{lbl}"')
-        nino34_out.append(str(n34) if n34 is not None else 'null')
-        oni_out.append(str(o)   if o   is not None else 'null')
-        tsa_out.append(str(t)   if t   is not None else 'null')
-
-        # Avançar mês
-        if m == 12: y, m = y+1, 1
-        else:        m += 1
-
-    return {
-        'labels': labels_out,
-        'nino34': nino34_out,
-        'oni':    oni_out,
-        'tsa':    tsa_out,
-    }
+    return {'labels': labels_o, 'nino34': n34_o, 'oni': oni_o, 'tsa': tsa_o}
 
 
-def latest_value(series: dict, key: str) -> tuple[str, float] | tuple[None, None]:
-    """Retorna (label, valor) do último não-null da série."""
-    labels = series['labels']
-    vals   = series[key]
-    for lbl, v in zip(reversed(labels), reversed(vals)):
+def latest_non_null(series, key):
+    for lbl, v in zip(reversed(series['labels']), reversed(series[key])):
         if v != 'null':
             return lbl.strip('"'), float(v)
     return None, None
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 4. ATUALIZAR O HTML
-# ══════════════════════════════════════════════════════════════════════════
+def label_fmt(lbl):
+    """'06/26' → 'jun/2026'"""
+    meses = ['jan','fev','mar','abr','mai','jun',
+             'jul','ago','set','out','nov','dez']
+    try:
+        mm, yy = lbl.split('/')
+        return f"{meses[int(mm)-1]}/20{yy}"
+    except Exception:
+        return lbl
 
-def update_html(series: dict, weekly_label: str | None,
-                weekly_val: float | None) -> bool:
-    """Aplica os novos índices ao docs/index.html. Retorna True se alterou."""
+
+# ══════════════════════════════════════════════════════
+# ATUALIZAR HTML
+# ══════════════════════════════════════════════════════
+def update_html(series, wk_lbl, wk_val):
     html = DASHBOARD.read_text(encoding='utf-8')
     original = html
 
-    # ── labels / nino34 / oni / tsa ──────────────────────────────────────
-    html = re.sub(
-        r'labels:\[[^\]]+\]',
-        f'labels:[{",".join(series["labels"])}]',
-        html
-    )
-    html = re.sub(
-        r'nino34:\[([-\d.,\s]+)\]',
-        f'nino34:[{",".join(series["nino34"])}]',
-        html
-    )
-    html = re.sub(
-        r'oni:\s*\[([-\d.,\s\wnull]+)\]',
-        f'oni:   [{",".join(series["oni"])}]',
-        html
-    )
-    html = re.sub(
-        r'tsa:\s*\[([-\d.,\s\wnull]+)\]',
-        f'tsa:   [{",".join(series["tsa"])}]',
-        html
-    )
+    # Séries
+    html = re.sub(r'labels:\[[^\]]+\]',
+                  f'labels:[{",".join(series["labels"])}]', html)
+    html = re.sub(r'nino34:\[([-\d.,\s]+)\]',
+                  f'nino34:[{",".join(series["nino34"])}]', html)
+    html = re.sub(r'oni:\s*\[([-\d.,\s\wnull]+)\]',
+                  f'oni:   [{",".join(series["oni"])}]', html)
+    html = re.sub(r'tsa:\s*\[([-\d.,\s\wnull]+)\]',
+                  f'tsa:   [{",".join(series["tsa"])}]', html)
 
-    # ── D.now — cards do Monitor ENSO ────────────────────────────────────
-    lbl_n34, val_n34 = latest_value(series, 'nino34')
-    lbl_oni, val_oni = latest_value(series, 'oni')
-    lbl_tsa, val_tsa = latest_value(series, 'tsa')
+    # D.now — cards do Monitor ENSO
+    lbl_n, val_n = latest_non_null(series, 'nino34')
+    lbl_o, val_o = latest_non_null(series, 'oni')
+    lbl_t, val_t = latest_non_null(series, 'tsa')
 
-    # Preferir valor semanal para Niño 3.4 se mais recente
-    if weekly_val is not None and weekly_label is not None:
-        # Converter label "15JUL2026" para "jul/2026"
+    # Preferir semanal para Niño 3.4 se mais recente que o mensal
+    if wk_val is not None and wk_lbl is not None:
         try:
-            dt = datetime.strptime(weekly_label, '%d%b%Y')
-            lbl_n34 = dt.strftime(f'%m/%Y').lstrip('0') or '0'
-            lbl_n34_display = dt.strftime('%-m/%Y') if sys.platform != 'win32' \
-                              else dt.strftime('%m/%Y').lstrip('0')
-            val_n34 = weekly_val
-            lbl_n34 = dt.strftime('%b/%Y').lower()[:3] + '/' + str(dt.year)
+            dt = datetime.strptime(wk_lbl, '%d%b%Y')
+            val_n = wk_val
+            lbl_n = dt.strftime('%m/%y')
         except Exception:
             pass
 
-    def fmt_lbl(lbl):
-        """Formata label para exibição: '06/2026' → 'jun/2026'."""
-        meses = ['jan','fev','mar','abr','mai','jun',
-                 'jul','ago','set','out','nov','dez']
-        try:
-            parts = lbl.replace('"','').split('/')
-            m_num = int(parts[0])
-            return f"{meses[m_num-1]}/{parts[1]}"
-        except Exception:
-            return lbl
-
-    if val_n34 is not None:
-        lbl_n34_fmt = fmt_lbl(lbl_n34) if lbl_n34 else ''
-    if val_oni is not None:
-        lbl_oni_fmt = fmt_lbl(lbl_oni) if lbl_oni else ''
-    if val_tsa is not None:
-        lbl_tsa_fmt = fmt_lbl(lbl_tsa) if lbl_tsa else ''
-
-    old_now = re.search(r'now:\s*\{[^}]+\}', html)
-    if old_now and val_n34 is not None:
-        TODAY = date.today()
+    TODAY = date.today()
+    if val_n is not None and val_o is not None:
         new_now = (
             'now: {\n'
-            f'    nino34: ["{lbl_n34_fmt}", {val_n34}],'
-            f'   // Atualizado automaticamente {TODAY.strftime("%d/%m/%Y")}\n'
-            f'    oni:    ["{lbl_oni_fmt}", {val_oni}],'
-            f'   // ONI (média 3m Niño 3.4)\n'
-            f'    tsa:    ["{lbl_tsa_fmt}", {val_tsa}]'
-            f'    // TSA (último mensal disponível)\n'
+            f'    nino34: ["{label_fmt(lbl_n)}", {val_n}],  '
+            f'// Atualizado {TODAY.strftime("%d/%m/%Y")} — PSL/NOAA\n'
+            f'    oni:    ["{label_fmt(lbl_o)}", {val_o}],  '
+            f'// ONI (média 3m)\n'
+            f'    tsa:    ["{label_fmt(lbl_t) if lbl_t else "—"}", '
+            f'{val_t if val_t is not None else 0}]  '
+            f'// TSA mensal\n'
             '  }'
         )
-        html = html[:old_now.start()] + new_now + html[old_now.end():]
+        old_now = re.search(r'now:\s*\{[^}]+\}', html)
+        if old_now:
+            html = html[:old_now.start()] + new_now + html[old_now.end():]
 
-    # ── Data de atualização ───────────────────────────────────────────────
-    TODAY = date.today()
+    # Data de atualização
     dt_str = TODAY.strftime('%d/%m/%Y')
-    html = re.sub(r"data:\s*'[\d/]+'", f"data:       '{dt_str}'", html)
+    html = re.sub(r"data:\s*'[\d/]+'",       f"data:       '{dt_str}'", html)
     html = re.sub(r"atualizado_em:\s*'[\d/]+'",
                   f"atualizado_em: '{dt_str}'", html)
 
     changed = html != original
     if changed:
         DASHBOARD.write_text(html, encoding='utf-8')
-        print(f"  ✅ docs/index.html atualizado")
-    else:
-        print(f"  ℹ Nenhuma alteração detectada nos índices")
     return changed
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 5. MAIN
-# ══════════════════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════
 def main():
     TODAY = date.today()
     print(f"\n{'='*55}")
-    print(f"  ATUALIZAÇÃO DE ÍNDICES — {TODAY.strftime('%d/%m/%Y')}")
+    print(f"  ÍNDICES OCEÂNICOS — {TODAY.strftime('%d/%m/%Y')}")
     print(f"{'='*55}")
 
-    # Baixar séries mensais
-    print("\n[1/3] Baixando séries PSL/NOAA…")
-    nino34_data, tsa_data = {}, {}
+    nino34, tsa = {}, {}
 
+    # 1. CPC sstoi.indices (fonte primária — formato simples)
+    print("\n[1/3] CPC sstoi.indices (primário)…")
     try:
-        text = fetch_psl('https://psl.noaa.gov/data/correlation/nina34.data')
-        nino34_data = parse_psl_annual(text)
-        last_n34 = max(nino34_data.keys())
-        print(f"  ✅ Niño 3.4: {len(nino34_data)} meses "
-              f"(último: {last_n34[1]:02d}/{last_n34[0]})")
+        text   = fetch('https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices')
+        nino34 = parse_sstoi(text)
+        last   = max(nino34)
+        print(f"  ✅ Niño 3.4: {len(nino34)} meses | último: {last[1]:02d}/{last[0]}")
     except Exception as e:
-        print(f"  ❌ Niño 3.4 falhou: {e}")
+        print(f"  ⚠ sstoi.indices falhou: {e} — tentando PSL…")
+        try:
+            text   = fetch('https://psl.noaa.gov/data/correlation/nina34.data')
+            nino34 = parse_psl_anual(text)
+            last   = max(nino34)
+            print(f"  ✅ PSL nina34: {len(nino34)} meses | último: {last[1]:02d}/{last[0]}")
+        except Exception as e2:
+            print(f"  ❌ Ambas as fontes falharam: {e2}")
 
+    # 2. PSL tsa.data
+    print("\n[2/3] PSL tsa.data…")
     try:
-        text = fetch_psl('https://psl.noaa.gov/data/correlation/tsa.data')
-        tsa_data = parse_psl_annual(text)
-        last_tsa = max(tsa_data.keys())
-        print(f"  ✅ TSA: {len(tsa_data)} meses "
-              f"(último: {last_tsa[1]:02d}/{last_tsa[0]})")
+        text = fetch('https://psl.noaa.gov/data/correlation/tsa.data')
+        tsa  = parse_psl_anual(text)
+        last_t = max(tsa)
+        print(f"  ✅ TSA: {len(tsa)} meses | último: {last_t[1]:02d}/{last_t[0]}")
     except Exception as e:
-        print(f"  ⚠ TSA falhou (não crítico): {e}")
+        print(f"  ⚠ TSA indisponível (não crítico): {e}")
 
-    # Valor semanal mais recente
-    print("\n[2/3] Buscando Niño 3.4 semanal (CPC)…")
-    weekly_label, weekly_val = fetch_cpc_weekly_nino34()
-    if weekly_val is not None:
-        print(f"  ✅ Semanal: {weekly_label} = {weekly_val:+.2f}°C")
-    else:
-        print(f"  ⚠ Valor semanal indisponível")
-
-    if not nino34_data:
+    if not nino34:
         print("\n❌ Sem dados de Niño 3.4 — abortando")
-        sys.exit(1)
+        return 1
 
-    # Montar séries e atualizar HTML
-    print("\n[3/3] Atualizando dashboard…")
-    series  = build_series(nino34_data, tsa_data, weekly_label, weekly_val)
-    changed = update_html(series, weekly_label, weekly_val)
+    # 3. CPC semanal
+    print("\n[3/3] CPC wksst9120.for (semanal)…")
+    wk_lbl, wk_val = None, None
+    try:
+        text = fetch('https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for')
+        wk_lbl, wk_val = parse_wksst(text)
+        if wk_val is not None:
+            print(f"  ✅ Semanal: {wk_lbl} → {wk_val:+.2f}°C")
+    except Exception as e:
+        print(f"  ⚠ Semanal indisponível: {e}")
 
-    # Resumo
-    lbl_n34, val_n34 = latest_value(series, 'nino34')
-    lbl_oni, val_oni = latest_value(series, 'oni')
-    lbl_tsa, val_tsa = latest_value(series, 'tsa')
-    print(f"\n  Niño 3.4: {val_n34:+.2f}°C ({lbl_n34})")
-    print(f"  ONI:      {val_oni:+.2f}°C ({lbl_oni})")
-    if val_tsa:
-        print(f"  TSA:      {val_tsa:+.2f}°C ({lbl_tsa})")
+    # Montar e atualizar
+    series  = build_series(nino34, tsa, wk_lbl, wk_val)
+    changed = update_html(series, wk_lbl, wk_val)
 
-    print(f"\n{'='*55}")
-    print(f"  CONCLUÍDO — alterações: {'sim' if changed else 'nenhuma'}")
+    lbl_n, val_n = latest_non_null(series, 'nino34')
+    lbl_o, val_o = latest_non_null(series, 'oni')
+    lbl_t, val_t = latest_non_null(series, 'tsa')
+
+    print(f"\n  Niño 3.4 : {val_n:+.2f}°C ({label_fmt(lbl_n)})")
+    print(f"  ONI      : {val_o:+.2f}°C ({label_fmt(lbl_o)})")
+    if val_t:
+        print(f"  TSA      : {val_t:+.2f}°C ({label_fmt(lbl_t)})")
+    if wk_val:
+        print(f"  Semanal  : {wk_val:+.2f}°C ({wk_lbl})")
+
+    print(f"\n  Alterações: {'sim' if changed else 'nenhuma'}")
     print(f"{'='*55}\n")
-    return 0 if changed else 0
+    return 0
 
 
 if __name__ == '__main__':
