@@ -24,6 +24,116 @@ warnings.filterwarnings('ignore')
 
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
+# ══════════════════════════════════════════════════════════════════════════
+# FALLBACK: Open-Meteo ERA5-Land para meses sem SINOBRAS_new.csv
+# API gratuita, sem chave, acessível globalmente (GitHub Actions)
+# Referência: centroide das 34 fazendas Sinobras — Norte TO
+# ══════════════════════════════════════════════════════════════════════════
+
+FAZENDAS_LAT = -7.80    # centroide das fazendas Sinobras (Norte TO)
+FAZENDAS_LON = -47.95
+
+def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
+    """Precipitação diária via Open-Meteo ERA5-Land → total mensal."""
+    import urllib.request, json, calendar
+    ultimo_dia = calendar.monthrange(ano_fim, mes_fim)[1]
+    url = (
+        f"https://archive-api.open-meteo.com/v1/archive"
+        f"?latitude={FAZENDAS_LAT}&longitude={FAZENDAS_LON}"
+        f"&start_date={ano_ini}-{mes_ini:02d}-01"
+        f"&end_date={ano_fim}-{mes_fim:02d}-{ultimo_dia:02d}"
+        f"&daily=precipitation_sum&timezone=America%2FSao_Paulo"
+    )
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "sinobras-clima/1.0 (github-actions)"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+        df = pd.DataFrame({
+            "data": pd.to_datetime(data["daily"]["time"]),
+            "prec": pd.to_numeric(data["daily"]["precipitation_sum"],
+                                  errors="coerce").fillna(0),
+        })
+        df["ano"] = df["data"].dt.year
+        df["mes"] = df["data"].dt.month
+        mensal = df.groupby(["ano", "mes"])["prec"].sum().reset_index()
+        mensal["prec"]  = mensal["prec"].round(1)
+        mensal["fonte"] = "OpenMeteo-ERA5"
+        return mensal
+    except Exception as e:
+        print(f"  ⚠ Open-Meteo indisponível: {e}")
+        return pd.DataFrame(columns=["ano", "mes", "prec", "fonte"])
+
+
+def incorporar_fallback_openmeteo(serie, data_path):
+    """
+    Preenche meses recentes ausentes na série com ERA5-Land via Open-Meteo.
+    Dados Sinobras têm prioridade — meses já existentes nunca são substituídos.
+    """
+    from dateutil.relativedelta import relativedelta
+    from datetime import datetime, date
+
+    hoje  = date.today()
+    # ERA5-Land tem delay de ~5 dias — limitar ao mês anterior
+    lim_m = hoje.month - 1 if hoje.month > 1 else 12
+    lim_y = hoje.year if hoje.month > 1 else hoje.year - 1
+    dt_lim = datetime(lim_y, lim_m, 1)
+
+    s_sorted = serie.sort_values(["ano", "mes"])
+    ult = s_sorted.iloc[-1]
+    dt_serie = datetime(int(ult["ano"]), int(ult["mes"]), 1)
+
+    if dt_serie >= dt_lim:
+        print("  ℹ Série já atualizada — fallback não necessário")
+        return serie
+
+    prox = dt_serie + relativedelta(months=1)
+    print(f"  🌐 Open-Meteo ERA5: {prox.strftime('%m/%Y')} → {dt_lim.strftime('%m/%Y')}")
+
+    df_om = buscar_prec_openmeteo(prox.year, prox.month, lim_y, lim_m)
+    if df_om.empty:
+        return serie
+
+    # Remover meses que já existem na série
+    existentes = set(zip(serie["ano"].astype(int), serie["mes"].astype(int)))
+    df_novos = df_om[
+        ~df_om.apply(lambda r: (int(r.ano), int(r.mes)) in existentes, axis=1)
+    ].copy()
+
+    if df_novos.empty:
+        print("  ℹ Nenhum mês novo via Open-Meteo")
+        return serie
+
+    # Preencher índices ENSO do master_monthly quando disponível
+    df_novos["nino34"] = 0.0
+    df_novos["tsa"]    = 0.0
+    df_novos["pdo"]    = 0.0
+    df_novos["date"]   = pd.to_datetime(
+        dict(year=df_novos["ano"].astype(int),
+             month=df_novos["mes"].astype(int), day=1)).astype(str)
+    try:
+        merra   = pd.read_csv(data_path / "master_monthly.csv", parse_dates=["date"])
+        mer     = merra[["year","month","nino34","tsa","pdo"]].copy()
+        mer.columns = ["ano","mes","nino34","tsa","pdo"]
+        mer_idx = mer.set_index(["ano","mes"])
+        for i, r in df_novos.iterrows():
+            try:
+                mi = mer_idx.loc[(int(r.ano), int(r.mes))]
+                df_novos.at[i,"nino34"] = float(mi["nino34"])
+                df_novos.at[i,"tsa"]    = float(mi["tsa"])
+                df_novos.at[i,"pdo"]    = float(mi["pdo"])
+            except KeyError:
+                pass
+    except Exception:
+        pass
+
+    print(f"  ✅ {len(df_novos)} mês(es) adicionados via ERA5-Land:")
+    for _, r in df_novos.iterrows():
+        print(f"     {int(r.mes):02d}/{int(r.ano)}: {r.prec:.1f} mm")
+
+    return pd.concat([serie, df_novos], ignore_index=True)             .sort_values(["ano","mes"]).reset_index(drop=True)
+
+
 # ── Caminhos ──────────────────────────────────────────────────────────────
 ROOT      = Path(__file__).parent.parent
 DATA      = ROOT / 'data'
@@ -49,6 +159,11 @@ print(f"{'='*60}")
 # 1. INCORPORAR NOVOS DADOS SINOBRAS (se SINOBRAS_new.csv existir)
 # ══════════════════════════════════════════════════════════════════════════
 serie = pd.read_csv(SERIE_PATH)
+
+# ── Fallback Open-Meteo: preencher meses recentes se não há SINOBRAS_new ──
+if not NEW_SINOBRAS.exists():
+    serie = incorporar_fallback_openmeteo(serie, DATA)
+    serie.to_csv(SERIE_PATH, index=False)  # salvar série atualizada
 
 if NEW_SINOBRAS.exists():
     print(f"\n[1/6] Incorporando {NEW_SINOBRAS.name}…")
