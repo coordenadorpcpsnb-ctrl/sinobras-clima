@@ -19,15 +19,16 @@ from datetime import date
 
 import pandas as pd
 from docx import Document
-from docx.shared import Pt, RGBColor, Twips
+from docx.shared import Pt, RGBColor, Twips, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
-from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 ROOT   = Path(__file__).parent.parent
 DATA   = ROOT / 'data'
 DOCS   = ROOT / 'docs'
+LOGO   = ROOT / 'assets' / 'logo-sinobras.png'
 SAIDA  = DOCS / 'relatorio-executivo.docx'
 
 VERDE   = RGBColor(0x1F, 0x4D, 0x2E)
@@ -102,6 +103,11 @@ def layout_fixo(tabela, larguras):
     """python-docx ignora a largura das células sem layout fixo + tblGrid."""
     tabela.autofit = False
     tblPr = tabela._tbl.tblPr
+    # remover os elementos que o python-docx já criou (tblW auto) — duplicá-los
+    # deixa o resultado indefinido e o Word acaba usando o primeiro
+    for tag in ('w:tblLayout', 'w:tblW'):
+        for velho in tblPr.findall(qn(tag)):
+            tblPr.remove(velho)
     lay = OxmlElement('w:tblLayout')
     lay.set(qn('w:type'), 'fixed')
     tblPr.append(lay)
@@ -119,8 +125,22 @@ def layout_fixo(tabela, larguras):
             c.width = Twips(lg)
 
 
+def sem_bordas(tabela):
+    tblPr = tabela._tbl.tblPr
+    borders = OxmlElement('w:tblBorders')
+    for lado in ('top','bottom','left','right','insideH','insideV'):
+        el = OxmlElement(f'w:{lado}')
+        el.set(qn('w:val'), 'none')
+        el.set(qn('w:sz'), '0')
+        el.set(qn('w:color'), 'FFFFFF')
+        borders.append(el)
+    tblPr.append(borders)
+
+
 def espacamento_celula(tabela, cima=60, baixo=60, esq=90, dir_=90):
     tblPr = tabela._tbl.tblPr
+    for velho in tblPr.findall(qn('w:tblCellMar')):
+        tblPr.remove(velho)
     mar = OxmlElement('w:tblCellMar')
     for lado, v in [('top',cima), ('bottom',baixo), ('left',esq), ('right',dir_)]:
         el = OxmlElement(f'w:{lado}')
@@ -285,13 +305,23 @@ def montar(d):
     st.font.size = Pt(9.5)
 
     sec = doc.sections[0]
-    sec.top_margin    = Twips(1000)
+    sec.top_margin    = Twips(1500)
+    sec.header_distance = Twips(420)
     sec.bottom_margin = Twips(900)
     sec.left_margin   = Twips(1080)
     sec.right_margin  = Twips(1080)
     LARG = 9746   # largura útil em twips
 
-    # ── cabeçalho ───────────────────────────────────────────────────────
+    # ── logo no cabeçalho de seção (canto superior direito, todas as páginas)
+    if LOGO.exists():
+        hdr = sec.header
+        hdr.is_linked_to_previous = False
+        hp = hdr.paragraphs[0]
+        hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        hp.paragraph_format.space_after = Pt(0)
+        hp.add_run().add_picture(str(LOGO), width=Inches(1.5))
+
+    # ── bloco de título ─────────────────────────────────────────────────
     p = doc.add_paragraph(); p.paragraph_format.space_after = Pt(1.5)
     run(p, 'SINOBRAS FLORESTAL  \u00b7  PLANEJAMENTO E OPERAÇÕES',
         tam=7.5, bold=True, cor=VERDE_C, espaco=40)
@@ -299,7 +329,7 @@ def montar(d):
     p = doc.add_paragraph(); p.paragraph_format.space_after = Pt(2)
     run(p, 'Relatório Executivo \u2014 Clima Operacional', tam=15, bold=True, cor=VERDE)
 
-    p = doc.add_paragraph(); p.paragraph_format.space_after = Pt(10)
+    p = doc.add_paragraph(); p.paragraph_format.space_after = Pt(9)
     run(p, f'Norte do Tocantins  \u00b7  Horizonte {horiz_ext}  \u00b7  '
            f'Emissão {HOJE.strftime("%d/%m/%Y")}', tam=8.5, cor=CINZA)
     borda_inferior(p, cor=VERDE_HEX, tamanho=12)
