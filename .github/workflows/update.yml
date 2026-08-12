@@ -58,6 +58,12 @@ jobs:
         env:
           TZ: America/Araguaina
 
+      # ── Passo 4: Gerar relatório executivo (.docx) ────────────────────
+      - name: Gerar relatório executivo
+        run: python scripts/gerar_relatorio.py
+        env:
+          TZ: America/Araguaina
+
       # ── Commit e deploy ───────────────────────────────────────────────
       - name: Verificar alterações
         id: diff
@@ -73,13 +79,14 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
           MES_ANT=$(TZ='America/Araguaina' date -d '1 month ago' +'%m/%Y')
-          git add docs/index.html data/
+          git add docs/index.html docs/relatorio-executivo.docx data/
           git commit -m "auto: atualização dashboard — $DATA
 
           - Dados Open-Meteo ERA5-Land: $MES_ANT incorporados
           - Índices oceânicos atualizados (PSL/NOAA)
-          - SARIMAX(N34+TSA+PDO) reestimado
-          - Cenários e BH recalculados"
+          - SARIMAX x XGBoost comparados e melhor selecionado
+          - Cenários e BH recalculados
+          - Relatório executivo regerado"
           git push
 
       - name: Preparar para GitHub Pages
