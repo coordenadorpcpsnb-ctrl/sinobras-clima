@@ -1,0 +1,62 @@
+[
+  {
+    "modelo": "SARIMA",
+    "R2": 0.7911,
+    "RMSE": 61.0,
+    "MAE": 42.8
+  },
+  {
+    "modelo": "SARIMAX(N34+TSA+PDO)",
+    "R2": 0.7828,
+    "RMSE": 62.2,
+    "MAE": 42.2
+  },
+  {
+    "modelo": "SARIMAX(N34+TSA)",
+    "R2": 0.7827,
+    "RMSE": 62.2,
+    "MAE": 43.1
+  },
+  {
+    "modelo": "SARIMAX(N34)",
+    "R2": 0.7795,
+    "RMSE": 62.6,
+    "MAE": 42.9
+  },
+  {
+    "modelo": "MLR(+TSA/PDO)",
+    "R2": 0.7787,
+    "RMSE": 62.8,
+    "MAE": 41.9
+  },
+  {
+    "modelo": "SARIMAX(N34+PDO)",
+    "R2": 0.7746,
+    "RMSE": 63.3,
+    "MAE": 42.5
+  },
+  {
+    "modelo": "RandomForest(+TSA/PDO)",
+    "R2": 0.7676,
+    "RMSE": 64.3,
+    "MAE": 44.0
+  },
+  {
+    "modelo": "Ensemble(SARIMAX+XGB+LGBM)",
+    "R2": 0.75,
+    "RMSE": 66.7,
+    "MAE": 44.9
+  },
+  {
+    "modelo": "XGBoost(+TSA/PDO)",
+    "R2": 0.7206,
+    "RMSE": 70.5,
+    "MAE": 48.3
+  },
+  {
+    "modelo": "LightGBM(+TSA/PDO)",
+    "R2": 0.7078,
+    "RMSE": 72.1,
+    "MAE": 48.6
+  }
+]
