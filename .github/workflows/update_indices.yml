@@ -5,7 +5,7 @@ on:
   # Roda 1 hora APÓS o update_dashboard.yml (12:00 BRT)
   # Assim os índices ficam atualizados junto com o modelo SARIMAX
   schedule:
-    - cron: '0 15 21 * *'
+    - cron: '0 16 21 * *'
 
   # ── Execução manual ────────────────────────────────────────────────────
   workflow_dispatch:

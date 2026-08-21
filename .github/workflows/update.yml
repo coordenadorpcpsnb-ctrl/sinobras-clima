@@ -2,13 +2,18 @@ name: Atualização Dashboard Clima — Dia 21
 
 on:
   schedule:
-    - cron: '0 14 21 * *'   # todo dia 21, 12h BRT (15h UTC)
+    - cron: '0 15 21 * *'   # todo dia 21, 12h BRT (15h UTC)
   workflow_dispatch:
     inputs:
       motivo:
         description: 'Motivo da execução manual'
         required: false
         default: 'Atualização manual'
+
+# Evita colisão com o workflow de publicação
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -58,6 +63,13 @@ jobs:
         env:
           TZ: America/Araguaina
 
+      # ── Verificação de integridade ────────────────────────────────────
+      # Barreira: se os eixos ou as séries estiverem inconsistentes, o job
+      # falha AQUI, antes de commitar e publicar. Melhor não atualizar do
+      # que publicar um dashboard com gráficos desalinhados.
+      - name: Verificar integridade do dashboard
+        run: python scripts/verificar_dashboard.py
+
       # ── Passo 4: Gerar relatório executivo (.docx) ────────────────────
       - name: Gerar relatório executivo
         run: python scripts/gerar_relatorio.py
@@ -97,6 +109,25 @@ jobs:
       - name: Publicar no GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4.0.5
+
+      # ── Passo 5: Enviar por e-mail ────────────────────────────────────
+      # Só roda se o secret SMTP_HOST estiver configurado no repositório.
+      # Uma falha aqui não invalida a atualização já publicada.
+      - name: Enviar dashboard e relatório por e-mail
+        if: env.SMTP_HOST != ''
+        continue-on-error: true
+        run: python scripts/enviar_email.py
+        env:
+          TZ:          America/Araguaina
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+          MAIL_TO:     ${{ secrets.MAIL_TO }}
+          MAIL_CC:     ${{ secrets.MAIL_CC }}
+          ZIPAR_HTML:  'true'
+          PAGES_URL:   ${{ steps.deploy.outputs.page_url }}
 
       - name: Sumário
         if: always()

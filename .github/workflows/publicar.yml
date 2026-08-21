@@ -1,0 +1,52 @@
+name: Publicar dashboard (a cada push em docs/)
+
+# Republica o GitHub Pages sempre que algo em docs/ mudar.
+# NÃO recalcula o modelo nem envia e-mail — apenas publica o que está no
+# repositório. O recálculo continua sendo feito pelo workflow do dia 21.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages:    write
+  id-token: write
+
+# Evita que este workflow e o do dia 21 tentem publicar ao mesmo tempo
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    name: Publicar conteúdo de docs/
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Preparar artefato do Pages
+        uses: actions/upload-pages-artifact@v3.0.1
+        with:
+          path: docs/
+
+      - name: Publicar no GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4.0.5
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🌐 Publicação do dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Disparado por** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | ${{ steps.deploy.outputs.page_url }} |" >> $GITHUB_STEP_SUMMARY
