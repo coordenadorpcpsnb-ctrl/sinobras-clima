@@ -555,14 +555,15 @@ def solve_bh(prec_jul, etp_jul, cad=100, tol=0.001, max_iter=200):
 cenarios_bh = [s for s in SCEN if s != 'IRI_mean']
 bh_results  = {}
 
+# ETP alinhada ao horizonte de previsão (mês atual → +11), igual ao fc_labels.
+# results[sc]['prec'] JÁ está nesse eixo — não rotacionar nada aqui, sob risco
+# de o ARM ficar deslocado em relação à precipitação que o alimenta.
+_off_etp  = TODAY.month - 1
+ETP_HORIZ = ETP_JAN_DEZ[_off_etp:] + ETP_JAN_DEZ[:_off_etp]
+
 for sc in cenarios_bh:
-    prec_jm  = results[sc]['prec']           # jun→mai
-    prec_jul = prec_jm[1:] + [prec_jm[0]]   # → jul→jun
-    res_bh    = solve_bh(prec_jul, ETP_JUL_JUN)
-    rjm_jun   = [res_bh[-1]] + res_bh[:-1]  # jun→mai
-    # Rotar para o mês atual (igual ao fc_labels)
-    _off      = (TODAY.month - 6) % 12
-    rjm       = rjm_jun[_off:] + rjm_jun[:_off]
+    prec_h   = results[sc]['prec']          # mês atual → +11 (mesmo eixo do gráfico)
+    rjm      = solve_bh(prec_h, ETP_HORIZ)  # resultado já no eixo correto
     def_t    = int(round(sum(r['def'] for r in rjm)))
     exc_t    = int(round(sum(r['exc'] for r in rjm)))
     bh_results[sc] = {
