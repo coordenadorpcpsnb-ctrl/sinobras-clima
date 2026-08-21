@@ -2,7 +2,7 @@ name: Atualização Dashboard Clima — Dia 21
 
 on:
   schedule:
-    - cron: '0 15 21 * *'   # todo dia 21, 12h BRT (15h UTC)
+    - cron: '0 14 21 * *'   # todo dia 21, 12h BRT (15h UTC)
   workflow_dispatch:
     inputs:
       motivo:
