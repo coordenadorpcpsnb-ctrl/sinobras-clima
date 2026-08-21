@@ -182,15 +182,30 @@ def update_html(series, wk_lbl, wk_val):
     html = DASHBOARD.read_text(encoding='utf-8')
     original = html
 
-    # Séries
-    html = re.sub(r'labels:\[[^\]]+\]',
-                  f'labels:[{",".join(series["labels"])}]', html)
-    html = re.sub(r'nino34:\[([-\d.,\s]+)\]',
-                  f'nino34:[{",".join(series["nino34"])}]', html)
-    html = re.sub(r'oni:\s*\[([-\d.,\s\wnull]+)\]',
-                  f'oni:   [{",".join(series["oni"])}]', html)
-    html = re.sub(r'tsa:\s*\[([-\d.,\s\wnull]+)\]',
-                  f'tsa:   [{",".join(series["tsa"])}]', html)
+    # ── Séries do Monitor ENSO ──────────────────────────────────────────
+    # ATENÇÃO: operar SOMENTE dentro do bloco `indices:{...}`.
+    # Um re.sub global em 'labels:[...]' também casaria dentro de
+    # 'fc_labels:[...]' e de 'clim: { labels: [...] }', destruindo o eixo X
+    # dos gráficos de previsão e de balanço hídrico.
+    ini = html.find('indices:')
+    if ini < 0:
+        print('  ⚠ bloco indices: não encontrado — séries não atualizadas')
+        return False
+    fim = html.find('fc_labels:', ini)          # o bloco termina antes disto
+    if fim < 0:
+        fim = ini + 20000
+    bloco = html[ini:fim]
+
+    bloco = re.sub(r'labels:\[[^\]]+\]',
+                   f'labels:[{",".join(series["labels"])}]', bloco, count=1)
+    bloco = re.sub(r'nino34:\[[^\]]+\]',
+                   f'nino34:[{",".join(series["nino34"])}]', bloco, count=1)
+    bloco = re.sub(r'oni:\s*\[[^\]]+\]',
+                   f'oni:   [{",".join(series["oni"])}]', bloco, count=1)
+    bloco = re.sub(r'tsa:\s*\[[^\]]+\]',
+                   f'tsa:   [{",".join(series["tsa"])}]', bloco, count=1)
+
+    html = html[:ini] + bloco + html[fim:]
 
     # D.now — cards do Monitor ENSO
     lbl_n, val_n = latest_non_null(series, 'nino34')
