@@ -177,6 +177,25 @@ def main():
         else:
             ok(f'Monitor ENSO consistente ({n_lbl} meses)')
 
+    # ── 7. trimestres do Comparativo (CPC/IRI x SARIMAX) ────────────────
+    # CPC_IRI.seasons é curado manualmente; se pedir um trimestre que o
+    # SARIMAX_DATA não tem, o JS lança erro e a aba Comparativo não renderiza.
+    msd = re.search(r'const SARIMAX_DATA\s*=\s*(\{.*?\});\n', h, re.DOTALL)
+    mse = re.search(r'seasons:\s*\[([^\]]+)\]', h)
+    if msd and mse:
+        try:
+            sd = json.loads(msd.group(1))
+            disp = set(next(iter(sd['trimestres'].values())).keys())
+            pedidos = [v.strip().strip("'\"") for v in mse.group(1).split(',')]
+            faltando = [x for x in pedidos if x not in disp]
+            if faltando:
+                erro('CPC_IRI.seasons pede trimestres ausentes no SARIMAX_DATA: '
+                     + ', '.join(faltando) + ' — a aba Comparativo vai quebrar')
+            else:
+                ok(f'trimestres do Comparativo completos ({len(pedidos)} seasons)')
+        except Exception as ex:
+            erro(f'não foi possível validar SARIMAX_DATA: {ex}')
+
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")
     if falhas:

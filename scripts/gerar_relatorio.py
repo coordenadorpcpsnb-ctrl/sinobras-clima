@@ -225,8 +225,19 @@ def carregar():
     # probabilidades CPC/IRI
     m_cpc = re.search(r'cpc:\s*\{\s*en:\[([^\]]+)\]', html)
     m_iri_en = re.search(r'iri:\s*\{\s*en:\[([^\]]+)\]', html)
-    cpc_en = [int(v) for v in m_cpc.group(1).split(',')] if m_cpc else []
-    iri_en = [int(v) for v in m_iri_en.group(1).split(',')] if m_iri_en else []
+    # 'null' aparece quando um centro não publicou o trimestre naquela emissão
+    def _ints(m):
+        if not m:
+            return []
+        out = []
+        for v in m.group(1).split(','):
+            v = v.strip()
+            if v and v != 'null':
+                out.append(int(v))
+        return out
+
+    cpc_en = _ints(m_cpc)
+    iri_en = _ints(m_iri_en)
 
     return dict(scen=scen, bh=bh, fc=fc, anual=anual, meta=meta,
                 iri_pico=iri_pico, cpc_en=cpc_en, iri_en=iri_en)

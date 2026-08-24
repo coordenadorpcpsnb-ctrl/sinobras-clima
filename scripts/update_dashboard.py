@@ -736,18 +736,38 @@ parts = [f'    "{r.cenario}":{{tot:{r.total12m},anom:{r.anom_pct},'
 html = html[:sum_s] + 'summary:{\n' + ',\n'.join(parts) + '\n  }\n' + html[sum_e:]
 
 # SARIMAX_DATA
-TRI={'AMJ':[(ano_base,4),(ano_base,5),(ano_base,6)],
-     'MJJ':[(ano_base,5),(ano_base,6),(ano_base,7)],
-     'JJA':[(ano_base,6),(ano_base,7),(ano_base,8)],
-     'JAS':[(ano_base,7),(ano_base,8),(ano_base,9)],
-     'ASO':[(ano_base,8),(ano_base,9),(ano_base,10)],
-     'SON':[(ano_base,9),(ano_base,10),(ano_base,11)],
-     'OND':[(ano_base,10),(ano_base,11),(ano_base,12)],
-     'NDJ':[(ano_base,11),(ano_base,12),(ano_base+1,1)],
-     'DJF':[(ano_base,12),(ano_base+1,1),(ano_base+1,2)]}
-ab = str(ano_base)[2:]; ab1 = str(ano_base+1)[2:]
-tri_keys = [f'AMJ/{ab}',f'MJJ/{ab}',f'JJA/{ab}',f'JAS/{ab}',f'ASO/{ab}',
-            f'SON/{ab}',f'OND/{ab}',f'NDJ/{ab}',f'DJF/{ab1}']
+# ── Trimestres móveis gerados a partir do horizonte ─────────────────────
+# Antes eram fixos de AMJ a DJF, o que deixava de fora os trimestres do fim
+# do horizonte. Como CPC_IRI.seasons é curado manualmente a cada emissão e
+# avança com o ano, qualquer trimestre pedido por ele e ausente aqui vira
+# undefined no JS e derruba a aba Comparativo. Gerando a janela inteira,
+# desde o mês anterior ao horizonte, a cobertura fica garantida.
+_INI = {1:'J',2:'F',3:'M',4:'A',5:'M',6:'J',7:'J',8:'A',9:'S',10:'O',11:'N',12:'D'}
+
+def _tri_nome(y, m):
+    """(2026,7) -> ('JAS/26', [(2026,7),(2026,8),(2026,9)])"""
+    meses = []
+    yy, mm = y, m
+    for _ in range(3):
+        meses.append((yy, mm))
+        mm += 1
+        if mm > 12:
+            mm, yy = 1, yy + 1
+    sigla = ''.join(_INI[x[1]] for x in meses)
+    y_ref = meses[0][1] >= 12 and meses[0][0] + 1 or meses[0][0]
+    # o rótulo usa o ano do mês CENTRAL, convenção do CPC
+    y_lbl = meses[1][0]
+    return f'{sigla}/{str(y_lbl)[2:]}', meses
+
+TRI, tri_keys = {}, []
+_y, _m = (TODAY.year, TODAY.month - 1) if TODAY.month > 1 else (TODAY.year - 1, 12)
+for _ in range(13):                      # cobre todo o horizonte com folga
+    nome, meses = _tri_nome(_y, _m)
+    TRI[nome] = meses
+    tri_keys.append(nome)
+    _m += 1
+    if _m > 12:
+        _m, _y = 1, _y + 1
 
 def ym_idx(y, m):
     lbl = f"{m:02d}/{str(y)[2:]}"
@@ -757,7 +777,7 @@ sd_export = {'trimestres':{},'monthly':{},'labels_win':H_want_labels,'n34':{}}
 for sc, dat in results.items():
     pr=dat['prec']; lo=dat['lo95']; hi=dat['hi95']
     tri={}
-    for tri_name,(tri_months,tk) in zip(TRI.keys(),zip(TRI.values(),tri_keys)):
+    for tk, tri_months in TRI.items():
         vs,ls,hs=[],[],[]
         for y,m in tri_months:
             idx=ym_idx(y,m)
