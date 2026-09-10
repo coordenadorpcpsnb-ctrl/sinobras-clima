@@ -55,26 +55,44 @@ def buscar_prec_chirps(ano_ini, mes_ini, ano_fim, mes_fim):
     def _chamar():
         return api.request_data(0, 'Average', ini, fim, geom, '', '', 'memory_object')
 
+    vazio = pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte'])
+
+    # Sem "with": o gerenciador de contexto do ThreadPoolExecutor chama
+    # shutdown(wait=True) na saída, que BLOQUEIA até a thread em segundo
+    # plano terminar sozinha — mesmo depois de future.result(timeout=…)
+    # já ter estourado o timeout. Isso anularia o propósito do timeout
+    # (a chamada só "voltaria" quando o serviço travado finalmente
+    # respondesse, não em TIMEOUT_SEGUNDOS). shutdown(wait=False) evita
+    # isso: a thread órfã termina sozinha em segundo plano, descartada.
+    ex = ThreadPoolExecutor(max_workers=1)
     try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            future = ex.submit(_chamar)
-            result = future.result(timeout=TIMEOUT_SEGUNDOS)
+        future = ex.submit(_chamar)
+        result = future.result(timeout=TIMEOUT_SEGUNDOS)
     except FutureTimeoutError:
         print(f"  ⚠ CHIRPS indisponível: sem resposta em {TIMEOUT_SEGUNDOS}s")
-        return pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte'])
+        return vazio
     except Exception as e:
         print(f"  ⚠ CHIRPS indisponível: {e}")
-        return pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte'])
+        return vazio
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
-    if not result or 'data' not in result:
+    if not result or not isinstance(result, dict) or not result.get('data'):
         print(f"  ⚠ CHIRPS indisponível: resposta vazia ou sem dados")
-        return pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte'])
+        return vazio
 
-    df = pd.DataFrame([{
-        'ano': r['year'], 'mes': r['month'],
-        'prec': r['value']['avg'] if r['value']['avg'] is not None else 0.0,
-    } for r in result['data']])
-    mensal = df.groupby(['ano', 'mes'])['prec'].sum().reset_index()
-    mensal['prec']  = mensal['prec'].round(1)
-    mensal['fonte'] = 'CHIRPS'
-    return mensal
+    # Resposta malformada (chaves faltando, tipo inesperado) não pode
+    # derrubar o pipeline inteiro — vira fallback, como qualquer outra
+    # falha do CHIRPS.
+    try:
+        df = pd.DataFrame([{
+            'ano': r['year'], 'mes': r['month'],
+            'prec': (r.get('value') or {}).get('avg') or 0.0,
+        } for r in result['data']])
+        mensal = df.groupby(['ano', 'mes'])['prec'].sum().reset_index()
+        mensal['prec']  = mensal['prec'].round(1)
+        mensal['fonte'] = 'CHIRPS'
+        return mensal
+    except Exception as e:
+        print(f"  ⚠ CHIRPS indisponível: resposta malformada ({e})")
+        return vazio

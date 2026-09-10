@@ -33,6 +33,8 @@ pip install -r requirements.txt
 python scripts/update_dashboard.py     # regenera docs/index.html
 python scripts/verificar_dashboard.py  # exit 1 se houver inconsistência
 python scripts/gerar_relatorio.py      # regenera o .docx
+
+python -m unittest tests.test_fetch_fallback -v  # testa o fallback CHIRPS→Open-Meteo, sem rede real
 ```
 
 **Sempre rode `verificar_dashboard.py` depois de qualquer alteração que
