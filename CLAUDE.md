@@ -112,50 +112,67 @@ no log e nos avisos do `verificar_dashboard.py`. Persistência/estimativa
 não é dado real: nunca gravar `0.0` para "ENSO neutro" quando na verdade
 é "sem dado ainda". `0.0` é uma afirmação, não um vazio.
 
-### 7. ERA5 (Open-Meteo) e estações Sinobras não são intercambiáveis na estação seca
+### 7. Nenhuma fonte de satélite é intercambiável com as estações — CHIRPS é a primária, ERA5 é fallback do fallback
 
-`fetch_monthly_data.py` usa Open-Meteo ERA5-Land como fallback quando não
-há dado de estação. Comparando os 540 meses de 1981-2025 em que a série
-tem as duas fontes (ERA5 vs. estações), o viés **não é uniforme — é
-sazonal**:
+`fetch_monthly_data.py` busca precipitação de mês ausente em duas
+fontes, nesta ordem: **CHIRPS** (UCSB, via ClimateSERV) primeiro,
+**Open-Meteo ERA5-Land** só se o CHIRPS não tiver o mês ainda
+(`_chirps.py`/`_openmeteo.py`). Comparando os 540 meses de 1981-2025 em
+que a série tem estação Sinobras, contra as duas fontes:
 
-| mês | razão média ERA5/estações | razão mediana |
-|---|---|---|
-| jan | 1,067 | 1,040 |
-| fev | 0,927 | 0,902 |
-| mar | 0,893 | 0,912 |
-| abr | 0,862 | 0,856 |
-| mai | 0,702 | 0,638 |
-| **jun** | **0,275** | **0,109** |
-| **jul** | **0,241** | **0,073** |
-| **ago** | **0,368** | **0,134** |
-| set | 0,664 | 0,527 |
-| out | 1,042 | 0,947 |
-| nov | 1,219 | 1,138 |
-| dez | 1,293 | 1,214 |
+| mês | ERA5 razão média | ERA5 mediana | CHIRPS razão média | CHIRPS mediana |
+|---|---|---|---|---|
+| jan | 1,067 | 1,040 | 1,009 | 0,977 |
+| fev | 0,927 | 0,902 | 0,957 | 0,931 |
+| mar | 0,893 | 0,912 | 0,917 | 0,930 |
+| abr | 0,862 | 0,856 | 1,027 | 1,007 |
+| mai | 0,702 | 0,638 | 0,752 | 0,717 |
+| jun | 0,275 | 0,109 | 1,048 | 0,849 |
+| **jul** | **0,241** | **0,073** | **0,332** | **0,171** |
+| ago | 0,368 | 0,134 | 0,976 | 0,822 |
+| set | 0,664 | 0,527 | 1,280 | 0,958 |
+| **out** | **1,042** | 0,947 | **1,181** | 1,155 |
+| **nov** | **1,219** | 1,138 | **1,299** | 1,237 |
+| **dez** | **1,293** | 1,214 | **1,308** | 1,269 |
 
-Na estação chuvosa (out-abr) o viés é pequeno (razão ~0,9-1,3, chega a
-inverter em nov/dez). Na estação seca (mai-set), e sobretudo em jun-ago,
-**o ERA5 registra só 24-37% da chuva que as estações Sinobras
-capturam** — provavelmente porque chuva convectiva isolada, típica de
-mês seco, é mal representada na resolução do ERA5-Land.
+Geral (razão mediana, todos os meses): ERA5 = 0,882, CHIRPS = **0,998**
+— por isso a migração: CHIRPS praticamente não tem viés no agregado,
+ERA5 subestima sistematicamente.
 
-Isso importa porque a estação seca é onde a decisão de plantio se
-define (ARM crítico, déficit hídrico). Um mês seco vindo do ERA5
-(`fonte=OpenMeteo-ERA5`) pode estar subestimado por 2-4x em relação ao
-que uma estação teria registrado.
+**Julho continua ruim nas duas fontes, e não é tratado à parte —
+decisão deliberada, não descuido.** Razão mediana 0,073 (ERA5) / 0,171
+(CHIRPS): ambas capturam mal a chuva convectiva rara e isolada desse
+mês, provável limite físico de sensoriamento remoto ali, não defeito
+de uma fonte específica (testado: corrigir julho por fator mediano
+piora o RMSE do SARIMAX em vez de melhorar — ver histórico do commit
+que teve essa investigação). Por que não vale corrigir:
+- Impacto real é pequeno: a subestimativa de julho equivale a ~5,3
+  mm/ano (0,31% do total anual da série) — irrelevante em qualquer
+  cenário de plantio.
+- ETP de julho é 107mm — o solo esgota (ARM crítico) tanto com 1mm de
+  chuva quanto com 6mm; a diferença não muda a decisão.
+- A amostra de julho (n=17, filtrando `prec_sinobras > 5mm`) contém só
+  os meses anômalos de julho — julho típico é seco demais para passar
+  no filtro, então a razão medida não representa "julho normal", é
+  ruído de amostra pequena inflando o problema aparente.
 
-**Não corrigir com um fator fixo.** O viés jun-ago também varia muito
-entre décadas (razão média por década: 1981-90=0,33, 1991-00=0,13,
-2001-10=0,20, 2011-20=0,40, 2021-25=0,45 — mais de 3x de variação) e as
-amostras mensais são pequenas (jul tem só 17 meses no período todo,
-17-22 por década). Um teste de correção pelo fator mediano de julho
-(0,073) aplicado a jul/2026 (21,6mm → 297mm, quase 46x a climatologia
-de julho) piorou o RMSE do SARIMAX (56,2mm → 74,9mm) em vez de
-melhorar — o fator é instável demais para confiar, não só teoricamente
-mas na prática. Se algum dia isso for corrigido, precisa de mais dado
-histórico e um modelo de viés mais robusto que uma razão mediana por
-mês, não um fator fixo aplicado direto.
+**O viés que IMPORTA de verdade é out-nov-dez — e ele é o oposto:
+as duas fontes SUPERESTIMAM.** ERA5 +18,5% (75mm no trimestre), CHIRPS
++26,3% (101mm no trimestre) acima do que as estações registram, mais
+forte em novembro e dezembro. Esse é o trimestre onde a decisão de
+plantio se concentra — um viés de superestimativa aqui é mais perigoso
+que a subestimativa de julho, porque pode indicar solo mais úmido (ARM
+maior, déficit menor) do que a realidade, levando a plantar cedo
+demais. Se alguém for tratar viés de fonte no futuro, é aqui que vale
+o esforço, não em julho.
+
+**Não corrigir com fator fixo em nenhum mês.** O viés jun-ago do ERA5
+varia mais de 3x entre décadas (razão mediana: 1981-90=0,22,
+1991-00=0,03, 2001-10=0,06, 2011-20=0,14, 2021-25=0,19); o CHIRPS é
+mais estável (0,63 a 0,86 nas 4 primeiras décadas) mas ainda assim não
+é uma constante confiável. Testado: aplicar o fator mediano de julho
+(0,073, ERA5) a jul/2026 (21,6mm → 297mm, quase 46x a climatologia)
+piorou o RMSE do SARIMAX (56,2mm → 74,9mm) em vez de melhorar.
 
 ## Convenções
 
