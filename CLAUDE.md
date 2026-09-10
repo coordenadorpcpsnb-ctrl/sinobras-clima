@@ -112,6 +112,51 @@ no log e nos avisos do `verificar_dashboard.py`. Persistência/estimativa
 não é dado real: nunca gravar `0.0` para "ENSO neutro" quando na verdade
 é "sem dado ainda". `0.0` é uma afirmação, não um vazio.
 
+### 7. ERA5 (Open-Meteo) e estações Sinobras não são intercambiáveis na estação seca
+
+`fetch_monthly_data.py` usa Open-Meteo ERA5-Land como fallback quando não
+há dado de estação. Comparando os 540 meses de 1981-2025 em que a série
+tem as duas fontes (ERA5 vs. estações), o viés **não é uniforme — é
+sazonal**:
+
+| mês | razão média ERA5/estações | razão mediana |
+|---|---|---|
+| jan | 1,067 | 1,040 |
+| fev | 0,927 | 0,902 |
+| mar | 0,893 | 0,912 |
+| abr | 0,862 | 0,856 |
+| mai | 0,702 | 0,638 |
+| **jun** | **0,275** | **0,109** |
+| **jul** | **0,241** | **0,073** |
+| **ago** | **0,368** | **0,134** |
+| set | 0,664 | 0,527 |
+| out | 1,042 | 0,947 |
+| nov | 1,219 | 1,138 |
+| dez | 1,293 | 1,214 |
+
+Na estação chuvosa (out-abr) o viés é pequeno (razão ~0,9-1,3, chega a
+inverter em nov/dez). Na estação seca (mai-set), e sobretudo em jun-ago,
+**o ERA5 registra só 24-37% da chuva que as estações Sinobras
+capturam** — provavelmente porque chuva convectiva isolada, típica de
+mês seco, é mal representada na resolução do ERA5-Land.
+
+Isso importa porque a estação seca é onde a decisão de plantio se
+define (ARM crítico, déficit hídrico). Um mês seco vindo do ERA5
+(`fonte=OpenMeteo-ERA5`) pode estar subestimado por 2-4x em relação ao
+que uma estação teria registrado.
+
+**Não corrigir com um fator fixo.** O viés jun-ago também varia muito
+entre décadas (razão média por década: 1981-90=0,33, 1991-00=0,13,
+2001-10=0,20, 2011-20=0,40, 2021-25=0,45 — mais de 3x de variação) e as
+amostras mensais são pequenas (jul tem só 17 meses no período todo,
+17-22 por década). Um teste de correção pelo fator mediano de julho
+(0,073) aplicado a jul/2026 (21,6mm → 297mm, quase 46x a climatologia
+de julho) piorou o RMSE do SARIMAX (56,2mm → 74,9mm) em vez de
+melhorar — o fator é instável demais para confiar, não só teoricamente
+mas na prática. Se algum dia isso for corrigido, precisa de mais dado
+histórico e um modelo de viés mais robusto que uma razão mediana por
+mês, não um fator fixo aplicado direto.
+
 ## Convenções
 
 - Português brasileiro em tudo: código, comentários, commits, saída.
