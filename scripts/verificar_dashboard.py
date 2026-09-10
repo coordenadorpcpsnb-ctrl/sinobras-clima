@@ -12,14 +12,22 @@ quebrado chegue ao ar. Checa:
   4. Coerência física: o balanço hídrico é reprodutível a partir da
      precipitação projetada no mesmo eixo
   5. Monitor ENSO: labels e séries de índices com o mesmo comprimento
+  6. Plausibilidade física: nino34/oni/tsa (D.now e série completa) não
+     excedem ~5°C em módulo — acima disso é SST absoluta, não anomalia
+  7. Continuidade: data/serie_subst.csv não pode ter mês faltando entre
+     o primeiro e o último registro — um buraco vira erro silencioso de
+     alinhamento assim que algum código usar .shift() posicional sobre
+     a série (o regressor de um mês passa a vir de outro mês)
 """
 
 import re, sys, json
 from pathlib import Path
 import numpy as np
+import pandas as pd
 
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
+SERIE_SUBST = ROOT / 'data' / 'serie_subst.csv'
 
 CLIM = {1:267.3, 2:282.3, 3:308.4, 4:220.4, 5:83.1,  6:15.6,
         7:6.4,   8:10.4,  9:41.7, 10:119.7, 11:159.2, 12:199.9}
@@ -195,6 +203,73 @@ def main():
                 ok(f'trimestres do Comparativo completos ({len(pedidos)} seasons)')
         except Exception as ex:
             erro(f'não foi possível validar SARIMAX_DATA: {ex}')
+
+    # ── 8. plausibilidade física dos índices ENSO ───────────────────────
+    # nino34/oni/tsa são anomalias (°C) — nunca ultrapassam ~3°C em módulo.
+    # Um valor > 5°C indica bug de parsing (ex.: SST absoluta ~26-29°C
+    # usada no lugar da anomalia).
+    mnow = re.search(r'now:\s*\{([^}]+)\}', h)
+    if mnow:
+        bloco_now = mnow.group(1)
+        implausiveis = []
+        for nome in ['nino34', 'oni', 'tsa']:
+            mv = re.search(rf'{nome}:\s*\[[^,]+,\s*(-?[\d.]+)\]', bloco_now)
+            if mv:
+                v = float(mv.group(1))
+                if abs(v) > 5:
+                    implausiveis.append(f'{nome}={v}')
+        if implausiveis:
+            erro('D.now com valor fisicamente implausível (anomalia > 5°C): '
+                 + ', '.join(implausiveis))
+        else:
+            ok('D.now com índices ENSO fisicamente plausíveis')
+    else:
+        erro('D.now não encontrado para checagem de plausibilidade')
+
+    mv = re.search(r'nino34:\s*\[([^\]]+)\]', blk_idx)
+    if mv:
+        fora = []
+        for tok in mv.group(1).split(','):
+            tok = tok.strip()
+            if tok == 'null':
+                continue
+            try:
+                v = float(tok)
+            except ValueError:
+                continue
+            if abs(v) > 5:
+                fora.append(v)
+        if fora:
+            erro(f'série nino34 com {len(fora)} valor(es) > 5°C em módulo (implausível): '
+                 + ', '.join(f'{v:+.2f}' for v in fora[:5]))
+        else:
+            ok('série nino34 dentro da faixa física plausível (≤5°C)')
+
+    # ── 9. continuidade de data/serie_subst.csv ──────────────────────────
+    # .shift() em pandas opera por POSIÇÃO da linha, não por data — um mês
+    # faltando desloca os lags de todo mundo depois dele sem erro visível.
+    if not SERIE_SUBST.exists():
+        erro('data/serie_subst.csv não encontrado')
+    else:
+        serie = pd.read_csv(SERIE_SUBST)
+        existentes = set(zip(serie['ano'].astype(int), serie['mes'].astype(int)))
+        y_ini, m_ini = int(serie['ano'].iloc[0]), int(serie['mes'].iloc[0])
+        y_fim, m_fim = int(serie['ano'].iloc[-1]), int(serie['mes'].iloc[-1])
+        y, m = y_ini, m_ini
+        lacunas = []
+        while (y, m) <= (y_fim, m_fim):
+            if (y, m) not in existentes:
+                lacunas.append(f'{m:02d}/{y}')
+            m += 1
+            if m > 12:
+                y, m = y + 1, 1
+        if lacunas:
+            erro('serie_subst.csv com mês(es) faltando entre '
+                 f'{m_ini:02d}/{y_ini} e {m_fim:02d}/{y_fim}: '
+                 + ', '.join(lacunas))
+        else:
+            ok(f'serie_subst.csv contínua ({len(serie)} meses, '
+               f'{m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

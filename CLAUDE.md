@@ -91,6 +91,27 @@ CPC usa ERSSTv5, IRI usa OISSTv2 — divergência de até 0,5 °C no Niño 3.4
 para não colidirem. Se adicionar outro workflow que publique, use o mesmo
 grupo.
 
+### 6. TSA e PDO do PSL vêm com sentinelas e atraso — nunca gravar zero
+
+Os arquivos `tsa.data` e `pdo.data` do PSL (`psl.noaa.gov/data/correlation/`)
+têm ano e os 12 valores mensais **na mesma linha**, com uma linha de
+cabeçalho `anoIni anoFim` no topo — não é o formato "ano numa linha,
+valores na seguinte". Cada arquivo usa sua própria sentinela para dado
+ausente (`tsa.data` usa `-99.99`, `pdo.data` usa `-9.90`; outros podem usar
+`-9.99`/`-999.9`). `parse_psl_anual` descarta as sentinelas conhecidas E,
+como segunda barreira, qualquer valor com `abs(v) > 5` — uma anomalia
+física nunca chega nessa magnitude, então isso pega sentinela nova ainda
+não catalogada. Não confiar só na lista fixa nem só no limite físico.
+
+Essas fontes também atrasam: TSA fica meses sem publicar o mês corrente,
+PDO pode ficar sem nenhum dado do ano corrente. Quando falta valor real,
+`fetch_monthly_data.py`/`update_indices.py` persistem — TSA usa o último
+valor real disponível, PDO usa a média dos últimos 3 meses reais (nunca o
+último valor isolado, que pode ser um mês atípico) — e sinalizam a origem
+no log e nos avisos do `verificar_dashboard.py`. Persistência/estimativa
+não é dado real: nunca gravar `0.0` para "ENSO neutro" quando na verdade
+é "sem dado ainda". `0.0` é uma afirmação, não um vazio.
+
 ## Convenções
 
 - Português brasileiro em tudo: código, comentários, commits, saída.

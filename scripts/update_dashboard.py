@@ -28,41 +28,11 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 # FALLBACK: Open-Meteo ERA5-Land para meses sem SINOBRAS_new.csv
 # API gratuita, sem chave, acessível globalmente (GitHub Actions)
 # Referência: centroide das 34 fazendas Sinobras — Norte TO
+# buscar_prec_openmeteo mora em _openmeteo.py — compartilhada com
+# fetch_monthly_data.py, não duplicar aqui.
 # ══════════════════════════════════════════════════════════════════════════
 
-FAZENDAS_LAT = -7.80    # centroide das fazendas Sinobras (Norte TO)
-FAZENDAS_LON = -47.95
-
-def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
-    """Precipitação diária via Open-Meteo ERA5-Land → total mensal."""
-    import urllib.request, json, calendar
-    ultimo_dia = calendar.monthrange(ano_fim, mes_fim)[1]
-    url = (
-        f"https://archive-api.open-meteo.com/v1/archive"
-        f"?latitude={FAZENDAS_LAT}&longitude={FAZENDAS_LON}"
-        f"&start_date={ano_ini}-{mes_ini:02d}-01"
-        f"&end_date={ano_fim}-{mes_fim:02d}-{ultimo_dia:02d}"
-        f"&daily=precipitation_sum&timezone=America%2FSao_Paulo"
-    )
-    try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "sinobras-clima/1.0 (github-actions)"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read())
-        df = pd.DataFrame({
-            "data": pd.to_datetime(data["daily"]["time"]),
-            "prec": pd.to_numeric(data["daily"]["precipitation_sum"],
-                                  errors="coerce").fillna(0),
-        })
-        df["ano"] = df["data"].dt.year
-        df["mes"] = df["data"].dt.month
-        mensal = df.groupby(["ano", "mes"])["prec"].sum().reset_index()
-        mensal["prec"]  = mensal["prec"].round(1)
-        mensal["fonte"] = "OpenMeteo-ERA5"
-        return mensal
-    except Exception as e:
-        print(f"  ⚠ Open-Meteo indisponível: {e}")
-        return pd.DataFrame(columns=["ano", "mes", "prec", "fonte"])
+from _openmeteo import buscar_prec_openmeteo, FAZENDAS_LAT, FAZENDAS_LON
 
 
 def incorporar_fallback_openmeteo(serie, data_path):
