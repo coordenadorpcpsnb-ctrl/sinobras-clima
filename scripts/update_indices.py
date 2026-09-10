@@ -10,10 +10,11 @@ Fontes PSL/NOAA (públicas, sem autenticação):
   CPC wksst9120.for  : https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for
 """
 
-import re, sys
+import re, sys, shutil
 from pathlib import Path
 from datetime import date, datetime
 import urllib.request
+import pandas as pd
 
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
@@ -50,50 +51,63 @@ def parse_sstoi(text):
         try:
             y, m = int(parts[0]), int(parts[1])
             v = float(parts[9])          # ANOM34
-            if 1950 <= y <= 2030 and abs(v - MISSING) > 1:
+            # anomalia do Niño 3.4 nunca passa de ~3°C — abs(v) > 5 indica
+            # coluna errada (ex.: SST absoluta em vez de anomalia)
+            if 1950 <= y <= 2030 and abs(v - MISSING) > 1 and abs(v) <= 5:
                 data[(y, m)] = round(v, 2)
         except (ValueError, IndexError):
             pass
     return data
 
 
+# Sentinelas de dado ausente conhecidas nos arquivos de correlação do
+# PSL — cada arquivo usa a sua própria convenção (ex.: tsa.data usa
+# -99.99, pdo.data usa -9.90). Descartadas explicitamente por valor E
+# pelo limite físico abaixo: a lista fixa sozinha é frágil — um
+# sentinela novo dentro da faixa física passaria batido.
+PSL_SENTINELS = (-99.99, -9.99, -9.90, -999.9)
+
+
 def parse_psl_anual(text):
     """
-    PSL nina34.data / tsa.data — formato:
-        YYYY          ← linha com apenas o ano
-        v1 v2 ... v12 ← linha com 12 valores mensais
+    PSL nina34.data / tsa.data / pdo.data — formato real:
+        anoIni anoFim         ← linha de cabeçalho (2 tokens, ignorada)
+        YYYY v1 v2 ... v12    ← ano e os 12 valores mensais NA MESMA linha
+    Descarta sentinelas de ausência conhecidas (PSL_SENTINELS) e, como
+    segunda barreira, qualquer valor com abs(v) > 5 (anomalia física
+    nunca chega nessa magnitude — pega sentinelas ainda não catalogadas).
     Retorna {(ano, mes): valor}
     """
-    data  = {}
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    i = 0
-    while i < len(lines):
-        parts = lines[i].split()
-        if len(parts) == 1:
+    data = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 13:
+            continue
+        try:
+            y = int(parts[0])
+        except ValueError:
+            continue
+        if not (1900 <= y <= 2100):
+            continue
+        for m, vs in enumerate(parts[1:13], start=1):
             try:
-                y = int(parts[0])
-                if 1950 <= y <= 2030 and i + 1 < len(lines):
-                    vals = lines[i + 1].split()
-                    if len(vals) >= 12:
-                        for m, vs in enumerate(vals[:12], start=1):
-                            try:
-                                v = float(vs)
-                                if abs(v - MISSING) > 1:
-                                    data[(y, m)] = round(v, 2)
-                            except ValueError:
-                                pass
-                        i += 2
-                        continue
+                v = float(vs)
             except ValueError:
-                pass
-        i += 1
+                continue
+            if any(abs(v - s) < 0.01 for s in PSL_SENTINELS):
+                continue
+            if abs(v) > 5:
+                continue
+            data[(y, m)] = round(v, 2)
     return data
 
 
 def parse_wksst(text):
     """
-    CPC wksst9120.for — linhas com data + SST/anomalia por região:
-    DDMMMYYYY  SST1 ANOM1 SST2 ANOM2 SST3 ANOM3 SST34 ANOM34
+    CPC wksst9120.for — linhas com data + duas colunas por região
+    (SST absoluta, depois anomalia):
+    DDMMMYYYY  SST1+2 ANOM1+2  SST3 ANOM3  SST34 ANOM34  SST4 ANOM4
+       idx 0     1      2       3    4       5     6      7    8
     Retorna (label_str, nino34_anom) do registro mais recente.
     """
     ultimo_lbl, ultimo_val = None, None
@@ -103,7 +117,11 @@ def parse_wksst(text):
             continue
         try:
             datetime.strptime(parts[0], '%d%b%Y')  # valida data
-            v = float(parts[7])                     # ANOM34 (0-indexed col 7)
+            v = float(parts[6])                     # ANOM34 (0-indexed col 6)
+            # anomalia do Niño 3.4 nunca passa de ~3°C — abs(v) > 5 indica
+            # coluna errada (ex.: SST absoluta em vez de anomalia)
+            if abs(v) > 5:
+                continue
             ultimo_lbl = parts[0]
             ultimo_val = round(v, 2)
         except (ValueError, IndexError):
@@ -251,6 +269,142 @@ def update_html(series, wk_lbl, wk_val):
 
 
 # ══════════════════════════════════════════════════════
+# HISTÓRICO — master_monthly.csv e serie_subst.csv
+# ══════════════════════════════════════════════════════
+MASTER_PATH = ROOT / 'data' / 'master_monthly.csv'
+SUBST_PATH  = ROOT / 'data' / 'serie_subst.csv'
+
+
+def backup_csv(path):
+    """Cópia .bak antes de qualquer escrita — sobrescreve o backup anterior."""
+    if path.exists():
+        shutil.copy2(path, path.with_suffix(path.suffix + '.bak'))
+
+
+def _tsa_persistido(tsa):
+    """Último valor real de TSA disponível no dict, ou (None, None)."""
+    chaves = sorted(tsa.keys())
+    if not chaves:
+        return None, None
+    ult = chaves[-1]
+    return tsa[ult], ult
+
+
+def _pdo_estimado(pdo):
+    """Média dos últimos 3 meses reais de PDO disponíveis no dict, ou None.
+    Nunca o último valor isolado — um mês atípico não deve ser propagado
+    como se fosse a característica do ano inteiro."""
+    chaves = sorted(pdo.keys())
+    if len(chaves) < 3:
+        return None
+    return round(sum(pdo[k] for k in chaves[-3:]) / 3, 2)
+
+
+def atualizar_master_monthly(nino34, tsa, pdo):
+    """
+    Acrescenta a data/master_monthly.csv os meses com Niño 3.4 real
+    disponível que ainda não constam na série. TSA/PDO ausentes usam
+    persistência/estimativa (nunca zero), sinalizadas no log. Colunas
+    que não vêm dessa fonte (estações, clim, anom, soi) ficam vazias —
+    não inventadas.
+    """
+    df = pd.read_csv(MASTER_PATH)
+    existentes = set(zip(df['year'].astype(int), df['month'].astype(int)))
+    oni = calc_oni(nino34)
+
+    tsa_val, tsa_key   = _tsa_persistido(tsa)
+    pdo_media3         = _pdo_estimado(pdo)
+
+    novas = []
+    for (y, m) in sorted(nino34.keys()):
+        if (y, m) in existentes:
+            continue
+
+        if (y, m) in tsa:
+            t = tsa[(y, m)]
+        elif tsa_val is not None:
+            t = tsa_val
+            print(f"  ⚠ master_monthly {m:02d}/{y}: TSA sem dado real — "
+                  f"persistência de {tsa_key[1]:02d}/{tsa_key[0]} ({t})")
+        else:
+            t = None
+
+        if (y, m) in pdo:
+            p = pdo[(y, m)]
+        elif pdo_media3 is not None:
+            p = pdo_media3
+            print(f"  ⚠ master_monthly {m:02d}/{y}: PDO sem dado real — "
+                  f"estimativa (média 3m) = {p}")
+        else:
+            p = None
+
+        novas.append({
+            'year': y, 'month': m, 'date': f'{y}-{m:02d}-01',
+            'nino34': nino34[(y, m)], 'oni': oni.get((y, m)),
+            'tsa': t, 'pdo': p,
+        })
+
+    if not novas:
+        return 0
+
+    backup_csv(MASTER_PATH)
+    df = pd.concat([df, pd.DataFrame(novas)], ignore_index=True, sort=False)
+    df = df.sort_values(['year', 'month']).reset_index(drop=True)
+    df.to_csv(MASTER_PATH, index=False)
+    return len(novas)
+
+
+def corrigir_serie_subst(nino34, tsa, pdo):
+    """
+    Corrige em data/serie_subst.csv as linhas já existentes com
+    nino34=tsa=pdo=0 — resíduo do bug em que um mês ausente no master
+    era gravado como ENSO neutro. Atualiza os índices no lugar,
+    preservando prec, date e fonte. É esta série que treina o SARIMAX.
+    """
+    df = pd.read_csv(SUBST_PATH)
+    tsa_val, tsa_key = _tsa_persistido(tsa)
+    pdo_media3       = _pdo_estimado(pdo)
+
+    zeradas = df[(df['nino34'] == 0) & (df['tsa'] == 0) & (df['pdo'] == 0)]
+    corrigidas = 0
+    linhas_tocadas = []
+    for idx, row in zeradas.iterrows():
+        y, m = int(row['ano']), int(row['mes'])
+        if (y, m) not in nino34:
+            continue  # sem Niño 3.4 real tampouco — não mexe
+
+        if (y, m) in tsa:
+            t = tsa[(y, m)]
+        elif tsa_val is not None:
+            t = tsa_val
+            print(f"  ⚠ serie_subst {m:02d}/{y}: TSA sem dado real — "
+                  f"persistência de {tsa_key[1]:02d}/{tsa_key[0]} ({t})")
+        else:
+            t = row['tsa']
+
+        if (y, m) in pdo:
+            p = pdo[(y, m)]
+        elif pdo_media3 is not None:
+            p = pdo_media3
+            print(f"  ⚠ serie_subst {m:02d}/{y}: PDO sem dado real — "
+                  f"estimativa (média 3m) = {p}")
+        else:
+            p = row['pdo']
+
+        df.at[idx, 'nino34'] = nino34[(y, m)]
+        df.at[idx, 'tsa']    = t
+        df.at[idx, 'pdo']    = p
+        corrigidas += 1
+        linhas_tocadas.append(f'{m:02d}/{y}')
+
+    if corrigidas:
+        backup_csv(SUBST_PATH)
+        df.to_csv(SUBST_PATH, index=False)
+        print(f"  ✅ serie_subst.csv: corrigidas {', '.join(linhas_tocadas)}")
+    return corrigidas
+
+
+# ══════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════
 def main():
@@ -259,10 +413,10 @@ def main():
     print(f"  ÍNDICES OCEÂNICOS — {TODAY.strftime('%d/%m/%Y')}")
     print(f"{'='*55}")
 
-    nino34, tsa = {}, {}
+    nino34, tsa, pdo = {}, {}, {}
 
     # 1. CPC sstoi.indices (fonte primária — formato simples)
-    print("\n[1/3] CPC sstoi.indices (primário)…")
+    print("\n[1/5] CPC sstoi.indices (primário)…")
     try:
         text   = fetch('https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices')
         nino34 = parse_sstoi(text)
@@ -279,7 +433,7 @@ def main():
             print(f"  ❌ Ambas as fontes falharam: {e2}")
 
     # 2. PSL tsa.data
-    print("\n[2/3] PSL tsa.data…")
+    print("\n[2/5] PSL tsa.data…")
     try:
         text = fetch('https://psl.noaa.gov/data/correlation/tsa.data')
         tsa  = parse_psl_anual(text)
@@ -292,8 +446,18 @@ def main():
         print("\n❌ Sem dados de Niño 3.4 — abortando")
         return 1
 
-    # 3. CPC semanal
-    print("\n[3/3] CPC wksst9120.for (semanal)…")
+    # 3. PSL pdo.data
+    print("\n[3/5] PSL pdo.data…")
+    try:
+        text = fetch('https://psl.noaa.gov/data/correlation/pdo.data')
+        pdo  = parse_psl_anual(text)
+        last_p = max(pdo)
+        print(f"  ✅ PDO: {len(pdo)} meses | último: {last_p[1]:02d}/{last_p[0]}")
+    except Exception as e:
+        print(f"  ⚠ PDO indisponível (não crítico): {e}")
+
+    # 4. CPC semanal
+    print("\n[4/5] CPC wksst9120.for (semanal)…")
     wk_lbl, wk_val = None, None
     try:
         text = fetch('https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for')
@@ -302,6 +466,13 @@ def main():
             print(f"  ✅ Semanal: {wk_lbl} → {wk_val:+.2f}°C")
     except Exception as e:
         print(f"  ⚠ Semanal indisponível: {e}")
+
+    # 5. Histórico — master_monthly.csv e serie_subst.csv
+    print("\n[5/5] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
+    n_master = atualizar_master_monthly(nino34, tsa, pdo)
+    n_serie  = corrigir_serie_subst(nino34, tsa, pdo)
+    print(f"  master_monthly.csv: {n_master} mês(es) adicionados")
+    print(f"  serie_subst.csv: {n_serie} linha(s) corrigidas")
 
     # Montar e atualizar
     series  = build_series(nino34, tsa, wk_lbl, wk_val)
