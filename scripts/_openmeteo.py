@@ -35,7 +35,7 @@ def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
             data = json.loads(r.read())
         df = pd.DataFrame({
             "data": pd.to_datetime(data["daily"]["time"]),
-            "prec": pd.to_numeric(data["daily"]["precipitation_sum"],
+            "prec": pd.to_numeric(pd.Series(data["daily"]["precipitation_sum"]),
                                   errors="coerce").fillna(0),
         })
         df["ano"] = df["data"].dt.year
