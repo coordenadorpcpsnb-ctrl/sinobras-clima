@@ -2,7 +2,9 @@
 """
 tests/test_fetch_fallback.py — exercita o caminho de fallback
 CHIRPS → Open-Meteo em fetch_monthly_data.py sob três modos de falha
-do CHIRPS: host inalcançável, timeout, resposta malformada.
+do CHIRPS (host inalcançável, timeout, resposta malformada) e um caso
+de cobertura parcial (CHIRPS cobre só parte do intervalo, Open-Meteo
+falha para o resto).
 
 Roda com:
     python3 -m unittest tests.test_fetch_fallback -v
@@ -18,6 +20,11 @@ Para cada modo de falha, confirma:
   1. o mês cai para Open-Meteo (fonte='OpenMeteo-ERA5')
   2. a precipitação gravada é o valor real do fallback, nunca 0.0
   3. main() retorna 0 (não propaga exceção, não derruba o pipeline)
+
+Para a cobertura parcial (PartialCoverageTestCase), confirma também
+que a lacuna resultante (meses sem NENHUMA fonte) é detectada pela
+checagem de continuidade de verificar_dashboard.py — é o mesmo
+mecanismo que deixou passar o buraco de jan-jun/2026 sem ninguém notar.
 """
 
 import sys
@@ -34,6 +41,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 
 import _chirps                    # noqa: E402
 import fetch_monthly_data as fmd  # noqa: E402
+import verificar_dashboard as vd  # noqa: E402
 
 # Precipitação "real" que o fallback Open-Meteo deveria retornar —
 # usada para confirmar que o valor gravado vem do fallback, não zero
@@ -158,6 +166,108 @@ class FallbackCHIRPSTestCase(unittest.TestCase):
                 with patch.object(_chirps.api, 'request_data', return_value=resposta):
                     self._rodar_e_conferir_fallback()
                 self._limpar_linha_gravada()
+
+
+class CoberturaParcialTestCase(unittest.TestCase):
+    """
+    CHIRPS cobre só parte do intervalo pedido (jan-mai/2024, de um
+    pedido jan-jul/2024) e o Open-Meteo falha para o resto (jun-jul).
+    Confirma: meses com CHIRPS são gravados (fonte=CHIRPS); meses sem
+    nenhuma fonte NÃO são gravados (nunca como zero); main() não
+    interrompe; e a lacuna resultante (jun-jul/2024) é pega pela
+    checagem de continuidade de verificar_dashboard.py — sem essa
+    checagem, é exatamente assim que o buraco de jan-jun/2026 se
+    formou e ficou invisível até alguém medir o RMSE.
+    """
+
+    MESES_PEDIDOS = [(2024, m) for m in range(1, 8)]   # jan..jul/2024
+    MESES_CHIRPS  = [(2024, m) for m in range(1, 6)]   # jan..mai/2024 — cobertos
+    MESES_FALTAM  = [(2024, m) for m in range(6, 8)]   # jun..jul/2024 — sem fonte nenhuma
+
+    def setUp(self):
+        tmpdir_ctx = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir_ctx.cleanup)
+        tmpdir = Path(tmpdir_ctx.name)
+
+        self.serie_path = tmpdir / 'serie_subst.csv'
+        self.merra_path = tmpdir / 'master_monthly.csv'
+
+        # série existente termina em 2023-12 — a lacuna a preencher é
+        # jan-jul/2024 inteiro (mes_anterior mockado abaixo p/ jul/2024)
+        pd.DataFrame([{
+            'ano': 2023, 'mes': 12, 'prec': 200.0, 'nino34': 0.4,
+            'tsa': 0.2, 'pdo': -0.1, 'date': '2023-12-01', 'fonte': 'CHIRPS',
+        }]).to_csv(self.serie_path, index=False)
+
+        # master_monthly com índice real para todos os meses pedidos —
+        # isola o teste do comportamento de persistência do ENSO, que
+        # já é testado em outro lugar
+        pd.DataFrame([
+            {'year': y, 'month': m, 'nino34': 0.5, 'tsa': 0.15, 'pdo': -0.2}
+            for (y, m) in self.MESES_PEDIDOS
+        ]).to_csv(self.merra_path, index=False)
+
+        for p in (
+            patch.object(fmd, 'SERIE_PATH', self.serie_path),
+            patch.object(fmd, 'MERRA_PATH', self.merra_path),
+            patch.object(fmd, 'mes_anterior', lambda: (2024, 7)),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+        # CHIRPS "real": cobre só jan-mai/2024
+        chirps_df = pd.DataFrame([
+            {'ano': y, 'mes': m, 'prec': 100.0 + m, 'fonte': 'CHIRPS'}
+            for (y, m) in self.MESES_CHIRPS
+        ])
+        chirps_patch = patch.object(
+            fmd, 'buscar_prec_chirps',
+            lambda y1, m1, y2, m2: chirps_df.copy())
+        chirps_patch.start()
+        self.addCleanup(chirps_patch.stop)
+
+        # Open-Meteo falha por completo para o que sobrar (jun-jul) —
+        # retorno vazio, como _openmeteo.buscar_prec_openmeteo faz de
+        # verdade quando a chamada real falha
+        era5_patch = patch.object(
+            fmd, 'buscar_prec_openmeteo',
+            lambda y1, m1, y2, m2: pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte']))
+        era5_patch.start()
+        self.addCleanup(era5_patch.stop)
+
+    def test_cobertura_parcial_nao_grava_zero_e_verificador_pega_lacuna(self):
+        resultado = fmd.main()
+        self.assertEqual(
+            resultado, 0,
+            "main() não deve propagar erro mesmo com cobertura parcial + fallback falho")
+
+        serie = pd.read_csv(self.serie_path)
+
+        # meses cobertos pelo CHIRPS: gravados, fonte correta
+        for (y, m) in self.MESES_CHIRPS:
+            linha = serie[(serie['ano'] == y) & (serie['mes'] == m)]
+            self.assertEqual(len(linha), 1, f"{m:02d}/{y} deveria ter sido gravado")
+            self.assertEqual(linha.iloc[0]['fonte'], 'CHIRPS')
+            self.assertGreater(linha.iloc[0]['prec'], 0.0)
+
+        # meses sem nenhuma fonte: NÃO gravados — nem como zero, ausentes mesmo
+        for (y, m) in self.MESES_FALTAM:
+            linha = serie[(serie['ano'] == y) & (serie['mes'] == m)]
+            self.assertEqual(
+                len(linha), 0,
+                f"{m:02d}/{y} não deveria ter sido gravado (nenhuma fonte disponível) — "
+                f"gravar zero seria afirmar 'sem chuva', não 'sem dado'")
+
+        # a lacuna resultante (jun-jul/2024) precisa ser pega pela
+        # checagem de continuidade do verificador — é essa checagem que
+        # deveria ter barrado a publicação quando o buraco de
+        # jan-jun/2026 se formou, e não pegou porque não existia ainda
+        lacunas = vd.checar_continuidade(serie, ate=(2024, 7))
+        esperado = [f'{m:02d}/{y}' for (y, m) in self.MESES_FALTAM]
+        self.assertEqual(
+            lacunas, esperado,
+            "verificar_dashboard.checar_continuidade deveria detectar exatamente "
+            "os meses sem fonte nenhuma como lacuna, barrando a publicação")
 
 
 if __name__ == '__main__':
