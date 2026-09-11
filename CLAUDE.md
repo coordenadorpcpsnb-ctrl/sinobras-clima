@@ -277,6 +277,21 @@ coluna fixa (`_WKSST_COLS`, blocos de 8 chars: `[0:4]`=SST, `[4:8]`=
 anomalia), validado sem falha nas 2.349 linhas. `parse_wksst` agora
 retorna as 4 regiões (Niño1+2, Niño3, Niño3.4, Niño4), não só Niño3.4.
 
+**Achado operacional ao comparar antes/depois no dado real desta
+sessão (11/09/2026):** o valor semanal registrado hoje **não mudou**
+(02SEP2026, Niño 3.4 = +2,70°C nas duas versões) — a semana mais
+recente tem as 4 anomalias positivas (El Niño forte em curso), caso em
+que o parser antigo por coincidência funcionava. A prova de que o bug
+era real, não hipotético: rodando os dois parsers sobre o mesmo arquivo
+truncado até 11MAR2026 (a semana mais recente com concatenação
+negativa, Niño3.4 = -0,1°C) o parser antigo devolve **09JUL2025
+(+0,1°C)** — uma semana de **35 semanas atrás**, com o sinal da
+anomalia errado — enquanto o novo devolve corretamente 11MAR2026
+(-0,1°C). Ou seja: o bug não afetou o dado exibido hoje por sorte de
+calendário (El Niño forte sem nenhuma região negativa), mas teria
+afetado silenciosamente qualquer semana com La Niña ou transição de
+fase — inclusive há só 6 meses.
+
 **RONI (`RONI.ascii.txt`) e `D.now.oni` (nosso "ONI-aprox") são
 métricas diferentes por desenho — nunca tratar como o mesmo número:**
 
