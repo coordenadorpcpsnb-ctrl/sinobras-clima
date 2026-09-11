@@ -15,12 +15,18 @@ quebrado chegue ao ar. Checa:
   6. Plausibilidade física: nino34/oni/tsa (D.now e série completa) não
      excedem ~5°C em módulo — acima disso é SST absoluta, não anomalia
   7. Continuidade: data/serie_subst.csv não pode ter mês faltando entre
-     o primeiro e o último registro — um buraco vira erro silencioso de
-     alinhamento assim que algum código usar .shift() posicional sobre
-     a série (o regressor de um mês passa a vir de outro mês)
+     o primeiro registro e o mês anterior ao atual — um buraco vira erro
+     silencioso de alinhamento assim que algum código usar .shift()
+     posicional sobre a série (o regressor de um mês passa a vir de
+     outro mês). Checa até o mês anterior ao atual, não só até o último
+     registro existente — uma lacuna que fica "pendurada" no fim da
+     série (a série simplesmente parou de crescer) é tão perigosa
+     quanto um buraco no meio, e ficaria invisível se só olhássemos
+     entre primeiro e último registro.
 """
 
 import re, sys, json
+from datetime import date
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -47,6 +53,41 @@ def erro(msg):
 
 def ok(msg):
     print(f'  ✅ {msg}')
+
+
+def checar_continuidade(serie, ate=None):
+    """
+    Retorna a lista de meses 'MM/AAAA' faltando entre o primeiro
+    registro de `serie` (DataFrame com colunas 'ano'/'mes') e `ate`
+    (tupla ano, mes) — por padrão, o mês anterior ao atual. Lista
+    vazia = série contínua.
+
+    Checar só até o ÚLTIMO REGISTRO EXISTENTE (em vez de até o mês
+    anterior ao atual) deixaria passar batido uma lacuna "pendurada"
+    no fim da série — ex.: CHIRPS cobre só parte de um pedido e o
+    fallback falha para o resto, então a série simplesmente para de
+    crescer sem nenhum registro "depois" para delimitar o buraco.
+    Não tem como reproduzir esse caso testando só "entre primeiro e
+    último" (ver tests/test_fetch_fallback.py, CoberturaParcialTestCase).
+
+    Extraída para função própria para poder ser testada direto, sem
+    precisar rodar main() inteiro contra um docs/index.html real.
+    """
+    if ate is None:
+        hoje = date.today()
+        ate = (hoje.year, hoje.month - 1) if hoje.month > 1 else (hoje.year - 1, 12)
+
+    existentes = set(zip(serie['ano'].astype(int), serie['mes'].astype(int)))
+    y, m = int(serie['ano'].iloc[0]), int(serie['mes'].iloc[0])
+    y_fim, m_fim = ate
+    lacunas = []
+    while (y, m) <= (y_fim, m_fim):
+        if (y, m) not in existentes:
+            lacunas.append(f'{m:02d}/{y}')
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return lacunas
 
 
 def solve_bh(prec, etp, cad=CAD, tol=1e-3, it=200):
@@ -252,24 +293,16 @@ def main():
         erro('data/serie_subst.csv não encontrado')
     else:
         serie = pd.read_csv(SERIE_SUBST)
-        existentes = set(zip(serie['ano'].astype(int), serie['mes'].astype(int)))
-        y_ini, m_ini = int(serie['ano'].iloc[0]), int(serie['mes'].iloc[0])
-        y_fim, m_fim = int(serie['ano'].iloc[-1]), int(serie['mes'].iloc[-1])
-        y, m = y_ini, m_ini
-        lacunas = []
-        while (y, m) <= (y_fim, m_fim):
-            if (y, m) not in existentes:
-                lacunas.append(f'{m:02d}/{y}')
-            m += 1
-            if m > 12:
-                y, m = y + 1, 1
+        lacunas = checar_continuidade(serie)
+        m_ini, y_ini = int(serie['mes'].iloc[0]), int(serie['ano'].iloc[0])
+        m_fim, y_fim = int(serie['mes'].iloc[-1]), int(serie['ano'].iloc[-1])
         if lacunas:
-            erro('serie_subst.csv com mês(es) faltando entre '
-                 f'{m_ini:02d}/{y_ini} e {m_fim:02d}/{y_fim}: '
-                 + ', '.join(lacunas))
+            erro(f'serie_subst.csv com mês(es) faltando entre {m_ini:02d}/{y_ini} '
+                 f'e o mês anterior ao atual (último registro real: '
+                 f'{m_fim:02d}/{y_fim}): ' + ', '.join(lacunas))
         else:
-            ok(f'serie_subst.csv contínua ({len(serie)} meses, '
-               f'{m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})')
+            ok(f'serie_subst.csv contínua até o mês anterior ao atual '
+               f'({len(serie)} meses, {m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

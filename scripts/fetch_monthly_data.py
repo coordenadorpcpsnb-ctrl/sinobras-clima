@@ -7,18 +7,42 @@ Fluxo:
   1. Lista TODAS as lacunas entre o início da série e o mês anterior ao
      atual (não só o último mês — se o pipeline não rodar num mês, o
      buraco fica para sempre se só olharmos "o mês anterior")
-  2. Busca a precipitação de todo o intervalo faltante numa única
-     chamada ao Open-Meteo ERA5-Land (buscar_prec_openmeteo, compartilhada
-     com update_dashboard.py em _openmeteo.py) — várias chamadas em
-     sequência para meses individuais esbarram no rate limit (HTTP 429)
+  2. Busca a precipitação em cascata, três camadas:
+       a. CHIRPS Final (ClimateSERV, ponto único) — primária
+       b. CHC Preliminary (zonal, envelope das fazendas) — só
+          para os meses que o Final ainda não publicou
+       c. Open-Meteo ERA5-Land — só para o que sobrar das duas acima
+     Cada mês novo registra qual das três foi usada.
   3. Busca os índices ENSO de cada mês no master_monthly.csv, com
      persistência (nunca zero) quando o mês ainda não está consolidado
-  4. Grava os meses novos em serie_subst.csv, fonte='OpenMeteo-ERA5'
+  4. Grava os meses novos em serie_subst.csv
 
-Open-Meteo ERA5-Land:
+CHIRPS Final (UCSB, via ClimateSERV) — fonte primária:
+  - Combina satélite (0,05°) com estações in situ, desenhado para
+    monitoramento de seca
+  - Serviço acadêmico (SERVIR/NASA) — pode ficar fora do ar; timeout
+    generoso e fallback automático se falhar
+  - Tem defasagem de publicação de alguns meses (ver _chirps.py)
+  - Aqui usa ponto único (buscar_prec_chirps), não o envelope das
+    fazendas — a versão zonal (buscar_prec_chirps_zonal) existe mas
+    não está plugada no pipeline automático, ver CLAUDE.md armadilha 8.
+
+CHC Preliminary — fallback intermediário, fonte='CHC-Preliminar':
+  - MESMO produto CHIRPS, versão preliminar (antes da consolidação
+    final) — publica antes do Final, mas pode ser revisado depois
+  - Download direto do CHC + zonal stats (rasterio/rasterstats) sobre
+    o envelope das fazendas — sem a limitação de anel único do
+    ClimateSERV, é processamento local (ver _chirps.py)
+  - Gravado com fonte própria, não 'CHIRPS' — quando o Final publicar
+    esse mês depois, o valor Preliminary já gravado NÃO é substituído
+    automaticamente (mesma limitação da persistência do PDO — ver
+    CLAUDE.md armadilha 6)
+
+Open-Meteo ERA5-Land — fallback final:
   - Gratuito, sem autenticação, acessível globalmente
-  - Resolução: 0.1° (~9km) — adequado para estimativa mensal da região
-  - Delay: dados consolidados disponíveis ~5 dias após o mês encerrar
+  - Viés sazonal forte em jun-ago (registra só 24-37% da chuva das
+    estações nesses meses — ver CLAUDE.md armadilha 7); usado só
+    quando nem o CHIRPS Final nem o CHC Preliminary têm o mês
   - Centroide Sinobras: lat=-7.80, lon=-47.95 (Norte do Tocantins)
 """
 
@@ -27,6 +51,7 @@ from pathlib import Path
 from datetime import date
 import pandas as pd
 
+from _chirps import buscar_prec_chirps, buscar_prec_chc_preliminar_zonal
 from _openmeteo import buscar_prec_openmeteo
 
 ROOT       = Path(__file__).parent.parent
@@ -121,24 +146,60 @@ def main():
     print(f"\n  Meses faltando: "
           + ', '.join(f'{m:02d}/{y}' for y, m in faltando))
 
-    # Buscar precipitação de todo o intervalo numa única chamada
+    # Buscar precipitação em cascata: CHIRPS Final -> CHC Preliminary -> Open-Meteo
     y_ini, m_ini = faltando[0]
     y_fim, m_fim = faltando[-1]
-    print(f"\n[1/2] Buscando Open-Meteo ERA5-Land "
-          f"({m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})…")
-    prec_df = buscar_prec_openmeteo(y_ini, m_ini, y_fim, m_fim)
-    prec_map = {(int(r.ano), int(r.mes)): r.prec for r in prec_df.itertuples()}
 
-    print(f"\n[2/2] Buscando índices ENSO por mês…")
+    print(f"\n[1/4] Buscando CHIRPS Final ({m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})…")
+    chirps_df = buscar_prec_chirps(y_ini, m_ini, y_fim, m_fim)
+    prec_map  = {}
+    fonte_map = {}
+    for r in chirps_df.itertuples():
+        prec_map[(int(r.ano), int(r.mes))]  = r.prec
+        fonte_map[(int(r.ano), int(r.mes))] = 'CHIRPS'
+
+    faltando_chirps = [ym for ym in faltando if ym not in prec_map]
+    faltando_prelim = []
+    if faltando_chirps:
+        print(f"\n[2/4] CHIRPS Final sem {len(faltando_chirps)} mês(es) — "
+              f"tentando CHC Preliminary (zonal, envelope das fazendas)…")
+        for (y, m) in faltando_chirps:
+            r = buscar_prec_chc_preliminar_zonal(y, m)
+            if r is not None:
+                prec_map[(y, m)]  = r['prec']
+                fonte_map[(y, m)] = 'CHC-Preliminar'
+                print(f"  ✅ {MESES_PT[m-1]}/{y}: {r['prec']}mm (CHC-Preliminar)")
+            else:
+                faltando_prelim.append((y, m))
+    else:
+        print(f"\n[2/4] CHIRPS Final cobriu todos os meses — CHC Preliminary não necessário")
+
+    if faltando_prelim:
+        y_ini2, m_ini2 = faltando_prelim[0]
+        y_fim2, m_fim2 = faltando_prelim[-1]
+        print(f"\n[3/4] Ainda sem {len(faltando_prelim)} mês(es) — "
+              f"buscando Open-Meteo ERA5-Land (fallback final) "
+              f"({m_ini2:02d}/{y_ini2} → {m_fim2:02d}/{y_fim2})…")
+        era5_df = buscar_prec_openmeteo(y_ini2, m_ini2, y_fim2, m_fim2)
+        for r in era5_df.itertuples():
+            key = (int(r.ano), int(r.mes))
+            if key not in prec_map:
+                prec_map[key]  = r.prec
+                fonte_map[key] = 'OpenMeteo-ERA5'
+    else:
+        print(f"\n[3/4] Nenhum mês restante — Open-Meteo não necessário")
+
+    print(f"\n[4/4] Buscando índices ENSO por mês…")
     novas = []
     for (y, m) in faltando:
         if (y, m) not in prec_map:
-            print(f"  ⚠ {MESES_PT[m-1]}/{y}: sem precipitação do Open-Meteo — "
+            print(f"  ⚠ {MESES_PT[m-1]}/{y}: sem precipitação de nenhuma fonte — "
                   f"pulando, tentaremos na próxima execução")
             continue
 
-        prec = prec_map[(y, m)]
-        enso = enso_indices(y, m)
+        prec  = prec_map[(y, m)]
+        fonte = fonte_map[(y, m)]
+        enso  = enso_indices(y, m)
         if enso['origem'] != 'master':
             print(f"  ⚠ {MESES_PT[m-1]}/{y}: sem registro no master_monthly — "
                   f"usando {enso['origem']}")
@@ -151,7 +212,7 @@ def main():
             'tsa':    enso['tsa'],
             'pdo':    enso['pdo'],
             'date':   f"{y}-{m:02d}-01",
-            'fonte':  'OpenMeteo-ERA5',
+            'fonte':  fonte,
         })
 
     if not novas:
@@ -167,9 +228,8 @@ def main():
     serie.to_csv(SERIE_PATH, index=False)
 
     print(f"\n  ✅ {len(novas)} mês(es) adicionados: "
-          + ', '.join(f"{n['mes']:02d}/{n['ano']}" for n in novas)
-          + f" ({len(serie)} meses total na série)")
-    print(f"  Fonte: Open-Meteo ERA5-Land · centroide fazendas Sinobras")
+          + ', '.join(f"{n['mes']:02d}/{n['ano']} ({n['fonte']})" for n in novas)
+          + f" — {len(serie)} meses total na série")
     print(f"\n{'='*55}\n")
     return 0
 

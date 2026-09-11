@@ -33,6 +33,8 @@ pip install -r requirements.txt
 python scripts/update_dashboard.py     # regenera docs/index.html
 python scripts/verificar_dashboard.py  # exit 1 se houver inconsistência
 python scripts/gerar_relatorio.py      # regenera o .docx
+
+python -m unittest tests.test_fetch_fallback -v  # testa o fallback CHIRPS→Open-Meteo, sem rede real
 ```
 
 **Sempre rode `verificar_dashboard.py` depois de qualquer alteração que
@@ -111,6 +113,132 @@ valor real disponível, PDO usa a média dos últimos 3 meses reais (nunca o
 no log e nos avisos do `verificar_dashboard.py`. Persistência/estimativa
 não é dado real: nunca gravar `0.0` para "ENSO neutro" quando na verdade
 é "sem dado ainda". `0.0` é uma afirmação, não um vazio.
+
+Mesma limitação vale para **precipitação CHC-Preliminar** (ver
+`fetch_monthly_data.py`, camada intermediária entre CHIRPS Final e
+Open-Meteo): quando o Final ainda não publicou o mês, grava-se o valor
+Preliminary com `fonte='CHC-Preliminar'` — **não** `'CHIRPS'`, porque não
+é o mesmo dado (Preliminary pode ser revisado na consolidação final).
+Quando o Final publicar esse mês depois, o valor Preliminary **já
+gravado não é substituído automaticamente** — ninguém reprocessa
+`serie_subst.csv` sozinho. Se isso importar (ex.: o Preliminary e o
+Final divergirem muito para um mês específico), é preciso reprocessar
+esse mês manualmente, igual à persistência do PDO.
+
+### 7. Nenhuma fonte de satélite é intercambiável com as estações — CHIRPS é a primária, ERA5 é fallback do fallback
+
+`fetch_monthly_data.py` busca precipitação de mês ausente em duas
+fontes, nesta ordem: **CHIRPS** (UCSB, via ClimateSERV) primeiro,
+**Open-Meteo ERA5-Land** só se o CHIRPS não tiver o mês ainda
+(`_chirps.py`/`_openmeteo.py`). Comparando os 540 meses de 1981-2025 em
+que a série tem estação Sinobras, contra as duas fontes:
+
+| mês | ERA5 razão média | ERA5 mediana | CHIRPS razão média | CHIRPS mediana |
+|---|---|---|---|---|
+| jan | 1,067 | 1,040 | 1,009 | 0,977 |
+| fev | 0,927 | 0,902 | 0,957 | 0,931 |
+| mar | 0,893 | 0,912 | 0,917 | 0,930 |
+| abr | 0,862 | 0,856 | 1,027 | 1,007 |
+| mai | 0,702 | 0,638 | 0,752 | 0,717 |
+| jun | 0,275 | 0,109 | 1,048 | 0,849 |
+| **jul** | **0,241** | **0,073** | **0,332** | **0,171** |
+| ago | 0,368 | 0,134 | 0,976 | 0,822 |
+| set | 0,664 | 0,527 | 1,280 | 0,958 |
+| **out** | **1,042** | 0,947 | **1,181** | 1,155 |
+| **nov** | **1,219** | 1,138 | **1,299** | 1,237 |
+| **dez** | **1,293** | 1,214 | **1,308** | 1,269 |
+
+Geral (razão mediana, todos os meses): ERA5 = 0,882, CHIRPS = **0,998**
+— por isso a migração: CHIRPS praticamente não tem viés no agregado,
+ERA5 subestima sistematicamente.
+
+**Julho continua ruim nas duas fontes, e não é tratado à parte —
+decisão deliberada, não descuido.** Razão mediana 0,073 (ERA5) / 0,171
+(CHIRPS): ambas capturam mal a chuva convectiva rara e isolada desse
+mês, provável limite físico de sensoriamento remoto ali, não defeito
+de uma fonte específica (testado: corrigir julho por fator mediano
+piora o RMSE do SARIMAX em vez de melhorar — ver histórico do commit
+que teve essa investigação). Por que não vale corrigir:
+- Impacto real é pequeno: a subestimativa de julho equivale a ~5,3
+  mm/ano (0,31% do total anual da série) — irrelevante em qualquer
+  cenário de plantio.
+- ETP de julho é 107mm — o solo esgota (ARM crítico) tanto com 1mm de
+  chuva quanto com 6mm; a diferença não muda a decisão.
+- A amostra de julho (n=17, filtrando `prec_sinobras > 5mm`) contém só
+  os meses anômalos de julho — julho típico é seco demais para passar
+  no filtro, então a razão medida não representa "julho normal", é
+  ruído de amostra pequena inflando o problema aparente.
+
+**O viés que IMPORTA de verdade é out-nov-dez — e ele é o oposto:
+as duas fontes SUPERESTIMAM.** ERA5 +18,5% (75mm no trimestre), CHIRPS
++26,3% (101mm no trimestre) acima do que as estações registram, mais
+forte em novembro e dezembro. Esse é o trimestre onde a decisão de
+plantio se concentra — um viés de superestimativa aqui é mais perigoso
+que a subestimativa de julho, porque pode indicar solo mais úmido (ARM
+maior, déficit menor) do que a realidade, levando a plantar cedo
+demais. Se alguém for tratar viés de fonte no futuro, é aqui que vale
+o esforço, não em julho.
+
+**Não corrigir com fator fixo em nenhum mês.** O viés jun-ago do ERA5
+varia mais de 3x entre décadas (razão mediana: 1981-90=0,22,
+1991-00=0,03, 2001-10=0,06, 2011-20=0,14, 2021-25=0,19); o CHIRPS é
+mais estável (0,63 a 0,86 nas 4 primeiras décadas) mas ainda assim não
+é uma constante confiável. Testado: aplicar o fator mediano de julho
+(0,073, ERA5) a jul/2026 (21,6mm → 297mm, quase 46x a climatologia)
+piorou o RMSE do SARIMAX (56,2mm → 74,9mm) em vez de melhorar.
+
+### 8. `data/fazendas.geojson` é um envelope único, não os 37 perímetros reais — e `buscar_prec_chirps_zonal` continua ferramenta manual
+
+`data/fazendas.geojson` guardou por um tempo os 37 polígonos reais das
+fazendas (nome, região, cluster_id). Foi **substituído** por um único
+polígono sem identificação (`Fazendas_v2.kmz`, fornecido pela Sinobras;
+área 85.020,5 ha — maior que a união dissolvida dos 37 perímetros reais,
+48.737,3 ha, porque preenche reentrâncias entre fazendas; não é um
+convex hull matemático, tem concavidades). Decisão deliberada: nenhum
+arquivo do repositório deve permitir identificar fazenda individual.
+`_farm_geometry.py` foi reescrito para essa geometria única — não há
+mais `grupos_geograficos()`/`cluster_id`, só `poligono()` e
+`anel_simplificado()`.
+
+`_chirps.py` tem duas formas de buscar CHIRPS: `buscar_prec_chirps`
+(ponto único, é o que `fetch_monthly_data.py` usa de verdade) e
+`buscar_prec_chirps_zonal` (o envelope acima). Com uma geometria única,
+**uma chamada ao ClimateSERV cobre tudo** — antes, com os 37 polígonos
+em 7 grupos geograficamente desconectados, eram 7 chamadas por mês (a
+API só aceita um anel simples por chamada), com a fragilidade de
+"sucesso parcial por grupo". Essa fragilidade não existe mais.
+
+Testado ao vivo com o envelope novo:
+- jan/2024: zonal 301,9mm vs. ponto único 297,6mm — diferença de 1,4%
+  (era 301,6mm com os 7 grupos do polígono real — a generalização não
+  mudou o resultado zonal de forma perceptível).
+- ago/2026 (via `buscar_prec_chc_preliminar_zonal`, zonal local por
+  rasterstats): 7,5mm vs. 6,5mm no ponto único — 15% de diferença, mas
+  só 1mm em valor absoluto (mês seco, denominador pequeno infla a
+  razão; era o mesmo 7,5mm com a união dos 37 polígonos reais).
+
+Diferença pequena em mm → **mantido ponto único no dia a dia**
+(`buscar_prec_chirps` no pipeline automático, `fetch_monthly_data.py`).
+O envelope/zonal fica reservado para os casos em que a defesa
+metodológica importa (ex.: relatório executivo) ou reprocessamento de
+histórico.
+
+`buscar_prec_chirps_zonal` **continua fora do pipeline automático** —
+mesmo com uma chamada só agora, isso ainda não foi testado sob os três
+modos de falha da suíte (`tests/test_fetch_fallback.py`); só
+`buscar_prec_chirps` (ponto único) tem essa cobertura hoje. Promover o
+zonal a primário é uma decisão separada, ainda não tomada — passar a
+suíte de falha por ele antes de considerar essa promoção.
+
+A geometria simplificada usada nas chamadas (Douglas-Peucker adaptativo,
+`_farm_geometry.anel_simplificado()`) tem um detalhe não óbvio:
+`simplify()` garante anel válido **antes** de arredondar as coordenadas
+pra 6 casas, mas o arredondamento pode reintroduzir auto-interseção —
+sempre validar/reparar (`buffer(0)`) **depois** de arredondar, não antes
+(já implementado, mas fácil de esquecer se alguém reescrever essa
+função). Com o envelope atual (26 vértices) a simplificação nem chega a
+entrar em ação — é salvaguarda para se a geometria for substituída por
+algo mais detalhado no futuro.
 
 ## Convenções
 

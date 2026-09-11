@@ -1,0 +1,127 @@
+{
+  "type": "FeatureCollection",
+  "properties": {
+    "fonte": "Fazendas_v2.kmz (envelope fornecido pela Sinobras, sem identificação de fazendas individuais)",
+    "nota": "Substitui o GeoJSON anterior (37 fazendas nomeadas, uniao dissolvida 48.737,3 ha). Este poligono unico e mais amplo que a uniao das fazendas (preenche reentrancias) e nao e um convex hull matematico (contem concavidades) — e o contorno fornecido pela empresa.",
+    "area_ha": 85020.5
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "area_ha": 85020.5
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -48.130091,
+              -5.72977
+            ],
+            [
+              -48.176778,
+              -5.757509
+            ],
+            [
+              -48.162625,
+              -5.878111
+            ],
+            [
+              -48.154304,
+              -5.907241
+            ],
+            [
+              -48.117161,
+              -5.925226
+            ],
+            [
+              -48.106147,
+              -5.960137
+            ],
+            [
+              -48.138012,
+              -6.02739
+            ],
+            [
+              -48.091357,
+              -6.115413
+            ],
+            [
+              -48.111684,
+              -6.220573
+            ],
+            [
+              -48.062897,
+              -6.254644
+            ],
+            [
+              -48.057615,
+              -6.329425
+            ],
+            [
+              -48.000274,
+              -6.334283
+            ],
+            [
+              -47.978701,
+              -6.305014
+            ],
+            [
+              -47.935691,
+              -6.296352
+            ],
+            [
+              -47.952432,
+              -6.198802
+            ],
+            [
+              -47.985647,
+              -6.193451
+            ],
+            [
+              -48.021014,
+              -6.178013
+            ],
+            [
+              -48.026206,
+              -6.109282
+            ],
+            [
+              -47.987301,
+              -6.095602
+            ],
+            [
+              -47.989677,
+              -6.015882
+            ],
+            [
+              -47.977639,
+              -5.957847
+            ],
+            [
+              -48.009034,
+              -5.88255
+            ],
+            [
+              -48.106742,
+              -5.860215
+            ],
+            [
+              -48.035142,
+              -5.764236
+            ],
+            [
+              -48.054735,
+              -5.734548
+            ],
+            [
+              -48.130091,
+              -5.72977
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}
