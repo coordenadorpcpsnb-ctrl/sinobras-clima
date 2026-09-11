@@ -1,0 +1,86 @@
+name: Lembrete — CPC ENSO Diagnostic Discussion (2ª quinta-feira)
+
+# CATEGORIA B (ver CLAUDE.md armadilha 9): a fonte é prosa, não ascii
+# estruturado. NÃO faz parsing de conteúdo — só abre uma Issue pra
+# alguém extrair manualmente. Ver lembrete_iri_thursday.yml para o
+# mesmo padrão aplicado ao IRI (3ª quinta-feira).
+#
+# Cron nativo não expressa "Nª dia-da-semana do mês" (diferente de
+# "dia <= 5", que o cron faz direto — ver indices_semanal.yml) —
+# roda todo dia e o passo "Calcular" decide se é a 2ª quinta-feira.
+on:
+  schedule:
+    - cron: '0 15 * * *'   # todo dia, 12h BRT (15h UTC)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  checar_e_lembrar:
+    name: Checar 2ª quinta-feira e abrir Issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calcular se hoje é a 2ª quinta-feira (BRT)
+        id: check
+        run: |
+          DOW=$(TZ='America/Araguaina' date +%u)     # 1=seg … 4=qui … 7=dom
+          DIA=$(TZ='America/Araguaina' date +%-d)
+          ORDINAL=$(( (DIA - 1) / 7 + 1 ))
+          echo "dia-da-semana=$DOW dia-do-mes=$DIA ordinal=$ORDINAL"
+          if [ "$DOW" = "4" ] && [ "$ORDINAL" = "2" ]; then
+            echo "eh_dia=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "eh_dia=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abrir Issue de lembrete
+        if: steps.check.outputs.eh_dia == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y')
+          TITULO="Atualizar CPC ENSO Diagnostic Discussion — $DATA"
+
+          # Evita Issue duplicada se o workflow for re-executado no mesmo dia
+          JA_EXISTE=$(gh issue list --repo "${{ github.repository }}" \
+            --search "in:title \"$TITULO\"" --state open --json number \
+            --jq 'length')
+          if [ "$JA_EXISTE" -gt 0 ]; then
+            echo "Issue já existe para hoje — nada a fazer"
+            exit 0
+          fi
+
+          gh issue create --repo "${{ github.repository }}" \
+            --title "$TITULO" \
+            --body "$(cat <<EOF
+          Emissão mensal do CPC ENSO Diagnostic Discussion, publicada por
+          volta da 2ª quinta-feira do mês.
+
+          **Fonte (prosa — sem parser, extração manual):**
+          https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml
+
+          ## Checklist de extração
+
+          - [ ] Status ENSO atual (ex.: "El Niño Advisory", "La Niña Watch")
+          - [ ] Synopsis (resumo da situação em 1-2 frases)
+          - [ ] Probabilidades de fase ENSO por trimestre (tabela oficial
+                CPC/IRI, **só se publicada em texto** — se o CPC só tiver
+                soltado a figura, registrar \`null\` e rotular como da
+                emissão anterior; nunca estimar — CLAUDE.md armadilha 4)
+          - [ ] Data da próxima emissão prevista
+
+          ## Depois de extrair
+
+          Atualizar \`CPC_IRI.seasons\` em \`docs/index.html\` manualmente
+          (ver CLAUDE.md, armadilhas 3 e 4) e rodar
+          \`python scripts/verificar_dashboard.py\` antes de publicar.
+          Fechar esta Issue quando terminar.
+          EOF
+          )"
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 📋 Lembrete CPC ENSO Diagnostic Discussion" >> $GITHUB_STEP_SUMMARY
+          echo "É a 2ª quinta-feira (BRT)? **${{ steps.check.outputs.eh_dia }}**" >> $GITHUB_STEP_SUMMARY

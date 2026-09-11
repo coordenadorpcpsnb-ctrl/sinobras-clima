@@ -509,7 +509,7 @@
             <strong style="color:var(--txt)">SARIMAX (trajetória IRI):</strong> NDJFMA projetado em <strong style="color:#d47070">1.134 mm (−11,6%)</strong>. 
             Divergência CPC×IRI = <strong style="color:var(--euc)">≤3 p.p. — CONVERGÊNCIA TOTAL</strong>. ONI MJJ/26 = +1,51°C.
           </div>
-          <div style="font-size:11px;color:var(--txt3);margin-top:5px">Próxima emissão CPC: 10/set/2026 · Niño 3.4 semanal 12/ago = +2,70°C · Próxima atualização dashboard: <strong style="color:var(--dry)" id="next-update-label">21/ago/2026</strong> · <span style="color:var(--euc)">→ aba Comparativo CPC/IRI para detalhes</span></div>
+          <div style="font-size:11px;color:var(--txt3);margin-top:5px">Próxima emissão CPC: 10/set/2026 · Niño 3.4 semanal 12/ago = +2,70°C · <span style="color:var(--euc)">→ aba Comparativo CPC/IRI para detalhes</span></div>
         </div>
         <button onclick="document.querySelector('[data-tab=comparativo]').click()" style="flex-shrink:0;background:rgba(176,54,54,.2);border:1px solid rgba(176,54,54,.5);color:#d47070;font:inherit;font-size:11px;font-weight:600;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">Ver comparativo ›</button>
       </div>
@@ -530,16 +530,21 @@
       </div>
 
       <!-- KPIs oceânicos -->
-      <div class="grid g3 mt14">
+      <div class="grid g4 mt14">
         <div class="card">
           <div class="card-title">Niño 3.4 <span id="d-n34" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
           <div class="kpi" id="k-n34"></div>
           <div class="kpi-note">Anomalia de TSM no Pacífico equatorial (ERSSTv5/CPC). Preditor principal: −15 mm/mês por +1 °C (lag 2–3 meses).</div>
         </div>
         <div class="card">
-          <div class="card-title">ONI <span id="d-oni" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
+          <div class="card-title">ONI aprox. (Niño 3,4, 3m) <span id="d-oni" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
           <div class="kpi" id="k-oni"></div>
-          <div class="kpi-note">Índice oficial do gatilho — média móvel de 3 meses do Niño 3.4.</div>
+          <div class="kpi-note">Índice do gatilho operacional — nossa média móvel de 3 meses do Niño 3.4 bruto. <strong>Não é o RONI oficial</strong> (card ao lado) — mesma ideia, cálculo diferente, números diferentes para o mesmo trimestre.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">RONI (oficial NOAA) <span id="d-roni" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
+          <div class="kpi" id="k-roni">—</div>
+          <div class="kpi-note">Índice trimestral oficial do CPC — subtrai a tendência de aquecimento tropical global do Niño 3.4 antes de padronizar, por isso roda mais baixo que o ONI-aprox no mesmo trimestre. Referência, não usado no gatilho operacional.</div>
         </div>
         <div class="card">
           <div class="card-title">TSA — Atlântico Sul <span id="d-tsa" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
@@ -1160,6 +1165,15 @@
 /* ══════════════════════════════════════════════
    DADOS EMBUTIDOS
 ══════════════════════════════════════════════ */
+/* RONI — índice oficial trimestral do CPC/NOAA, mantido por
+   update_indices.py (cron dia 1-5, ver .github/workflows/indices_semanal.yml).
+   NÃO é o mesmo número que D.now.oni ("ONI-aprox", nossa média móvel
+   de 3 meses do Niño 3.4 bruto) — RONI subtrai a tendência de
+   aquecimento tropical global antes de padronizar, por isso roda mais
+   baixo. Ver CLAUDE.md, armadilha 9. Os dois rótulos na UI (cards
+   "RONI (oficial NOAA)" e "ONI aprox. (Niño 3,4, 3m)") existem
+   justamente para não deixar ler um pelo outro. */
+const RONI = { seas: 'JJA', ano: 2026, valor: 1.36, atualizado: '11/09/2026' };
 const D = {
   annual:{years:[1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],vals:[1487.9, 1562.2, 1558.8, 1674.9, 2531.5, 1705.5, 1357.9, 1753.7, 2004.2, 1486.4, 1621.4, 1400.9, 1659.0, 1925.1, 1868.6, 2010.0, 1644.4, 1243.6, 1933.7, 1945.5, 1679.3, 1524.4, 1538.2, 1788.8, 1718.6, 1954.9, 1465.5, 2038.4, 1873.2, 1521.3, 1820.2, 1566.9, 1671.6, 1800.5, 1264.4, 1520.3, 1900.5, 1921.9, 1590.4, 2015.5, 2110.8, 1728.9, 1485.7, 1494.4, 1774.4],media:1714.3,dp:245.6,cv:14.3,minimo:[1998,1243.6],maximo:[1985,2531.5]},
   sen:{slope:2.24,p:0.4935,medY:2003,medP:1714.3},
@@ -1441,6 +1455,15 @@ function buildMonitor(){
   document.getElementById('k-n34').innerHTML=`<span style="color:${colFn(n34[1])}">${n34[1]>=0?'+':''}${n34[1].toFixed(2)} °C</span>`;
   document.getElementById('k-oni').innerHTML=`<span style="color:${colFn(on2[1])}">${on2[1]>=0?'+':''}${on2[1].toFixed(2)} °C</span>`;
   document.getElementById('k-tsa').innerHTML=`<span style="color:${tsa[1]>0.3?'var(--euc)':'var(--neu)'}">${tsa[1]>=0?'+':''}${tsa[1].toFixed(2)} °C</span>`;
+
+  /* RONI — card separado, NÃO reaproveitar colFn/on2 daqui (ver
+     CLAUDE.md armadilha 9: RONI e ONI-aprox são métricas diferentes,
+     mesmo que pareçam intercambiáveis no layout). */
+  if (typeof RONI !== 'undefined' && RONI.valor !== null) {
+    document.getElementById('d-roni').textContent = `${RONI.seas}/${RONI.ano}`;
+    document.getElementById('k-roni').innerHTML =
+      `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>`;
+  }
 
   /* gráfico índices */
   destroyChart('idx');
@@ -2465,150 +2488,13 @@ buildPlano();
 updateLogTable();
 setTimeout(()=>{ buildFcCharts(); buildClimaCharts(); }, 0);
 
-/* ══════════════════════════════════════════════════════════
-   AGENDADOR DE ATUALIZAÇÃO — toda última segunda-feira do mês
-   Lógica: ao abrir o dashboard, calcula a última segunda-feira do
-   mês atual. Se hoje = essa data → exibe banner de atualização.
-   Se a data já passou neste mês → calcula a do próximo mês.
-   Registra a última verificação em sessionStorage.
-══════════════════════════════════════════════════════════ */
-(function agendador(){
-  /* Dados embutidos da última atualização */
-  const ULTIMA_ATUALIZACAO = {
-    data:       '11/09/2026',
-    cpc_emiss:  '11/jun/2026',
-    cpc_status: 'El Niño Advisory',
-    iri_emiss:  'jun/2026',
-    oni:        '+0,95°C (AMJ/2026)',
-    nino34:     '+2,10°C semanal (15/jul/2026)',
-    divergencia:'≤3 p.p. (CPC×IRI)',
-  };
-
-  /* Calcular última segunda-feira de um dado mês/ano */
-  function ultimaSegunda(year, month){
-    /* Último dia do mês */
-    const ultimoDia = new Date(year, month + 1, 0);
-    /* Retroceder até segunda-feira (getDay()==1) */
-    const diasAtras = (ultimoDia.getDay() + 6) % 7; // 0=seg→0, 1=ter→1, ..., 6=dom→6
-    ultimoDia.setDate(ultimoDia.getDate() - diasAtras);
-    return ultimoDia;
-  }
-
-  /* Próxima última segunda-feira a partir de hoje */
-  function proximaDataAtualizacao(){
-    const hoje = new Date();
-    hoje.setHours(0,0,0,0);
-    let candidata = ultimaSegunda(hoje.getFullYear(), hoje.getMonth());
-    candidata.setHours(0,0,0,0);
-    if(candidata < hoje){
-      /* Esta mês já passou → próximo mês */
-      let m = hoje.getMonth()+1, y = hoje.getFullYear();
-      if(m > 11){ m=0; y++; }
-      candidata = ultimaSegunda(y, m);
-    }
-    return candidata;
-  }
-
-  /* Formatar data pt-BR */
-  function fmtDate(d){
-    return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'});
-  }
-
-  /* Verificar se hoje É a data de atualização */
-  function ehDiaDeAtualizacao(d){
-    const hoje = new Date();
-    return d.getFullYear()===hoje.getFullYear() &&
-           d.getMonth()===hoje.getMonth() &&
-           d.getDate()===hoje.getDate();
-  }
-
-  const proxima   = proximaDataAtualizacao();
-  const proximaStr = fmtDate(proxima);
-
-  /* Atualizar label no banner do Monitor */
-  const lbl = document.getElementById('next-update-label');
-  if(lbl) lbl.textContent = proximaStr;
-
-  /* Banner de "atualização disponível" no topo do dashboard */
-  function mostrarBannerAtualizacao(){
-    /* Não mostrar se já foi dispensado hoje */
-    const _ss2 = (function(){ try{return window.sessionStorage;}catch(e){return{getItem:()=>null,setItem:()=>{}};} })();
-    const dispensado = _ss2.getItem('update_banner_dismissed');
-    if(dispensado === new Date().toDateString()) return;
-
-    const bar = document.createElement('div');
-    bar.id = 'update-avail-bar';
-    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2000;background:linear-gradient(90deg,#2E7D50,#1E5C2A);color:#d8f4e4;font-size:12.5px;font-weight:600;padding:9px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,.4);flex-wrap:wrap';
-    bar.innerHTML = `
-      <span>🔄 <strong>Hoje é dia de atualização do dashboard!</strong> · última segunda-feira de ${proxima.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})} · Acesse CPC e IRI para verificar novos dados de ENSO.</span>
-      <div style="display:flex;gap:8px;align-items:center">
-        <a href="https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml" target="_blank"
-          style="background:rgba(255,255,255,.2);color:#d8f4e4;border:1px solid rgba(255,255,255,.4);padding:4px 10px;border-radius:4px;text-decoration:none;font-size:11.5px;white-space:nowrap">CPC ↗</a>
-        <a href="https://iri.columbia.edu/our-expertise/climate/forecasts/enso/current/" target="_blank"
-          style="background:rgba(255,255,255,.2);color:#d8f4e4;border:1px solid rgba(255,255,255,.4);padding:4px 10px;border-radius:4px;text-decoration:none;font-size:11.5px;white-space:nowrap">IRI ↗</a>
-        <button onclick="document.getElementById('update-avail-bar').remove();(function(){try{sessionStorage.setItem('update_banner_dismissed',new Date().toDateString());}catch(e){}})();"
-          style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#d8f4e4;font:inherit;font-size:11px;padding:4px 9px;border-radius:4px;cursor:pointer;white-space:nowrap">Dispensar ✕</button>
-      </div>`;
-    document.body.prepend(bar);
-    /* Empurrar o layout para baixo */
-    const layout = document.querySelector('.layout');
-    if(layout) layout.style.marginTop = bar.offsetHeight + 'px';
-  }
-
-  /* Banner de lembrete: "próxima atualização em N dias" */
-  function mostrarBannerLembrete(){
-    const hoje = new Date();
-    const diff = Math.round((proxima - hoje) / 86400000);
-    if(diff > 7 || diff <= 0) return;   // só mostrar na semana anterior
-    const _ss2 = (function(){ try{return window.sessionStorage;}catch(e){return{getItem:()=>null,setItem:()=>{}};} })();
-    const visto = _ss2.getItem('reminder_seen_'+proximaStr);
-    if(visto) return;
-    _ss2.setItem('reminder_seen_'+proximaStr, '1');
-
-    /* Adicionar chip de countdown na topbar */
-    const chip = document.getElementById('chip-model-status');
-    if(chip){
-      chip.style.display = '';
-      chip.textContent = `🗓 Próx. atualização em ${diff} dia(s) — ${proximaStr}`;
-      chip.className = 'model-chip running';
-    }
-  }
-
-  /* Rodapé da sidebar: info de atualização */
-  const footer = document.querySelector('.sidebar-footer');
-  if(footer){
-    const infoDiv = document.createElement('div');
-    infoDiv.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid var(--line);font-size:10px;color:var(--txt3);line-height:1.5';
-    infoDiv.innerHTML = `
-      <div style="color:var(--euc);font-weight:600;margin-bottom:2px">📡 Dados atualizados</div>
-      <div>${ULTIMA_ATUALIZACAO.data}</div>
-      <div>CPC: ${ULTIMA_ATUALIZACAO.cpc_status}</div>
-      <div>ONI: ${ULTIMA_ATUALIZACAO.oni}</div>
-      <div style="margin-top:4px;color:var(--dry)">🗓 Próx. atualização</div>
-      <div><strong style="color:var(--txt)">${proximaStr}</strong></div>`;
-    footer.appendChild(infoDiv);
-  }
-
-  /* Atualizar nota no semáforo */
-  const ruleNote = document.getElementById('cpc-iri-rule-note');
-  if(ruleNote) ruleNote.textContent =
-    `| CPC/IRI: ≤3 p.p. → CONVERGÊNCIA TOTAL → EN forte iminente · 63% chance EN muito forte NDJ/26 → Plano Seca ATIVO`;
-
-  /* Executar verificações */
-  if(ehDiaDeAtualizacao(proxima)){
-    mostrarBannerAtualizacao();
-  } else {
-    mostrarBannerLembrete();
-  }
-
-  /* Verificar novamente a cada hora (caso o dashboard fique aberto) */
-  setInterval(()=>{
-    const nova = proximaDataAtualizacao();
-    if(ehDiaDeAtualizacao(nova) && !document.getElementById('update-avail-bar'))
-      mostrarBannerAtualizacao();
-  }, 3600000);
-
-})(); /* fim agendador */
+/* Lembrete de emissão CPC/IRI: antigo mecanismo client-side removido
+   (ULTIMA_ATUALIZACAO hardcoded + banner de "última segunda-feira do
+   mês" — ficava desatualizado em minutos e sobrescrevia a nota do
+   semáforo com texto morto). Substituído pelas Issues automáticas
+   de lembrete (2ª e 3ª quinta-feira — ver .github/workflows/
+   lembrete_cpc_thursday.yml e lembrete_iri_thursday.yml, CLAUDE.md
+   armadilha 9). Nada mais precisa rodar aqui no cliente. */
 }); /* fim DOMContentLoaded */
 
 

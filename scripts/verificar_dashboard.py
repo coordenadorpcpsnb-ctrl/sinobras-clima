@@ -23,6 +23,11 @@ quebrado chegue ao ar. Checa:
      série (a série simplesmente parou de crescer) é tão perigosa
      quanto um buraco no meio, e ficaria invisível se só olhássemos
      entre primeiro e último registro.
+  8. RONI vs ONI-aprox: se o card RONI existir no dashboard, os rótulos
+     precisam deixar claro que é uma métrica diferente do ONI-aprox
+     (média 3m do Niño 3.4 bruto) — reprova se o card ONI ficar com
+     rótulo ambíguo ("ONI" puro) ao lado do RONI (ver CLAUDE.md
+     armadilha 9).
 """
 
 import re, sys, json
@@ -303,6 +308,23 @@ def main():
         else:
             ok(f'serie_subst.csv contínua até o mês anterior ao atual '
                f'({len(serie)} meses, {m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})')
+
+    # ── 10. RONI vs ONI-aprox — rótulos precisam distinguir as métricas ──
+    # RONI (CPC, oficial, trimestral, subtrai a tendência de aquecimento
+    # tropical) e ONI-aprox (calc_oni: média 3m do Niño 3.4 bruto) são
+    # números diferentes para o mesmo trimestre — se aparecerem juntos
+    # sem rótulo que os diferencie, dá pra ler um pelo outro (ver
+    # CLAUDE.md armadilha 9).
+    tem_roni = re.search(r'const RONI\s*=', h) is not None
+    if tem_roni:
+        card_oni_ambiguo  = re.search(r'card-title">\s*ONI\s*<span', h) is not None
+        card_roni_label   = re.search(r'card-title">\s*RONI\b', h) is not None
+        card_oni_qualific = re.search(r'card-title">\s*ONI\s+aprox', h) is not None
+        if card_oni_ambiguo or not (card_roni_label and card_oni_qualific):
+            erro('RONI presente no dashboard mas os rótulos não distinguem '
+                 'claramente RONI de ONI-aprox — risco de confundir as duas métricas')
+        else:
+            ok('RONI e ONI-aprox com rótulos distintos')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

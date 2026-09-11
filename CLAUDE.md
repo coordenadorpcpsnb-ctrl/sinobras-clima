@@ -17,8 +17,11 @@ data/                      série, índices e resultados intermediários
 docs/index.html            o dashboard (arquivo único, publicado no Pages)
 docs/relatorio-executivo.docx
 .github/workflows/
-  update.yml               dia 21, 12h BRT — pipeline completo
-  publicar.yml             a cada push em docs/ — só republica o Pages
+  update.yml                 dia 21, 12h BRT — pipeline completo
+  publicar.yml               a cada push em docs/ — só republica o Pages
+  indices_semanal.yml        seg. + dia 1-5, 12h BRT — wksst (4 regiões) + RONI
+  lembrete_cpc_thursday.yml  2ª quinta-feira — abre Issue (não faz parsing)
+  lembrete_iri_thursday.yml  3ª quinta-feira — abre Issue (não faz parsing)
 ```
 
 O dashboard é **um único HTML** com dados embutidos em objetos JS
@@ -34,7 +37,8 @@ python scripts/update_dashboard.py     # regenera docs/index.html
 python scripts/verificar_dashboard.py  # exit 1 se houver inconsistência
 python scripts/gerar_relatorio.py      # regenera o .docx
 
-python -m unittest tests.test_fetch_fallback -v  # testa o fallback CHIRPS→Open-Meteo, sem rede real
+python -m unittest tests.test_fetch_fallback -v   # testa o fallback CHIRPS→Open-Meteo, sem rede real
+python -m unittest tests.test_update_indices -v   # testa parse_wksst (4 regiões) e parse_roni, sem rede real
 ```
 
 **Sempre rode `verificar_dashboard.py` depois de qualquer alteração que
@@ -239,6 +243,99 @@ sempre validar/reparar (`buffer(0)`) **depois** de arredondar, não antes
 função). Com o envelope atual (26 vértices) a simplificação nem chega a
 entrar em ação — é salvaguarda para se a geometria for substituída por
 algo mais detalhado no futuro.
+
+### 9. Calendário de atualização ENSO — 2 fontes automatizáveis, 2 só lembrete; RONI ≠ ONI-aprox
+
+**Investigado antes de escrever qualquer parser nesta seção** (testado
+ao vivo, não assumido): a CPC publica "subsuperfície equatorial" só
+como figura (`ensodisc.shtml`, `[Fig. 3]`/`[Fig. 4]`) — não existe
+ascii equivalente em `/data/indices/`, testado com várias URLs prováveis,
+todas 404. Registrado como lacuna, sem parser. SOI, ventos (850mb
+Pacífico central/leste/oeste, zwnd200) e convecção (OLR) **existem**
+como ascii estruturado (`soi`, `cpac850`, `epac850`, `wpac850`,
+`zwnd200`, `olr` em `/data/indices/`), mas são **mensais, não
+semanais** — `Readme.index.shtml` confirma: "updated around the 10th
+of each month". Não foram automatizados aqui: os itens concretos desta
+seção pediam só a extensão do wksst e o RONI — se algum dia fizer
+sentido automatizar SOI/ventos/OLR também, é fetch mensal, não semanal,
+e reaproveita o padrão de `parse_psl_anual` (mesmo layout "YEAR JAN FEV
+... DEZ").
+
+**`parse_wksst` tinha um bug real de silenciosa perda de dado**, achado
+testando o arquivo ao vivo antes de estender pra 4 regiões: o layout
+FORTRAN do `wksst9120.for` é de **coluna fixa**, não separado de forma
+confiável por espaço — quando a anomalia é negativa, o sinal gruda
+direto no número anterior sem espaço (`"20.6-0.1"` = SST 20.6, anomalia
+-0.1, um token só). O parser antigo usava `line.split()` e exigia 9
+tokens; com qualquer uma das 4 regiões negativa, a linha cai pra menos
+de 9 tokens e era **pulada inteira**. Medido contra as 2.349 linhas do
+arquivo (1981-2026): **73,6% têm essa concatenação em pelo menos uma
+região**. Efeito real: sempre que a semana mais recente tivesse
+qualquer anomalia negativa em qualquer uma das 4 regiões, a função
+devolvia o valor de semanas atrás, sem aviso. Corrigido com slicing de
+coluna fixa (`_WKSST_COLS`, blocos de 8 chars: `[0:4]`=SST, `[4:8]`=
+anomalia), validado sem falha nas 2.349 linhas. `parse_wksst` agora
+retorna as 4 regiões (Niño1+2, Niño3, Niño3.4, Niño4), não só Niño3.4.
+
+**Achado operacional ao comparar antes/depois no dado real desta
+sessão (11/09/2026):** o valor semanal registrado hoje **não mudou**
+(02SEP2026, Niño 3.4 = +2,70°C nas duas versões) — a semana mais
+recente tem as 4 anomalias positivas (El Niño forte em curso), caso em
+que o parser antigo por coincidência funcionava. A prova de que o bug
+era real, não hipotético: rodando os dois parsers sobre o mesmo arquivo
+truncado até 11MAR2026 (a semana mais recente com concatenação
+negativa, Niño3.4 = -0,1°C) o parser antigo devolve **09JUL2025
+(+0,1°C)** — uma semana de **35 semanas atrás**, com o sinal da
+anomalia errado — enquanto o novo devolve corretamente 11MAR2026
+(-0,1°C). Ou seja: o bug não afetou o dado exibido hoje por sorte de
+calendário (El Niño forte sem nenhuma região negativa), mas teria
+afetado silenciosamente qualquer semana com La Niña ou transição de
+fase — inclusive há só 6 meses.
+
+**RONI (`RONI.ascii.txt`) e `D.now.oni` (nosso "ONI-aprox") são
+métricas diferentes por desenho — nunca tratar como o mesmo número:**
+
+| | RONI | ONI-aprox (`calc_oni`) |
+|---|---|---|
+| Fonte | CPC, oficial, `RONI.ascii.txt` | Calculado aqui, `sstoi.indices` |
+| Cálculo | Niño 3.4 **menos** a tendência de aquecimento tropical global, depois padronizado | Média móvel simples de 3 meses do Niño 3.4 bruto |
+| Cadência | Trimestral, publicada ~dia 10 do mês | Recalculado a cada fetch |
+| Exemplo (mesmo trimestre) | JJA/2026 = **+1,36 °C** | jul/2026 (aprox. JJA) = **+2,03 °C** |
+| Diferença | — | **0,67 °C**, mesmo trimestre, sem ser erro |
+
+RONI roda sistematicamente mais baixo porque desconta o aquecimento
+global de fundo — um El Niño "forte" pelo ONI-aprox pode não parecer
+tão extremo no RONI, e isso é esperado, não discrepância de dado. Por
+isso os dois têm cards separados no dashboard ("ONI aprox. (Niño 3,4,
+3m)" e "RONI (oficial NOAA)") com nota cruzada em cada um, `const RONI`
+é um objeto próprio (não um campo dentro de `now:{...}`, pra não
+arriscar corromper os dois com um regex só — armadilha 2), e
+`verificar_dashboard.py` reprova se o card RONI aparecer com o card ONI
+ainda no rótulo ambíguo antigo ("ONI" puro, sem "aprox").
+
+**Calendário final:**
+
+| Cadência | O quê | Automação | Workflow |
+|---|---|---|---|
+| Semanal (seg.) | wksst 4 regiões | Completa (parser) | `indices_semanal.yml` |
+| Dia 1-5 do mês | RONI | Completa (parser) | `indices_semanal.yml` |
+| 2ª quinta-feira | CPC ENSO Diagnostic Discussion | Só lembrete (Issue) | `lembrete_cpc_thursday.yml` |
+| 3ª quinta-feira | IRI Prediction Plume | Só lembrete (Issue) | `lembrete_iri_thursday.yml` |
+
+"Dia 1-5" usa a faixa de dia-do-mês nativa do cron (`1-5` no campo de
+dia) — não precisa de lógica de contagem, diferente de "Nª
+dia-da-semana do mês" (2ª/3ª quinta-feira), que o cron não expressa
+(campo dia-da-semana e dia-do-mês são combinados por OR, não AND).
+Pra isso, os dois workflows de lembrete rodam **diário** e um passo
+calcula `ordinal = (dia_do_mês - 1) // 7 + 1`, agindo só quando
+`dia_da_semana == quinta E ordinal == 2 (ou 3)`.
+
+Os workflows de lembrete **não têm parser nenhum** para o conteúdo das
+páginas do CPC/IRI — é prosa, e um regex sobre prosa é exatamente o
+tipo de bug frágil que este projeto já corrigiu várias vezes (armadilhas
+1, 2, 6, 7 nasceram de parsing ingênuo de fonte que não era tão
+estruturada quanto parecia). O produto final desses dois workflows é a
+Issue com checklist — a extração continua manual.
 
 ## Convenções
 
