@@ -8,6 +8,15 @@ Fontes PSL/NOAA (públicas, sem autenticação):
   PSL nina34.data    : https://psl.noaa.gov/data/correlation/nina34.data
   PSL tsa.data       : https://psl.noaa.gov/data/correlation/tsa.data
   CPC wksst9120.for  : https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for
+  CPC RONI.ascii.txt : https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt
+
+Também roda no cron semanal/mensal-início (.github/workflows/indices_semanal.yml)
+— ver CLAUDE.md armadilha 9 para a distinção RONI vs. ONI-aprox e o
+motivo de não ter automatizado subsuperfície equatorial nem os
+indicadores atmosféricos (SOI/ventos/convecção): a CPC publica esses
+como ascii MENSAL (não semanal — confirmado no Readme.index.shtml,
+"updated around the 10th of each month"), e subsuperfície só existe
+como figura, sem ascii algum.
 """
 
 import re, sys, shutil
@@ -102,31 +111,111 @@ def parse_psl_anual(text):
     return data
 
 
+WKSST_REGIOES = ['nino12', 'nino3', 'nino34', 'nino4']
+# Cada região ocupa um bloco de 8 caracteres: SST nos 4 primeiros,
+# anomalia nos 4 seguintes — ver parse_wksst() para o motivo de usar
+# posição fixa em vez de split().
+_WKSST_COLS = [(15, 23), (28, 36), (41, 49), (54, 62)]
+
+
 def parse_wksst(text):
     """
-    CPC wksst9120.for — linhas com data + duas colunas por região
-    (SST absoluta, depois anomalia):
-    DDMMMYYYY  SST1+2 ANOM1+2  SST3 ANOM3  SST34 ANOM34  SST4 ANOM4
-       idx 0     1      2       3    4       5     6      7    8
-    Retorna (label_str, nino34_anom) do registro mais recente.
+    CPC wksst9120.for — layout de COLUNA FIXA (FORTRAN), não separado de
+    forma confiável por espaço. Testado ao vivo contra as 2.349 linhas
+    de dado do arquivo (1981–2026): quando a anomalia é negativa, o
+    layout gruda o sinal direto no número anterior, sem espaço —
+    "20.6-0.1" é SST=20.6, anomalia=-0.1, não dois tokens.
+    `line.split()` conta 5 tokens nessa linha (data + 4 blocos colados)
+    em vez dos 9 esperados (data + 4×[SST,ANOM]) — e o parser antigo
+    (`if len(parts) < 9: continue`) pulava a linha inteira. Isso não é
+    hipotético: **73,6% das 2.349 linhas do arquivo têm essa
+    concatenação em pelo menos uma das 4 regiões** (qualquer década com
+    La Niña/anomalia negativa). Efeito em produção: sempre que a semana
+    mais recente tivesse qualquer anomalia negativa em qualquer uma das
+    4 regiões, a linha era pulada silenciosamente e a função devolvia o
+    último valor de semanas atrás — sem aviso, sem erro, só um número
+    desatualizado.
+
+    Corrigido com slicing de coluna fixa (validado sem falha nas 2.349
+    linhas): data em [1:10], cada região em `_WKSST_COLS` — bloco de 8
+    chars, [0:4]=SST, [4:8]=anomalia (funciona com ou sem espaço, já
+    que a posição não muda).
+
+    Retorna (label_str, {regiao: {'sst': float, 'anom': float}, ...})
+    do registro mais recente com as 4 regiões válidas, ou (None, None).
     """
-    ultimo_lbl, ultimo_val = None, None
+    ultimo_lbl, ultimo_dados = None, None
+    for line in text.splitlines():
+        if len(line) < 62:
+            continue
+        data_str = line[1:10]
+        try:
+            datetime.strptime(data_str, '%d%b%Y')  # valida data
+        except ValueError:
+            continue
+
+        dados, valido = {}, True
+        for nome, (ini, fim) in zip(WKSST_REGIOES, _WKSST_COLS):
+            bloco = line[ini:fim]
+            try:
+                sst  = float(bloco[0:4])
+                anom = float(bloco[4:8])
+            except ValueError:
+                valido = False
+                break
+            # anomalia nunca passa de ~5°C e SST do Pacífico equatorial
+            # nunca sai de 15-35°C — barreira física contra coluna
+            # errada ou linha malformada (mesmo padrão dos outros
+            # parsers do projeto).
+            if abs(anom) > 5 or not (15 <= sst <= 35):
+                valido = False
+                break
+            dados[nome] = {'sst': sst, 'anom': round(anom, 2)}
+
+        if valido:
+            ultimo_lbl, ultimo_dados = data_str, dados
+
+    return ultimo_lbl, ultimo_dados
+
+
+RONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt'
+
+
+def parse_roni(text):
+    """
+    CPC RONI.ascii.txt — cabeçalho 'SEAS YR ANOM', uma linha por
+    trimestre: 'JJA  2026  1.36'. Formato confirmado ao vivo (920
+    linhas, 1950–presente, sem sentinela de ausência visível — o
+    arquivo simplesmente termina no último trimestre publicado).
+
+    RONI **não é** o mesmo índice que nosso ONI-aprox (calc_oni, média
+    móvel de 3 meses do Niño 3.4 bruto): RONI é o índice oficial do
+    CPC, calculado subtraindo a tendência de aquecimento tropical
+    global do Niño 3.4 antes de padronizar — por isso roda
+    sistematicamente mais baixo que o ONI-aprox no mesmo trimestre
+    (ver CLAUDE.md, armadilha 9). Os dois precisam de rótulo que os
+    distinga claramente sempre que aparecerem juntos.
+
+    Retorna (temporada, ano, valor) do último registro válido, ou
+    (None, None, None).
+    """
+    ultimo = (None, None, None)
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) < 9:
+        if len(parts) != 3:
+            continue
+        seas, yr_s, val_s = parts
+        if not re.match(r'^[A-Z]{3}$', seas):
             continue
         try:
-            datetime.strptime(parts[0], '%d%b%Y')  # valida data
-            v = float(parts[6])                     # ANOM34 (0-indexed col 6)
-            # anomalia do Niño 3.4 nunca passa de ~3°C — abs(v) > 5 indica
-            # coluna errada (ex.: SST absoluta em vez de anomalia)
-            if abs(v) > 5:
-                continue
-            ultimo_lbl = parts[0]
-            ultimo_val = round(v, 2)
-        except (ValueError, IndexError):
-            pass
-    return ultimo_lbl, ultimo_val
+            yr  = int(yr_s)
+            val = float(val_s)
+        except ValueError:
+            continue
+        if not (1900 <= yr <= 2100) or abs(val) > 5:
+            continue
+        ultimo = (seas, yr, round(val, 2))
+    return ultimo
 
 
 # ══════════════════════════════════════════════════════
@@ -196,7 +285,7 @@ def label_fmt(lbl):
 # ══════════════════════════════════════════════════════
 # ATUALIZAR HTML
 # ══════════════════════════════════════════════════════
-def update_html(series, wk_lbl, wk_val):
+def update_html(series, wk_lbl, wk_val, roni=None):
     html = DASHBOARD.read_text(encoding='utf-8')
     original = html
 
@@ -255,6 +344,28 @@ def update_html(series, wk_lbl, wk_val):
         old_now = re.search(r'now:\s*\{[^}]+\}', html)
         if old_now:
             html = html[:old_now.start()] + new_now + html[old_now.end():]
+
+    # RONI — objeto próprio, separado de `now:{...}`, deliberadamente:
+    # é um trimestre (não um mês), atualiza numa cadência diferente
+    # (~mensal, checado no cron dia 1-5), e misturar os dois campos num
+    # só regex frágil (ver armadilha 2 do CLAUDE.md) arrisca corromper
+    # ambos. Rótulo 'RONI (oficial NOAA)' — ver CLAUDE.md armadilha 9,
+    # nunca confundir com `oni` acima ('ONI-aprox').
+    # Se o fetch desta execução falhou (roni is None), NÃO mexe na
+    # linha existente — preserva o último valor real, igual à
+    # persistência de TSA/PDO/CHC-Preliminar (nunca grava null/zero
+    # por cima de um dado bom só porque a fonte ficou fora do ar).
+    if roni is not None:
+        new_roni = (
+            f"const RONI = {{ seas: '{roni['seas']}', ano: {roni['ano']}, "
+            f"valor: {roni['valor']}, atualizado: '{TODAY.strftime('%d/%m/%Y')}' }};"
+        )
+        old_roni = re.search(r"const RONI = \{[^}]*\};", html)
+        if old_roni:
+            html = html[:old_roni.start()] + new_roni + html[old_roni.end():]
+        else:
+            print('  ⚠ const RONI não encontrado no HTML — card RONI '
+                  'precisa ser adicionado manualmente uma vez (ver CLAUDE.md armadilha 9)')
 
     # Data de atualização
     dt_str = TODAY.strftime('%d/%m/%Y')
@@ -416,7 +527,7 @@ def main():
     nino34, tsa, pdo = {}, {}, {}
 
     # 1. CPC sstoi.indices (fonte primária — formato simples)
-    print("\n[1/5] CPC sstoi.indices (primário)…")
+    print("\n[1/6] CPC sstoi.indices (primário)…")
     try:
         text   = fetch('https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices')
         nino34 = parse_sstoi(text)
@@ -433,7 +544,7 @@ def main():
             print(f"  ❌ Ambas as fontes falharam: {e2}")
 
     # 2. PSL tsa.data
-    print("\n[2/5] PSL tsa.data…")
+    print("\n[2/6] PSL tsa.data…")
     try:
         text = fetch('https://psl.noaa.gov/data/correlation/tsa.data')
         tsa  = parse_psl_anual(text)
@@ -447,7 +558,7 @@ def main():
         return 1
 
     # 3. PSL pdo.data
-    print("\n[3/5] PSL pdo.data…")
+    print("\n[3/6] PSL pdo.data…")
     try:
         text = fetch('https://psl.noaa.gov/data/correlation/pdo.data')
         pdo  = parse_psl_anual(text)
@@ -456,19 +567,35 @@ def main():
     except Exception as e:
         print(f"  ⚠ PDO indisponível (não crítico): {e}")
 
-    # 4. CPC semanal
-    print("\n[4/5] CPC wksst9120.for (semanal)…")
-    wk_lbl, wk_val = None, None
+    # 4. CPC semanal — 4 regiões (Niño1+2, Niño3, Niño3.4, Niño4)
+    print("\n[4/6] CPC wksst9120.for (semanal, 4 regiões)…")
+    wk_lbl, wk_regioes, wk_val = None, None, None
     try:
         text = fetch('https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for')
-        wk_lbl, wk_val = parse_wksst(text)
-        if wk_val is not None:
-            print(f"  ✅ Semanal: {wk_lbl} → {wk_val:+.2f}°C")
+        wk_lbl, wk_regioes = parse_wksst(text)
+        if wk_regioes is not None:
+            wk_val = wk_regioes['nino34']['anom']
+            resumo = ' | '.join(
+                f"{r}={wk_regioes[r]['anom']:+.2f}°C" for r in WKSST_REGIOES)
+            print(f"  ✅ Semanal ({wk_lbl}): {resumo}")
     except Exception as e:
         print(f"  ⚠ Semanal indisponível: {e}")
 
-    # 5. Histórico — master_monthly.csv e serie_subst.csv
-    print("\n[5/5] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
+    # 5. CPC RONI (trimestral, índice oficial — distinto do ONI-aprox)
+    print("\n[5/6] CPC RONI.ascii.txt…")
+    roni = None
+    try:
+        text = fetch(RONI_URL)
+        seas, yr, val = parse_roni(text)
+        if val is not None:
+            roni = {'seas': seas, 'ano': yr, 'valor': val}
+            print(f"  ✅ RONI: {seas}/{yr} → {val:+.2f}°C "
+                  f"(oficial NOAA — não é o mesmo número que nosso ONI-aprox)")
+    except Exception as e:
+        print(f"  ⚠ RONI indisponível: {e}")
+
+    # 6. Histórico — master_monthly.csv e serie_subst.csv
+    print("\n[6/6] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
     n_master = atualizar_master_monthly(nino34, tsa, pdo)
     n_serie  = corrigir_serie_subst(nino34, tsa, pdo)
     print(f"  master_monthly.csv: {n_master} mês(es) adicionados")
@@ -476,18 +603,20 @@ def main():
 
     # Montar e atualizar
     series  = build_series(nino34, tsa, wk_lbl, wk_val)
-    changed = update_html(series, wk_lbl, wk_val)
+    changed = update_html(series, wk_lbl, wk_val, roni)
 
     lbl_n, val_n = latest_non_null(series, 'nino34')
     lbl_o, val_o = latest_non_null(series, 'oni')
     lbl_t, val_t = latest_non_null(series, 'tsa')
 
     print(f"\n  Niño 3.4 : {val_n:+.2f}°C ({label_fmt(lbl_n)})")
-    print(f"  ONI      : {val_o:+.2f}°C ({label_fmt(lbl_o)})")
+    print(f"  ONI-aprox: {val_o:+.2f}°C ({label_fmt(lbl_o)}) — média 3m do Niño 3.4 bruto")
     if val_t:
         print(f"  TSA      : {val_t:+.2f}°C ({label_fmt(lbl_t)})")
     if wk_val:
         print(f"  Semanal  : {wk_val:+.2f}°C ({wk_lbl})")
+    if roni:
+        print(f"  RONI     : {roni['valor']:+.2f}°C ({roni['seas']}/{roni['ano']}) — oficial NOAA")
 
     print(f"\n  Alterações: {'sim' if changed else 'nenhuma'}")
     print(f"{'='*55}\n")

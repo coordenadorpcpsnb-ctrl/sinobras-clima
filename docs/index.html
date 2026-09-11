@@ -530,16 +530,21 @@
       </div>
 
       <!-- KPIs oceânicos -->
-      <div class="grid g3 mt14">
+      <div class="grid g4 mt14">
         <div class="card">
           <div class="card-title">Niño 3.4 <span id="d-n34" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
           <div class="kpi" id="k-n34"></div>
           <div class="kpi-note">Anomalia de TSM no Pacífico equatorial (ERSSTv5/CPC). Preditor principal: −15 mm/mês por +1 °C (lag 2–3 meses).</div>
         </div>
         <div class="card">
-          <div class="card-title">ONI <span id="d-oni" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
+          <div class="card-title">ONI aprox. (Niño 3,4, 3m) <span id="d-oni" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
           <div class="kpi" id="k-oni"></div>
-          <div class="kpi-note">Índice oficial do gatilho — média móvel de 3 meses do Niño 3.4.</div>
+          <div class="kpi-note">Índice do gatilho operacional — nossa média móvel de 3 meses do Niño 3.4 bruto. <strong>Não é o RONI oficial</strong> (card ao lado) — mesma ideia, cálculo diferente, números diferentes para o mesmo trimestre.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">RONI (oficial NOAA) <span id="d-roni" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
+          <div class="kpi" id="k-roni">—</div>
+          <div class="kpi-note">Índice trimestral oficial do CPC — subtrai a tendência de aquecimento tropical global do Niño 3.4 antes de padronizar, por isso roda mais baixo que o ONI-aprox no mesmo trimestre. Referência, não usado no gatilho operacional.</div>
         </div>
         <div class="card">
           <div class="card-title">TSA — Atlântico Sul <span id="d-tsa" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px"></span></div>
@@ -1160,6 +1165,15 @@
 /* ══════════════════════════════════════════════
    DADOS EMBUTIDOS
 ══════════════════════════════════════════════ */
+/* RONI — índice oficial trimestral do CPC/NOAA, mantido por
+   update_indices.py (cron dia 1-5, ver .github/workflows/indices_semanal.yml).
+   NÃO é o mesmo número que D.now.oni ("ONI-aprox", nossa média móvel
+   de 3 meses do Niño 3.4 bruto) — RONI subtrai a tendência de
+   aquecimento tropical global antes de padronizar, por isso roda mais
+   baixo. Ver CLAUDE.md, armadilha 9. Os dois rótulos na UI (cards
+   "RONI (oficial NOAA)" e "ONI aprox. (Niño 3,4, 3m)") existem
+   justamente para não deixar ler um pelo outro. */
+const RONI = { seas: 'JJA', ano: 2026, valor: 1.36, atualizado: '11/09/2026' };
 const D = {
   annual:{years:[1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],vals:[1487.9, 1562.2, 1558.8, 1674.9, 2531.5, 1705.5, 1357.9, 1753.7, 2004.2, 1486.4, 1621.4, 1400.9, 1659.0, 1925.1, 1868.6, 2010.0, 1644.4, 1243.6, 1933.7, 1945.5, 1679.3, 1524.4, 1538.2, 1788.8, 1718.6, 1954.9, 1465.5, 2038.4, 1873.2, 1521.3, 1820.2, 1566.9, 1671.6, 1800.5, 1264.4, 1520.3, 1900.5, 1921.9, 1590.4, 2015.5, 2110.8, 1728.9, 1485.7, 1494.4, 1774.4],media:1714.3,dp:245.6,cv:14.3,minimo:[1998,1243.6],maximo:[1985,2531.5]},
   sen:{slope:2.24,p:0.4935,medY:2003,medP:1714.3},
@@ -1441,6 +1455,15 @@ function buildMonitor(){
   document.getElementById('k-n34').innerHTML=`<span style="color:${colFn(n34[1])}">${n34[1]>=0?'+':''}${n34[1].toFixed(2)} °C</span>`;
   document.getElementById('k-oni').innerHTML=`<span style="color:${colFn(on2[1])}">${on2[1]>=0?'+':''}${on2[1].toFixed(2)} °C</span>`;
   document.getElementById('k-tsa').innerHTML=`<span style="color:${tsa[1]>0.3?'var(--euc)':'var(--neu)'}">${tsa[1]>=0?'+':''}${tsa[1].toFixed(2)} °C</span>`;
+
+  /* RONI — card separado, NÃO reaproveitar colFn/on2 daqui (ver
+     CLAUDE.md armadilha 9: RONI e ONI-aprox são métricas diferentes,
+     mesmo que pareçam intercambiáveis no layout). */
+  if (typeof RONI !== 'undefined' && RONI.valor !== null) {
+    document.getElementById('d-roni').textContent = `${RONI.seas}/${RONI.ano}`;
+    document.getElementById('k-roni').innerHTML =
+      `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>`;
+  }
 
   /* gráfico índices */
   destroyChart('idx');

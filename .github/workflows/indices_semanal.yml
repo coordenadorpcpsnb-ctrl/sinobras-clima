@@ -1,0 +1,111 @@
+name: Índices ENSO — semanal + RONI (início do mês)
+
+# Fontes ascii estruturadas (CATEGORIA A da automação — ver CLAUDE.md
+# armadilha 9): CPC wksst9120.for (semanal) e CPC RONI.ascii.txt
+# (trimestral, mas a CPC publica em torno do dia 10 — checamos até o
+# dia 5 de cada mês pra pegar o valor assim que sair, sem esperar o
+# ciclo mensal completo do update.yml).
+#
+# Roda scripts/update_indices.py isolado — NÃO recalcula SARIMAX/XGBoost
+# nem regenera o relatório (isso continua só no update.yml, dia 21).
+# Mantém o Monitor ENSO (Niño 3.4/ONI-aprox/TSA/RONI) fresco entre um
+# ciclo mensal completo e o outro.
+on:
+  schedule:
+    # Toda segunda-feira, 12h BRT (15h UTC) — fetch numérico semanal
+    # (wksst 4 regiões) + RONI de brinde (idempotente se não mudou).
+    - cron: '0 15 * * 1'
+    # Todo dia 1 a 5 do mês, 12h BRT — RONI é trimestral mas a CPC
+    # publica no início do mês; checar diário só nessa janela evita
+    # tanto perder a publicação quanto pollar o mês inteiro à toa.
+    # (Sem lógica de contagem de semana aqui: "dia <= 5" é uma faixa
+    # de dia-do-mês nativa do cron, diferente de "Nª dia-da-semana do
+    # mês" — ver .github/workflows/lembrete_cpc_thursday.yml e
+    # lembrete_iri_thursday.yml para o caso que exige contagem.)
+    - cron: '0 15 1-5 * *'
+  workflow_dispatch:
+    inputs:
+      motivo:
+        description: 'Motivo da execução manual'
+        required: false
+        default: 'Checagem manual de índices'
+
+# Compartilha o grupo de concorrência do Pages com update.yml/publicar.yml
+# (CLAUDE.md armadilha 5) — evita publicação colidindo.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Só commita/empurra — não chama deploy-pages diretamente. O push em
+# docs/index.html dispara publicar.yml, que já cuida da publicação
+# (por isso não precisa de permissão pages/id-token aqui).
+permissions:
+  contents: write
+
+jobs:
+  atualizar_indices:
+    name: Buscar índices ENSO (wksst 4 regiões + RONI)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Atualizar índices oceânicos (wksst 4 regiões + RONI)
+        run: python scripts/update_indices.py
+        env:
+          TZ: America/Araguaina
+
+      # Barreira: mesmo sendo uma atualização leve (não mexe em
+      # SARIMAX/cenários), o Monitor ENSO é HTML publicado — não
+      # publicar se ficou inconsistente.
+      - name: Verificar integridade do dashboard
+        run: python scripts/verificar_dashboard.py
+
+      - name: Verificar alterações
+        id: diff
+        run: |
+          git diff --quiet docs/index.html data/ && \
+            echo "alterado=false" >> $GITHUB_OUTPUT || \
+            echo "alterado=true"  >> $GITHUB_OUTPUT
+
+      - name: Commit dos índices atualizados
+        if: steps.diff.outputs.alterado == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
+          git add docs/index.html data/
+          git commit -m "auto: índices ENSO — $DATA
+
+          - CPC wksst9120.for: 4 regiões (Niño1+2, Niño3, Niño3.4, Niño4)
+          - CPC RONI.ascii.txt (oficial, distinto do ONI-aprox)"
+          # Outro workflow pode ter commitado entre o checkout e aqui
+          # (update.yml no dia 21, ou este mesmo workflow disparado por
+          # dois crons no mesmo dia) — rebase antes de empurrar.
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🌊 Índices ENSO — semanal/RONI" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Data** | $(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT') |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Alterações** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
+          echo "ℹ️ Não recalcula SARIMAX/XGBoost nem o relatório — isso continua só no ciclo mensal (dia 21)." >> $GITHUB_STEP_SUMMARY
