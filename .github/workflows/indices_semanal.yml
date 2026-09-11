@@ -10,6 +10,12 @@ name: Índices ENSO — semanal + RONI (início do mês)
 # nem regenera o relatório (isso continua só no update.yml, dia 21).
 # Mantém o Monitor ENSO (Niño 3.4/ONI-aprox/TSA/RONI) fresco entre um
 # ciclo mensal completo e o outro.
+#
+# Também garante um HEARTBEAT semanal (passo incondicional no fim do
+# job, ver CLAUDE.md armadilha 9): o GitHub desliga workflow agendado
+# depois de 60 dias sem PUSH real, e este workflow só commitava antes
+# quando os índices em si mudavam — uma sequência longa de "nada
+# mudou" podia desligar os cinco workflows do repositório de uma vez.
 on:
   schedule:
     # Toda segunda-feira, 12h BRT (15h UTC) — fetch numérico semanal
@@ -98,6 +104,36 @@ jobs:
           # dois crons no mesmo dia) — rebase antes de empurrar.
           git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
+
+      # Passo INCONDICIONAL (fora do if: alterado) — ver CLAUDE.md
+      # armadilha 9: o GitHub desliga workflow agendado depois de 60
+      # dias SEM PUSH DE CÓDIGO (não sem execução de Actions). Como
+      # este workflow e o update.yml só commitam quando há diff real
+      # nos dados, uma sequência longa de "nada mudou" pode desligar os
+      # cinco workflows do repositório de uma vez, sem nenhum erro
+      # visível — nada rodou pra falhar. Este passo roda toda segunda-
+      # feira (e também nos dias 1-5), bem abaixo do limite de 60 dias,
+      # garantindo push real mesmo quando wksst/RONI não mudam. NÃO
+      # remover sem entender esse motivo.
+      - name: Heartbeat — mantém push semanal para os workflows não serem desativados
+        run: |
+          mkdir -p data
+          TZ='America/Araguaina' date +'%Y-%m-%d %H:%M BRT' > data/.ultima_verificacao
+          # `git diff --quiet` sozinho NÃO detecta arquivo nunca commitado
+          # (untracked é invisível pro diff contra HEAD) — testado: na
+          # primeira execução isso faria o heartbeat nunca commitar nada.
+          # `git add` primeiro e comparar contra o índice (--cached) cobre
+          # os dois casos: arquivo novo e conteúdo idêntico ao já commitado.
+          git add data/.ultima_verificacao
+          if git diff --cached --quiet; then
+            echo "heartbeat de hoje já commitado — nada a fazer"
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore: heartbeat semanal — mantém workflows agendados ativos (CLAUDE.md armadilha 9)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi
 
       - name: Sumário
         if: always()
