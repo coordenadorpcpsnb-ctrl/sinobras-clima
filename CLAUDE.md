@@ -20,8 +20,8 @@ docs/relatorio-executivo.docx
   update.yml                 dia 21, 12h BRT — pipeline completo
   publicar.yml               a cada push em docs/ — só republica o Pages
   indices_semanal.yml        seg. + dia 1-5, 12h BRT — wksst (4 regiões) + RONI
-  lembrete_cpc_thursday.yml  2ª quinta-feira — abre Issue (não faz parsing)
-  lembrete_iri_thursday.yml  3ª quinta-feira — abre Issue (não faz parsing)
+  lembrete_cpc_thursday.yml  janela dias 8-14 — abre Issue (não faz parsing)
+  lembrete_iri_thursday.yml  janela dias 15-21 — abre Issue (não faz parsing)
 ```
 
 O dashboard é **um único HTML** com dados embutidos em objetos JS
@@ -319,16 +319,28 @@ ainda no rótulo ambíguo antigo ("ONI" puro, sem "aprox").
 |---|---|---|---|
 | Semanal (seg.) | wksst 4 regiões | Completa (parser) | `indices_semanal.yml` |
 | Dia 1-5 do mês | RONI | Completa (parser) | `indices_semanal.yml` |
-| 2ª quinta-feira | CPC ENSO Diagnostic Discussion | Só lembrete (Issue) | `lembrete_cpc_thursday.yml` |
-| 3ª quinta-feira | IRI Prediction Plume | Só lembrete (Issue) | `lembrete_iri_thursday.yml` |
+| Dias 8-14 (janela) | CPC ENSO Diagnostic Discussion | Só lembrete (Issue) | `lembrete_cpc_thursday.yml` |
+| Dias 15-21 (janela) | IRI Prediction Plume | Só lembrete (Issue) | `lembrete_iri_thursday.yml` |
 
 "Dia 1-5" usa a faixa de dia-do-mês nativa do cron (`1-5` no campo de
-dia) — não precisa de lógica de contagem, diferente de "Nª
-dia-da-semana do mês" (2ª/3ª quinta-feira), que o cron não expressa
-(campo dia-da-semana e dia-do-mês são combinados por OR, não AND).
-Pra isso, os dois workflows de lembrete rodam **diário** e um passo
-calcula `ordinal = (dia_do_mês - 1) // 7 + 1`, agindo só quando
-`dia_da_semana == quinta E ordinal == 2 (ou 3)`.
+dia) — não precisa de lógica de contagem, diferente de "Nª semana do
+mês" (2ª/3ª semana), que o cron não expressa (só tem dia-do-mês OU
+dia-da-semana isolados, não "a Nª ocorrência de um dia-da-semana").
+
+**Os dois workflows de lembrete disparam por JANELA de semana, não por
+dia exato.** Rodam diário; um passo calcula
+`ordinal = (dia_do_mês - 1) // 7 + 1` e age quando `ordinal == 2`
+(dias 8-14, CPC) ou `ordinal == 3` (dias 15-21, IRI) — **qualquer dia
+da semana**, não só quinta-feira. Antes exigia `dia_da_semana == quinta
+E ordinal == 2/3`: travar no dia exato zera a chance de recuperação se
+esse dia específico falhar (rede fora, runner indisponível) — só
+tentaria de novo no mês seguinte. Com a janela de 7 dias, uma falha num
+dia é coberta pela tentativa do dia seguinte, sem precisar de lógica de
+retry separada. A Issue é dedupada por **título mensal** (`MM/AAAA`,
+sem o dia) e a busca inclui Issues fechadas, não só abertas — assim, o
+primeiro dia da janela que rodar com sucesso cria a Issue, e os
+próximos dias da mesma janela (mesmo que a Issue já tenha sido fechada
+por alguém que fez a extração cedo) não duplicam.
 
 Os workflows de lembrete **não têm parser nenhum** para o conteúdo das
 páginas do CPC/IRI — é prosa, e um regex sobre prosa é exatamente o
@@ -336,6 +348,26 @@ tipo de bug frágil que este projeto já corrigiu várias vezes (armadilhas
 1, 2, 6, 7 nasceram de parsing ingênuo de fonte que não era tão
 estruturada quanto parecia). O produto final desses dois workflows é a
 Issue com checklist — a extração continua manual.
+
+**`data/.ultima_verificacao` — heartbeat semanal, não apagar sem
+entender por quê.** O GitHub desliga um workflow agendado depois de 60
+dias **sem push de código** — não sem execução de Actions. `update.yml`
+e `indices_semanal.yml` só commitavam quando havia diff real nos dados
+(`if: alterado == 'true'`); se os índices/precipitação ficassem tempo
+suficiente sem mudar o bastante para gerar diff, os **cinco workflows
+do repositório podiam ser desligados de uma vez, sem nenhum erro
+visível** — tecnicamente nada rodou para falhar. `indices_semanal.yml`
+ganhou um passo incondicional (fora do `if: alterado`) que grava a
+data/hora atual em `data/.ultima_verificacao` e commita — toda segunda-
+feira, no mínimo, bem abaixo do limite de 60 dias. Achado ao
+implementar: `git diff --quiet <arquivo>` **não detecta um arquivo que
+nunca foi commitado** (untracked é invisível pro diff contra HEAD) —
+testado isoladamente: a primeira execução do heartbeat simplesmente não
+commitava nada, silenciosamente. Corrigido fazendo `git add` antes e
+comparando com `git diff --cached --quiet` (cobre arquivo novo e
+conteúdo idêntico ao já commitado). Se alguém remover esse passo sem
+saber do motivo, os workflows agendados voltam a correr risco de
+desativação silenciosa em períodos de dado parado.
 
 ## Convenções
 

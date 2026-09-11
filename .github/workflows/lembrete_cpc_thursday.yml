@@ -1,13 +1,19 @@
-name: Lembrete — CPC ENSO Diagnostic Discussion (2ª quinta-feira)
+name: Lembrete — CPC ENSO Diagnostic Discussion (janela da 2ª semana)
 
 # CATEGORIA B (ver CLAUDE.md armadilha 9): a fonte é prosa, não ascii
 # estruturado. NÃO faz parsing de conteúdo — só abre uma Issue pra
 # alguém extrair manualmente. Ver lembrete_iri_thursday.yml para o
-# mesmo padrão aplicado ao IRI (3ª quinta-feira).
+# mesmo padrão aplicado ao IRI (janela da 3ª semana).
 #
-# Cron nativo não expressa "Nª dia-da-semana do mês" (diferente de
-# "dia <= 5", que o cron faz direto — ver indices_semanal.yml) —
-# roda todo dia e o passo "Calcular" decide se é a 2ª quinta-feira.
+# Janela, não dia exato: o CPC costuma publicar por volta da 2ª
+# quinta-feira, mas travar no dia exato (DOW==quinta E ordinal==2)
+# significa zero chance de recuperação se esse dia falhar (rede fora,
+# runner indisponível, etc.) — só tentaria de novo no mês seguinte.
+# Em vez disso, dispara em QUALQUER dia dentro dos dias 8-14 do mês
+# (a "2ª semana", independente do dia da semana) — até 7 tentativas
+# diárias automáticas dentro do cron já existente, sem precisar de
+# lógica de retry separada. A Issue é só um lembrete, não precisa
+# bater no minuto exato da publicação.
 on:
   schedule:
     - cron: '0 15 * * *'   # todo dia, 12h BRT (15h UTC)
@@ -18,36 +24,38 @@ permissions:
 
 jobs:
   checar_e_lembrar:
-    name: Checar 2ª quinta-feira e abrir Issue
+    name: Checar janela dos dias 8-14 e abrir Issue
     runs-on: ubuntu-latest
     steps:
-      - name: Calcular se hoje é a 2ª quinta-feira (BRT)
+      - name: Calcular se hoje está nos dias 8-14 do mês (BRT)
         id: check
         run: |
-          DOW=$(TZ='America/Araguaina' date +%u)     # 1=seg … 4=qui … 7=dom
           DIA=$(TZ='America/Araguaina' date +%-d)
           ORDINAL=$(( (DIA - 1) / 7 + 1 ))
-          echo "dia-da-semana=$DOW dia-do-mes=$DIA ordinal=$ORDINAL"
-          if [ "$DOW" = "4" ] && [ "$ORDINAL" = "2" ]; then
-            echo "eh_dia=true" >> "$GITHUB_OUTPUT"
+          echo "dia-do-mes=$DIA ordinal=$ORDINAL"
+          if [ "$ORDINAL" = "2" ]; then
+            echo "na_janela=true" >> "$GITHUB_OUTPUT"
           else
-            echo "eh_dia=false" >> "$GITHUB_OUTPUT"
+            echo "na_janela=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Abrir Issue de lembrete
-        if: steps.check.outputs.eh_dia == 'true'
+      - name: Abrir Issue de lembrete (se ainda não existir para este mês)
+        if: steps.check.outputs.na_janela == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y')
-          TITULO="Atualizar CPC ENSO Diagnostic Discussion — $DATA"
+          MES_ANO=$(TZ='America/Araguaina' date +'%m/%Y')
+          TITULO="Atualizar CPC ENSO Diagnostic Discussion — $MES_ANO"
 
-          # Evita Issue duplicada se o workflow for re-executado no mesmo dia
+          # Título por MÊS (não por dia): assim, se a Issue já foi
+          # criada num dia anterior desta mesma janela (aberta OU já
+          # fechada — se alguém já fez a extração e fechou, também não
+          # deve recriar), os próximos dias da janela não duplicam.
           JA_EXISTE=$(gh issue list --repo "${{ github.repository }}" \
-            --search "in:title \"$TITULO\"" --state open --json number \
+            --search "in:title \"$TITULO\"" --state all --json number \
             --jq 'length')
           if [ "$JA_EXISTE" -gt 0 ]; then
-            echo "Issue já existe para hoje — nada a fazer"
+            echo "Issue de $MES_ANO já existe (aberta ou fechada) — nada a fazer"
             exit 0
           fi
 
@@ -83,4 +91,4 @@ jobs:
         if: always()
         run: |
           echo "## 📋 Lembrete CPC ENSO Diagnostic Discussion" >> $GITHUB_STEP_SUMMARY
-          echo "É a 2ª quinta-feira (BRT)? **${{ steps.check.outputs.eh_dia }}**" >> $GITHUB_STEP_SUMMARY
+          echo "Hoje está na janela dos dias 8-14 (BRT)? **${{ steps.check.outputs.na_janela }}**" >> $GITHUB_STEP_SUMMARY
