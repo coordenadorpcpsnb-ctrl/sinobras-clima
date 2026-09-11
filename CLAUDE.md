@@ -187,39 +187,58 @@ mais estável (0,63 a 0,86 nas 4 primeiras décadas) mas ainda assim não
 (0,073, ERA5) a jul/2026 (21,6mm → 297mm, quase 46x a climatologia)
 piorou o RMSE do SARIMAX (56,2mm → 74,9mm) em vez de melhorar.
 
-### 8. `buscar_prec_chirps_zonal` é ferramenta manual — não está no pipeline automático
+### 8. `data/fazendas.geojson` é um envelope único, não os 37 perímetros reais — e `buscar_prec_chirps_zonal` continua ferramenta manual
+
+`data/fazendas.geojson` guardou por um tempo os 37 polígonos reais das
+fazendas (nome, região, cluster_id). Foi **substituído** por um único
+polígono sem identificação (`Fazendas_v2.kmz`, fornecido pela Sinobras;
+área 85.020,5 ha — maior que a união dissolvida dos 37 perímetros reais,
+48.737,3 ha, porque preenche reentrâncias entre fazendas; não é um
+convex hull matemático, tem concavidades). Decisão deliberada: nenhum
+arquivo do repositório deve permitir identificar fazenda individual.
+`_farm_geometry.py` foi reescrito para essa geometria única — não há
+mais `grupos_geograficos()`/`cluster_id`, só `poligono()` e
+`anel_simplificado()`.
 
 `_chirps.py` tem duas formas de buscar CHIRPS: `buscar_prec_chirps`
 (ponto único, é o que `fetch_monthly_data.py` usa de verdade) e
-`buscar_prec_chirps_zonal` (polígono real das 37 fazendas, via
-`data/fazendas.geojson` + `_farm_geometry.py`). A segunda existe,
-está testada e funciona (testado ao vivo: jan/2024, 301,6mm zonal vs.
-297,6mm ponto único — diferença de 1,3%, dentro do esperado dado que o
-pixel do CHIRPS já é maior que a dispersão das fazendas), mas
-**deliberadamente não está plugada no pipeline automático.**
+`buscar_prec_chirps_zonal` (o envelope acima). Com uma geometria única,
+**uma chamada ao ClimateSERV cobre tudo** — antes, com os 37 polígonos
+em 7 grupos geograficamente desconectados, eram 7 chamadas por mês (a
+API só aceita um anel simples por chamada), com a fragilidade de
+"sucesso parcial por grupo". Essa fragilidade não existe mais.
 
-Por quê: as 37 fazendas formam 7 grupos geograficamente desconectados,
-e a API do ClimateSERV só aceita um anel de polígono simples por
-chamada — então usar o polígono real significa **7 chamadas ao
-ClimateSERV por mês**, não 1. `buscar_prec_chirps_zonal` já lida com
-falha parcial de grupo (average ponderado pela área dos grupos que
-responderam, nunca zero, sempre avisa a cobertura real), mas isso
-ainda não foi testado sob os três modos de falha da suíte
-(`tests/test_fetch_fallback.py`) — só o `buscar_prec_chirps` de ponto
-único tem essa cobertura. Rodar 7x mais chamadas contra um serviço que
-já se mostrou frágil a sessão inteira (rate limit, timeout, resposta
-vazia) sem essa cobertura de teste é arriscado demais pra automação.
+Testado ao vivo com o envelope novo:
+- jan/2024: zonal 301,9mm vs. ponto único 297,6mm — diferença de 1,4%
+  (era 301,6mm com os 7 grupos do polígono real — a generalização não
+  mudou o resultado zonal de forma perceptível).
+- ago/2026 (via `buscar_prec_chc_preliminar_zonal`, zonal local por
+  rasterstats): 7,5mm vs. 6,5mm no ponto único — 15% de diferença, mas
+  só 1mm em valor absoluto (mês seco, denominador pequeno infla a
+  razão; era o mesmo 7,5mm com a união dos 37 polígonos reais).
 
-Use `buscar_prec_chirps_zonal` manualmente para: reprocessar trechos
-do histórico com mais precisão, ou revisitar essa decisão se algum dia
-valer o esforço de estender a suíte de testes pra cobrir falha parcial
-de grupo. A geometria simplificada usada nas chamadas (Douglas-Peucker
-adaptativo, `_farm_geometry.grupos_geograficos()`) tem um detalhe não
-óbvio: `simplify()` garante anel válido **antes** de arredondar as
-coordenadas pra 6 casas, mas o arredondamento pode reintroduzir
-auto-interseção — sempre validar/reparar (`buffer(0)`) **depois** de
-arredondar, não antes (já implementado, mas fácil de esquecer se
-alguém reescrever essa função).
+Diferença pequena em mm → **mantido ponto único no dia a dia**
+(`buscar_prec_chirps` no pipeline automático, `fetch_monthly_data.py`).
+O envelope/zonal fica reservado para os casos em que a defesa
+metodológica importa (ex.: relatório executivo) ou reprocessamento de
+histórico.
+
+`buscar_prec_chirps_zonal` **continua fora do pipeline automático** —
+mesmo com uma chamada só agora, isso ainda não foi testado sob os três
+modos de falha da suíte (`tests/test_fetch_fallback.py`); só
+`buscar_prec_chirps` (ponto único) tem essa cobertura hoje. Promover o
+zonal a primário é uma decisão separada, ainda não tomada — passar a
+suíte de falha por ele antes de considerar essa promoção.
+
+A geometria simplificada usada nas chamadas (Douglas-Peucker adaptativo,
+`_farm_geometry.anel_simplificado()`) tem um detalhe não óbvio:
+`simplify()` garante anel válido **antes** de arredondar as coordenadas
+pra 6 casas, mas o arredondamento pode reintroduzir auto-interseção —
+sempre validar/reparar (`buffer(0)`) **depois** de arredondar, não antes
+(já implementado, mas fácil de esquecer se alguém reescrever essa
+função). Com o envelope atual (26 vértices) a simplificação nem chega a
+entrar em ação — é salvaguarda para se a geometria for substituída por
+algo mais detalhado no futuro.
 
 ## Convenções
 

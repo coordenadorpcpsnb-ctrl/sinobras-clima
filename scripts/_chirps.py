@@ -109,8 +109,8 @@ def buscar_prec_chirps(ano_ini, mes_ini, ano_fim, mes_fim):
     """
     Precipitação mensal via CHIRPS (dataset 0 do ClimateSERV) para o
     intervalo inteiro, numa única chamada, usando uma caixa pequena ao
-    redor do ponto centroide das fazendas (não o polígono real — para
-    isso, ver buscar_prec_chirps_zonal). Pedidos muito longos (~45
+    redor do ponto centroide das fazendas (não o envelope das fazendas —
+    para isso, ver buscar_prec_chirps_zonal). Pedidos muito longos (~45
     anos) falham no lado do servidor — para históricos grandes, quebre
     em blocos de poucos anos (ver backfill_chirps_historico.py).
 
@@ -125,65 +125,32 @@ def buscar_prec_chirps(ano_ini, mes_ini, ano_fim, mes_fim):
 
 def buscar_prec_chirps_zonal(ano_ini, mes_ini, ano_fim, mes_fim):
     """
-    Precipitação mensal via CHIRPS, com o polígono REAL das 37 fazendas
-    (data/fazendas.geojson) em vez do ponto único — ver CLAUDE.md,
-    armadilha 8, e _farm_geometry.py.
+    Precipitação mensal via CHIRPS, com o polígono do envelope das
+    fazendas (data/fazendas.geojson, Fazendas_v2.kmz — sem identificação
+    individual) em vez do ponto único — ver CLAUDE.md, armadilha 8, e
+    _farm_geometry.py.
 
-    A API do ClimateSERV só aceita um anel de polígono simples por
-    chamada. As fazendas formam 7 grupos geograficamente desconectados
-    (cluster_id 0-6) — uma chamada por grupo, combinadas por média
-    ponderada pela área de cada grupo. Grupos com "buracos" internos
-    (lacunas entre fazendas vizinhas dentro do mesmo cluster) usam só o
-    anel externo — a chamada acaba incluindo essas lacunas não-fazenda,
-    aproximação inevitável dado o limite da API, não um bug.
+    Uma geometria única, uma chamada ao ClimateSERV (antes eram 7,
+    quando o geojson tinha as 37 fazendas em 7 grupos desconectados —
+    a fragilidade de "sucesso parcial por grupo" não existe mais).
 
-    Se algum grupo falhar (rede, timeout, resposta malformada), o mês
-    ainda é calculado com os grupos que responderam, reponderando pela
-    área só desses — nunca gravando zero por causa de um grupo faltando.
-    Retorna DataFrame [ano, mes, prec, fonte='CHIRPS-zonal'].
+    Retorna DataFrame [ano, mes, prec, fonte='CHIRPS-zonal'] — vazio se
+    a chamada falhar (rede, timeout, resposta malformada); nunca grava
+    zero.
     """
-    from _farm_geometry import grupos_geograficos
+    from _farm_geometry import anel_simplificado
 
     ultimo_dia = monthrange(ano_fim, mes_fim)[1]
     ini = f'{mes_ini:02d}/01/{ano_ini}'
     fim = f'{mes_fim:02d}/{ultimo_dia:02d}/{ano_fim}'
 
-    grupos = grupos_geograficos()
-    area_total = sum(g['area_ha'] for g in grupos)
+    anel, erro_pct = anel_simplificado()
+    if erro_pct:
+        print(f"  ℹ CHIRPS zonal: anel simplificado, erro de área {erro_pct:.2f}%")
 
-    por_grupo = {}   # cluster_id -> DataFrame mensal
-    for g in grupos:
-        rotulo = f"grupo {g['cluster_id']} ({g['area_ha']:,.0f}ha, {g['n_fazendas']}faz)"
-        print(f"  Buscando CHIRPS zonal — {rotulo}…")
-        df = _buscar_prec_chirps_geom(ini, fim, g['anel'], rotulo=rotulo)
-        if not df.empty:
-            por_grupo[g['cluster_id']] = df.set_index(['ano', 'mes'])['prec']
-
-    if not por_grupo:
-        print("  ⚠ CHIRPS zonal: nenhum grupo respondeu")
-        return pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte'])
-
-    pesos = {g['cluster_id']: g['area_ha'] for g in grupos}
-    todos_meses = sorted(set().union(*[s.index for s in por_grupo.values()]))
-
-    linhas = []
-    for (y, m) in todos_meses:
-        valores, peso_disponivel = [], 0.0
-        for cid, serie in por_grupo.items():
-            if (y, m) in serie.index:
-                valores.append(serie[(y, m)] * pesos[cid])
-                peso_disponivel += pesos[cid]
-        if peso_disponivel == 0:
-            continue
-        prec_ponderada = sum(valores) / peso_disponivel
-        cobertura = peso_disponivel / area_total
-        if cobertura < 0.999:
-            print(f"  ⚠ {m:02d}/{y}: só {cobertura*100:.0f}% da área respondeu — "
-                  f"média ponderada só com os grupos disponíveis")
-        linhas.append({'ano': y, 'mes': m, 'prec': round(prec_ponderada, 1)})
-
-    resultado = pd.DataFrame(linhas)
-    resultado['fonte'] = 'CHIRPS-zonal'
+    resultado = _buscar_prec_chirps_geom(ini, fim, anel, rotulo='envelope fazendas')
+    if not resultado.empty:
+        resultado['fonte'] = 'CHIRPS-zonal'
     return resultado
 
 
@@ -191,8 +158,8 @@ def buscar_prec_chc_preliminar_zonal(ano, mes, timeout_segundos=120):
     """
     Precipitação de UM mês via CHIRPS Preliminary — download direto do
     CHC (data.chc.ucsb.edu), zonal stats via rasterio/rasterstats sobre
-    o polígono REAL das 37 fazendas (união dissolvida, sem simplificar
-    — sem a limitação de anel único do ClimateSERV, aqui é
+    o polígono do envelope das fazendas (data/fazendas.geojson, sem
+    simplificar — sem a limitação de anel único do ClimateSERV, aqui é
     processamento local, não uma URL).
 
     Reservado para o mês mais recente quando o CHIRPS Final (via
@@ -206,8 +173,7 @@ def buscar_prec_chc_preliminar_zonal(ano, mes, timeout_segundos=120):
     Preliminary) ou o download/processamento falhar — nunca inventa
     zero.
     """
-    from _farm_geometry import poligono_completo
-    from shapely.ops import unary_union
+    from _farm_geometry import poligono
     from shapely.geometry import mapping
 
     url = CHC_PRELIM_URL.format(ano=ano, mes=mes)
@@ -222,8 +188,7 @@ def buscar_prec_chc_preliminar_zonal(ano, mes, timeout_segundos=120):
         import rasterio  # noqa: F401 (só pra falhar cedo e claro se faltar a dependência)
         from rasterstats import zonal_stats
 
-        uniao = unary_union(poligono_completo())
-        stats = zonal_stats(mapping(uniao), str(tmp_path), stats=['mean', 'count'], nodata=-9999)
+        stats = zonal_stats(mapping(poligono()), str(tmp_path), stats=['mean', 'count'], nodata=-9999)
 
         if not stats or stats[0]['mean'] is None or stats[0]['count'] == 0:
             print(f"  ⚠ CHC Preliminary {mes:02d}/{ano}: zonal stats sem pixels válidos")

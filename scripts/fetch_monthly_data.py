@@ -9,7 +9,7 @@ Fluxo:
      buraco fica para sempre se só olharmos "o mês anterior")
   2. Busca a precipitação em cascata, três camadas:
        a. CHIRPS Final (ClimateSERV, ponto único) — primária
-       b. CHC Preliminary (zonal, polígono real das 37 fazendas) — só
+       b. CHC Preliminary (zonal, envelope das fazendas) — só
           para os meses que o Final ainda não publicou
        c. Open-Meteo ERA5-Land — só para o que sobrar das duas acima
      Cada mês novo registra qual das três foi usada.
@@ -23,16 +23,15 @@ CHIRPS Final (UCSB, via ClimateSERV) — fonte primária:
   - Serviço acadêmico (SERVIR/NASA) — pode ficar fora do ar; timeout
     generoso e fallback automático se falhar
   - Tem defasagem de publicação de alguns meses (ver _chirps.py)
-  - Aqui usa ponto único (buscar_prec_chirps), não o polígono real —
-    a versão zonal (buscar_prec_chirps_zonal) existe mas não está
-    plugada no pipeline automático, ver CLAUDE.md armadilha 8: sem
-    tratamento de falha parcial de grupo, arriscada para automação.
+  - Aqui usa ponto único (buscar_prec_chirps), não o envelope das
+    fazendas — a versão zonal (buscar_prec_chirps_zonal) existe mas
+    não está plugada no pipeline automático, ver CLAUDE.md armadilha 8.
 
 CHC Preliminary — fallback intermediário, fonte='CHC-Preliminar':
   - MESMO produto CHIRPS, versão preliminar (antes da consolidação
     final) — publica antes do Final, mas pode ser revisado depois
   - Download direto do CHC + zonal stats (rasterio/rasterstats) sobre
-    o polígono REAL das 37 fazendas — sem a limitação de anel único do
+    o envelope das fazendas — sem a limitação de anel único do
     ClimateSERV, é processamento local (ver _chirps.py)
   - Gravado com fonte própria, não 'CHIRPS' — quando o Final publicar
     esse mês depois, o valor Preliminary já gravado NÃO é substituído
@@ -163,7 +162,7 @@ def main():
     faltando_prelim = []
     if faltando_chirps:
         print(f"\n[2/4] CHIRPS Final sem {len(faltando_chirps)} mês(es) — "
-              f"tentando CHC Preliminary (zonal, polígono real)…")
+              f"tentando CHC Preliminary (zonal, envelope das fazendas)…")
         for (y, m) in faltando_chirps:
             r = buscar_prec_chc_preliminar_zonal(y, m)
             if r is not None:
