@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """
-tests/test_fetch_fallback.py — exercita o caminho de fallback
-CHIRPS → Open-Meteo em fetch_monthly_data.py sob três modos de falha
-do CHIRPS (host inalcançável, timeout, resposta malformada) e um caso
-de cobertura parcial (CHIRPS cobre só parte do intervalo, Open-Meteo
-falha para o resto).
+tests/test_fetch_fallback.py — exercita a cascata de fallback em
+fetch_monthly_data.py: CHIRPS Final → CHC Preliminary → Open-Meteo.
+
+FallbackCHIRPSTestCase: três modos de falha do CHIRPS Final (host
+inalcançável, timeout, resposta malformada), CHC Preliminary também
+sem o mês nesses testes — cai direto pro Open-Meteo.
+
+CoberturaParcialTestCase: CHIRPS Final cobre só parte do intervalo,
+CHC Preliminary e Open-Meteo falham para o resto.
+
+CHCPreliminarTestCase: a camada intermediária em si — cobre quando o
+Final falha (e confirma que o Open-Meteo NEM é chamado nesse caso), e
+cai pro Open-Meteo quando ela também falha.
 
 Roda com:
     python3 -m unittest tests.test_fetch_fallback -v
@@ -80,6 +88,15 @@ class FallbackCHIRPSTestCase(unittest.TestCase):
         ):
             p.start()
             self.addCleanup(p.stop)
+
+        # CHC Preliminary "sem o mês" por padrão nestes testes — o que
+        # está sob teste aqui é o CHIRPS Final falhando e caindo direto
+        # pro Open-Meteo; a camada intermediária tem seus próprios
+        # testes em CHCPreliminarTestCase
+        prelim_patch = patch.object(fmd, 'buscar_prec_chc_preliminar_zonal',
+                                     lambda ano, mes: None)
+        prelim_patch.start()
+        self.addCleanup(prelim_patch.stop)
 
         # Open-Meteo "real": sempre disponível e determinístico —
         # o que muda em cada teste é só o CHIRPS
@@ -226,6 +243,14 @@ class CoberturaParcialTestCase(unittest.TestCase):
         chirps_patch.start()
         self.addCleanup(chirps_patch.stop)
 
+        # CHC Preliminary também sem esses meses — o cenário sob teste
+        # aqui é dupla falha (CHIRPS parcial + Open-Meteo falho), não a
+        # camada intermediária
+        prelim_patch = patch.object(fmd, 'buscar_prec_chc_preliminar_zonal',
+                                     lambda ano, mes: None)
+        prelim_patch.start()
+        self.addCleanup(prelim_patch.stop)
+
         # Open-Meteo falha por completo para o que sobrar (jun-jul) —
         # retorno vazio, como _openmeteo.buscar_prec_openmeteo faz de
         # verdade quando a chamada real falha
@@ -268,6 +293,90 @@ class CoberturaParcialTestCase(unittest.TestCase):
             lacunas, esperado,
             "verificar_dashboard.checar_continuidade deveria detectar exatamente "
             "os meses sem fonte nenhuma como lacuna, barrando a publicação")
+
+
+class CHCPreliminarTestCase(unittest.TestCase):
+    """
+    Camada intermediária CHC-Preliminar: entra quando o CHIRPS Final
+    não tem o mês, antes de cair pro Open-Meteo. Confirma:
+    1. CHIRPS Final falha, CHC-Preliminar cobre -> grava com
+       fonte='CHC-Preliminar', Open-Meteo NUNCA é chamado.
+    2. CHIRPS Final e CHC-Preliminar falham -> cai pro Open-Meteo,
+       exatamente como antes dessa camada existir.
+    """
+
+    def setUp(self):
+        tmpdir_ctx = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir_ctx.cleanup)
+        tmpdir = Path(tmpdir_ctx.name)
+
+        self.serie_path = tmpdir / 'serie_subst.csv'
+        self.merra_path = tmpdir / 'master_monthly.csv'
+
+        pd.DataFrame([{
+            'ano': 2024, 'mes': 1, 'prec': 100.0, 'nino34': 0.5,
+            'tsa': 0.1, 'pdo': -0.2, 'date': '2024-01-01', 'fonte': 'CHIRPS',
+        }]).to_csv(self.serie_path, index=False)
+
+        pd.DataFrame([{
+            'year': 2024, 'month': 2, 'nino34': 0.6, 'tsa': 0.12, 'pdo': -0.15,
+        }]).to_csv(self.merra_path, index=False)
+
+        for p in (
+            patch.object(fmd, 'SERIE_PATH', self.serie_path),
+            patch.object(fmd, 'MERRA_PATH', self.merra_path),
+            patch.object(fmd, 'mes_anterior', lambda: (2024, 2)),
+            patch.object(fmd, 'buscar_prec_chirps',
+                         lambda y1, m1, y2, m2: pd.DataFrame(columns=['ano', 'mes', 'prec', 'fonte'])),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_chc_preliminar_cobre_e_era5_nao_e_chamado(self):
+        prelim_patch = patch.object(
+            fmd, 'buscar_prec_chc_preliminar_zonal',
+            lambda ano, mes: {'ano': ano, 'mes': mes, 'prec': 7.5, 'fonte': 'CHC-Preliminar'})
+        prelim_patch.start()
+        self.addCleanup(prelim_patch.stop)
+
+        era5_mock = patch.object(
+            fmd, 'buscar_prec_openmeteo',
+            side_effect=AssertionError('Open-Meteo não deveria ser chamado — '
+                                        'CHC-Preliminar já cobriu o mês'))
+        era5_mock.start()
+        self.addCleanup(era5_mock.stop)
+
+        resultado = fmd.main()
+        self.assertEqual(resultado, 0)
+
+        serie = pd.read_csv(self.serie_path)
+        linha = serie[(serie['ano'] == 2024) & (serie['mes'] == 2)].iloc[0]
+        self.assertEqual(linha['fonte'], 'CHC-Preliminar',
+                          "fonte deveria ser 'CHC-Preliminar', não 'CHIRPS' — "
+                          "são produtos diferentes (Final vs. Preliminary)")
+        self.assertEqual(linha['prec'], 7.5)
+
+    def test_chc_preliminar_tambem_falha_cai_pro_openmeteo(self):
+        prelim_patch = patch.object(fmd, 'buscar_prec_chc_preliminar_zonal',
+                                     lambda ano, mes: None)
+        prelim_patch.start()
+        self.addCleanup(prelim_patch.stop)
+
+        era5_patch = patch.object(
+            fmd, 'buscar_prec_openmeteo',
+            lambda y1, m1, y2, m2: pd.DataFrame([
+                {'ano': 2024, 'mes': 2, 'prec': PREC_FALLBACK, 'fonte': 'OpenMeteo-ERA5'}
+            ]))
+        era5_patch.start()
+        self.addCleanup(era5_patch.stop)
+
+        resultado = fmd.main()
+        self.assertEqual(resultado, 0)
+
+        serie = pd.read_csv(self.serie_path)
+        linha = serie[(serie['ano'] == 2024) & (serie['mes'] == 2)].iloc[0]
+        self.assertEqual(linha['fonte'], 'OpenMeteo-ERA5')
+        self.assertEqual(linha['prec'], PREC_FALLBACK)
 
 
 if __name__ == '__main__':

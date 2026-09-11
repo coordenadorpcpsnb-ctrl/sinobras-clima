@@ -114,6 +114,17 @@ no log e nos avisos do `verificar_dashboard.py`. Persistência/estimativa
 não é dado real: nunca gravar `0.0` para "ENSO neutro" quando na verdade
 é "sem dado ainda". `0.0` é uma afirmação, não um vazio.
 
+Mesma limitação vale para **precipitação CHC-Preliminar** (ver
+`fetch_monthly_data.py`, camada intermediária entre CHIRPS Final e
+Open-Meteo): quando o Final ainda não publicou o mês, grava-se o valor
+Preliminary com `fonte='CHC-Preliminar'` — **não** `'CHIRPS'`, porque não
+é o mesmo dado (Preliminary pode ser revisado na consolidação final).
+Quando o Final publicar esse mês depois, o valor Preliminary **já
+gravado não é substituído automaticamente** — ninguém reprocessa
+`serie_subst.csv` sozinho. Se isso importar (ex.: o Preliminary e o
+Final divergirem muito para um mês específico), é preciso reprocessar
+esse mês manualmente, igual à persistência do PDO.
+
 ### 7. Nenhuma fonte de satélite é intercambiável com as estações — CHIRPS é a primária, ERA5 é fallback do fallback
 
 `fetch_monthly_data.py` busca precipitação de mês ausente em duas
@@ -175,6 +186,40 @@ mais estável (0,63 a 0,86 nas 4 primeiras décadas) mas ainda assim não
 é uma constante confiável. Testado: aplicar o fator mediano de julho
 (0,073, ERA5) a jul/2026 (21,6mm → 297mm, quase 46x a climatologia)
 piorou o RMSE do SARIMAX (56,2mm → 74,9mm) em vez de melhorar.
+
+### 8. `buscar_prec_chirps_zonal` é ferramenta manual — não está no pipeline automático
+
+`_chirps.py` tem duas formas de buscar CHIRPS: `buscar_prec_chirps`
+(ponto único, é o que `fetch_monthly_data.py` usa de verdade) e
+`buscar_prec_chirps_zonal` (polígono real das 37 fazendas, via
+`data/fazendas.geojson` + `_farm_geometry.py`). A segunda existe,
+está testada e funciona (testado ao vivo: jan/2024, 301,6mm zonal vs.
+297,6mm ponto único — diferença de 1,3%, dentro do esperado dado que o
+pixel do CHIRPS já é maior que a dispersão das fazendas), mas
+**deliberadamente não está plugada no pipeline automático.**
+
+Por quê: as 37 fazendas formam 7 grupos geograficamente desconectados,
+e a API do ClimateSERV só aceita um anel de polígono simples por
+chamada — então usar o polígono real significa **7 chamadas ao
+ClimateSERV por mês**, não 1. `buscar_prec_chirps_zonal` já lida com
+falha parcial de grupo (average ponderado pela área dos grupos que
+responderam, nunca zero, sempre avisa a cobertura real), mas isso
+ainda não foi testado sob os três modos de falha da suíte
+(`tests/test_fetch_fallback.py`) — só o `buscar_prec_chirps` de ponto
+único tem essa cobertura. Rodar 7x mais chamadas contra um serviço que
+já se mostrou frágil a sessão inteira (rate limit, timeout, resposta
+vazia) sem essa cobertura de teste é arriscado demais pra automação.
+
+Use `buscar_prec_chirps_zonal` manualmente para: reprocessar trechos
+do histórico com mais precisão, ou revisitar essa decisão se algum dia
+valer o esforço de estender a suíte de testes pra cobrir falha parcial
+de grupo. A geometria simplificada usada nas chamadas (Douglas-Peucker
+adaptativo, `_farm_geometry.grupos_geograficos()`) tem um detalhe não
+óbvio: `simplify()` garante anel válido **antes** de arredondar as
+coordenadas pra 6 casas, mas o arredondamento pode reintroduzir
+auto-interseção — sempre validar/reparar (`buffer(0)`) **depois** de
+arredondar, não antes (já implementado, mas fácil de esquecer se
+alguém reescrever essa função).
 
 ## Convenções
 
