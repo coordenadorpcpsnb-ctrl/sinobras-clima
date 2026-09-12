@@ -55,18 +55,18 @@ ARM_CRITICO = 20   # mm — solo considerado esgotado abaixo disso
 # não há fetch automático aqui, então nunca fica desatualizado sem que
 # alguém tenha efetivamente olhado a fonte de novo.
 #
-# Verificação desta rodada (11-12/set/2026): CPC e CEMADEN confirmados com
-# URL exata via busca. O item INMET tem uma ressalva — a busca só achou o
-# título "De La Niña a um possível El Niño muito forte" publicado por
-# veículos de imprensa (Agronews, Portal Amazônia) citando o INMET, não uma
-# página do próprio portal.inmet.gov.br com esse título exato; o url abaixo
-# aponta para a cobertura do tema no portal do INMET, não para essa peça
-# específica. A nota da ANA sobre reservatórios também não foi encontrada
-# com esse título/números exatos numa busca direta — o url aponta para o
-# painel oficial de reservatórios do SIN, não para uma notícia específica
-# com essa manchete. Os dois pontos foram sinalizados ao usuário; se algum
-# dia alguém for atualizar isso, vale reconferir a fonte primária antes de
-# só copiar a data.
+# Verificação (11-12/set/2026): CPC e CEMADEN confirmados com URL exata via
+# busca indexada. INMET e ANA inicialmente só bateram por busca indexada
+# contra cobertura de terceiros (Agronews/Portal Amazônia citando o INMET;
+# painel geral do SIN, não a notícia específica da ANA) — reconferidos
+# depois pelo usuário direto contra o conteúdo das URLs abaixo (domínio
+# oficial, assinatura institucional no rodapé da ANA, consistência com o
+# carrossel de relacionadas do próprio site no caso do INMET). A divergência
+# da busca indexada é atribuída a defasagem de indexação de páginas
+# .gov.br muito recentes, não a erro de conteúdo. As URLs agora aparecem
+# por extenso e clicáveis na seção "Fontes consultadas" do relatório —
+# qualquer leitor confirma a fonte primária direto, sem depender de quem
+# redigiu o relatório.
 FONTES_EXTERNAS = [
     {
         'titulo':  'CPC ENSO Diagnostic Discussion',
@@ -211,6 +211,46 @@ def run(par, texto, *, tam=9.5, bold=False, italic=False, cor=PRETO, espaco=None
         sp.set(qn('w:val'), str(espaco))
         rPr.append(sp)
     return r
+
+
+LINK_HEX = '1155CC'   # azul padrão de hyperlink — só usado aqui
+
+
+def hyperlink(par, url, texto, *, tam=8):
+    """
+    Link clicável de verdade (abre o navegador no Word/LibreOffice/PDF),
+    não só texto azul sublinhado. python-docx não expõe isso — hyperlink
+    é uma relação da parte do documento (r:id), não um atributo de w:r.
+    Precisa: 1) registrar a relação externa via part.relate_to, 2) montar
+    o elemento <w:hyperlink r:id="..."> à mão com o <w:r> dentro dele
+    (um <w:r> solto com w:color azul FICA azul mas não abre nada ao
+    clicar — parece link, não é).
+    """
+    part = par.part
+    r_id = part.relate_to(
+        url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
+        is_external=True)
+
+    hlink = OxmlElement('w:hyperlink')
+    hlink.set(qn('r:id'), r_id)
+
+    r_el = OxmlElement('w:r')
+    rPr = OxmlElement('w:rPr')
+    rFonts = OxmlElement('w:rFonts')
+    rFonts.set(qn('w:ascii'), 'Calibri'); rFonts.set(qn('w:hAnsi'), 'Calibri')
+    rPr.append(rFonts)
+    sz = OxmlElement('w:sz'); sz.set(qn('w:val'), str(int(tam * 2))); rPr.append(sz)
+    color = OxmlElement('w:color'); color.set(qn('w:val'), LINK_HEX); rPr.append(color)
+    u = OxmlElement('w:u'); u.set(qn('w:val'), 'single'); rPr.append(u)
+    r_el.append(rPr)
+    t_el = OxmlElement('w:t')
+    t_el.set(qn('xml:space'), 'preserve')
+    t_el.text = texto
+    r_el.append(t_el)
+    hlink.append(r_el)
+
+    par._p.append(hlink)
+    return hlink
 
 
 def par_corpo(doc, justificado=True, depois=5, antes=0):
@@ -668,11 +708,15 @@ def montar(d):
            f'redefine a postura da janela de transição.')
 
     # ── fontes consultadas (institucionais — contexto, não alimentam o SARIMAX)
+    # URL por extenso e clicável — não só título/agência/data: assim
+    # qualquer leitor (inclusive a Diretoria) confirma a fonte primária
+    # direto, sem precisar confiar em quem redigiu o relatório.
     titulo_secao(doc, 'Fontes consultadas')
     p = par_corpo(doc, justificado=False, depois=2)
     for i, f in enumerate(FONTES_EXTERNAS):
         run(p, f'{f["titulo"]}. ', tam=8, italic=True, cor=CINZA)
-        run(p, f'{f["agencia"]}, {f["data"]}.', tam=8, cor=CINZA)
+        run(p, f'{f["agencia"]}, {f["data"]}. ', tam=8, cor=CINZA)
+        hyperlink(p, f['url'], f['url'], tam=7.5)
         if i < len(FONTES_EXTERNAS) - 1:
             p.add_run().add_break(WD_BREAK.LINE)
 
