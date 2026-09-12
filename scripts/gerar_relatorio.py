@@ -55,16 +55,23 @@ ARM_CRITICO = 20   # mm — solo considerado esgotado abaixo disso
 # não há fetch automático aqui, então nunca fica desatualizado sem que
 # alguém tenha efetivamente olhado a fonte de novo.
 #
-# Verificação (11-12/set/2026): CPC e CEMADEN confirmados com URL exata via
-# busca indexada. INMET e ANA inicialmente só bateram por busca indexada
-# contra cobertura de terceiros (Agronews/Portal Amazônia citando o INMET;
-# painel geral do SIN, não a notícia específica da ANA) — reconferidos
-# depois pelo usuário direto contra o conteúdo das URLs abaixo (domínio
-# oficial, assinatura institucional no rodapé da ANA, consistência com o
-# carrossel de relacionadas do próprio site no caso do INMET). A divergência
-# da busca indexada é atribuída a defasagem de indexação de páginas
-# .gov.br muito recentes, não a erro de conteúdo. As URLs agora aparecem
-# por extenso e clicáveis na seção "Fontes consultadas" do relatório —
+# Verificação (11-12/set/2026), em duas rodadas: CPC e CEMADEN bateram de
+# primeira, URL exata via busca indexada. INMET e ANA precisaram de DUAS
+# correções:
+#   1) a busca indexada só achou cobertura de terceiros (Agronews/Portal
+#      Amazônia citando o INMET) ou uma página genérica (painel do SIN,
+#      não a notícia específica da ANA) — o usuário atribuiu a divergência
+#      a defasagem de indexação de páginas .gov.br recentes;
+#   2) as URLs que entraram no lugar delas então (portal.inmet.gov.br/
+#      noticias/el-niño-em-2026 e gov.br/ana/.../sala-de-situacao/...)
+#      ERAM de fato alcançáveis (HTTP 200), mas apontavam pra página
+#      institucional genérica, não pro artigo específico que sustenta a
+#      citação — link "não quebrado" não é o mesmo que link certo. O
+#      usuário fez fetch direto (não busca) de cada URL abaixo e confirmou
+#      HTTP 200 com o conteúdo que sustenta a citação — essas são as URLs
+#      corretas, apontando para o artigo/notícia exatos, não mais para a
+#      seção genérica do site. As URLs aparecem por extenso e clicáveis na
+#      seção "Fontes consultadas" do relatório —
 # qualquer leitor confirma a fonte primária direto, sem depender de quem
 # redigiu o relatório.
 FONTES_EXTERNAS = [
@@ -78,7 +85,8 @@ FONTES_EXTERNAS = [
         'titulo':  'De La Niña a um possível El Niño muito forte',
         'agencia': 'INMET',
         'data':    '10/09/2026',
-        'url':     'https://portal.inmet.gov.br/noticias/el-ni%C3%B1o-em-2026',
+        'url':     'https://portal.inmet.gov.br/noticias/de-la-ni%C3%B1a-a-um-poss%C3%ADvel-'
+                    'el-ni%C3%B1o-muito-forte-veja-a-evolu%C3%A7%C3%A3o-das-proje%C3%A7%C3%B5es-em-2026',
     },
     {
         'titulo':  'Boletim do Painel El Niño nº 03 — Agosto de 2026',
@@ -91,7 +99,10 @@ FONTES_EXTERNAS = [
         'titulo':  'ANA aponta redução no armazenamento dos reservatórios do SIN',
         'agencia': 'ANA',
         'data':    '01/09/2026',
-        'url':     'https://www.gov.br/ana/pt-br/sala-de-situacao/reservatorios-do-sistema-interligado-nacional-sin',
+        'url':     'https://www.gov.br/ana/pt-br/assuntos/noticias-e-eventos/'
+                    'noticias-periodo-eleitoral-2026/ana-aponta-reducao-no-armazenamento-'
+                    'dos-reservatorios-do-sin-e-detalha-panorama-de-rios-e-da-seca-na-3a-'
+                    'edicao-do-painel-el-nino',
     },
 ]
 
