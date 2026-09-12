@@ -47,6 +47,65 @@ MESES_EXT = ['janeiro','fevereiro','março','abril','maio','junho',
 MESES_CAP = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
 ARM_CRITICO = 20   # mm — solo considerado esgotado abaixo disso
 
+# ══════════════════════════════════════════════════════════════════════════
+# Fontes institucionais externas — contexto e corroboração, NÃO alimentam o
+# modelo (a única entrada de dados do SARIMAX é data/serie_subst.csv +
+# índices oceânicos, ver CLAUDE.md). Conteúdo estático, curado manualmente
+# a cada verificação — igual ao bloco CPC_IRI do dashboard (armadilha 3/4):
+# não há fetch automático aqui, então nunca fica desatualizado sem que
+# alguém tenha efetivamente olhado a fonte de novo.
+#
+# Verificação (11-12/set/2026), em duas rodadas: CPC e CEMADEN bateram de
+# primeira, URL exata via busca indexada. INMET e ANA precisaram de DUAS
+# correções:
+#   1) a busca indexada só achou cobertura de terceiros (Agronews/Portal
+#      Amazônia citando o INMET) ou uma página genérica (painel do SIN,
+#      não a notícia específica da ANA) — o usuário atribuiu a divergência
+#      a defasagem de indexação de páginas .gov.br recentes;
+#   2) as URLs que entraram no lugar delas então (portal.inmet.gov.br/
+#      noticias/el-niño-em-2026 e gov.br/ana/.../sala-de-situacao/...)
+#      ERAM de fato alcançáveis (HTTP 200), mas apontavam pra página
+#      institucional genérica, não pro artigo específico que sustenta a
+#      citação — link "não quebrado" não é o mesmo que link certo. O
+#      usuário fez fetch direto (não busca) de cada URL abaixo e confirmou
+#      HTTP 200 com o conteúdo que sustenta a citação — essas são as URLs
+#      corretas, apontando para o artigo/notícia exatos, não mais para a
+#      seção genérica do site. As URLs aparecem por extenso e clicáveis na
+#      seção "Fontes consultadas" do relatório —
+# qualquer leitor confirma a fonte primária direto, sem depender de quem
+# redigiu o relatório.
+FONTES_EXTERNAS = [
+    {
+        'titulo':  'CPC ENSO Diagnostic Discussion',
+        'agencia': 'NOAA/CPC',
+        'data':    '13/08/2026',
+        'url':     'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml',
+    },
+    {
+        'titulo':  'De La Niña a um possível El Niño muito forte',
+        'agencia': 'INMET',
+        'data':    '10/09/2026',
+        'url':     'https://portal.inmet.gov.br/noticias/de-la-ni%C3%B1a-a-um-poss%C3%ADvel-'
+                    'el-ni%C3%B1o-muito-forte-veja-a-evolu%C3%A7%C3%A3o-das-proje%C3%A7%C3%B5es-em-2026',
+    },
+    {
+        'titulo':  'Boletim do Painel El Niño nº 03 — Agosto de 2026',
+        'agencia': 'CEMADEN (INMET, INPE, ANA, CEMADEN, SGB, SEDEC, CENSIPAM)',
+        'data':    '02/09/2026',
+        'url':     'https://www.gov.br/cemaden/pt-br/assuntos/monitoramento/el-nino/'
+                    'boletim-do-painel-el-nino-ndeg-03-agosto-de-2026-potenciais-impactos-e-orientacoes',
+    },
+    {
+        'titulo':  'ANA aponta redução no armazenamento dos reservatórios do SIN',
+        'agencia': 'ANA',
+        'data':    '01/09/2026',
+        'url':     'https://www.gov.br/ana/pt-br/assuntos/noticias-e-eventos/'
+                    'noticias-periodo-eleitoral-2026/ana-aponta-reducao-no-armazenamento-'
+                    'dos-reservatorios-do-sin-e-detalha-panorama-de-rios-e-da-seca-na-3a-'
+                    'edicao-do-painel-el-nino',
+    },
+]
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Helpers de formatação XML (python-docx não expõe sombreamento e bordas)
@@ -163,6 +222,46 @@ def run(par, texto, *, tam=9.5, bold=False, italic=False, cor=PRETO, espaco=None
         sp.set(qn('w:val'), str(espaco))
         rPr.append(sp)
     return r
+
+
+LINK_HEX = '1155CC'   # azul padrão de hyperlink — só usado aqui
+
+
+def hyperlink(par, url, texto, *, tam=8):
+    """
+    Link clicável de verdade (abre o navegador no Word/LibreOffice/PDF),
+    não só texto azul sublinhado. python-docx não expõe isso — hyperlink
+    é uma relação da parte do documento (r:id), não um atributo de w:r.
+    Precisa: 1) registrar a relação externa via part.relate_to, 2) montar
+    o elemento <w:hyperlink r:id="..."> à mão com o <w:r> dentro dele
+    (um <w:r> solto com w:color azul FICA azul mas não abre nada ao
+    clicar — parece link, não é).
+    """
+    part = par.part
+    r_id = part.relate_to(
+        url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
+        is_external=True)
+
+    hlink = OxmlElement('w:hyperlink')
+    hlink.set(qn('r:id'), r_id)
+
+    r_el = OxmlElement('w:r')
+    rPr = OxmlElement('w:rPr')
+    rFonts = OxmlElement('w:rFonts')
+    rFonts.set(qn('w:ascii'), 'Calibri'); rFonts.set(qn('w:hAnsi'), 'Calibri')
+    rPr.append(rFonts)
+    sz = OxmlElement('w:sz'); sz.set(qn('w:val'), str(int(tam * 2))); rPr.append(sz)
+    color = OxmlElement('w:color'); color.set(qn('w:val'), LINK_HEX); rPr.append(color)
+    u = OxmlElement('w:u'); u.set(qn('w:val'), 'single'); rPr.append(u)
+    r_el.append(rPr)
+    t_el = OxmlElement('w:t')
+    t_el.set(qn('xml:space'), 'preserve')
+    t_el.text = texto
+    r_el.append(t_el)
+    hlink.append(r_el)
+
+    par._p.append(hlink)
+    return hlink
 
 
 def par_corpo(doc, justificado=True, depois=5, antes=0):
@@ -417,6 +516,24 @@ def montar(d):
     run(p, 'Divergências acima de 10 pontos percentuais indicam incerteza elevada e '
            'recomendam postura mais conservadora na janela de transição.')
 
+    p = par_corpo(doc)
+    run(p, 'O Boletim do Painel El Niño nº 3 (INMET, INPE, ANA, CEMADEN, SGB, '
+           'SEDEC e CENSIPAM) situa o Tocantins entre as áreas de maior probabilidade de '
+           'chuva abaixo da média em SON/2026, e como uma das regiões de maior '
+           'intensificação de seca severa já registrada em julho/2026 pelo Índice '
+           'Integrado de Seca (IIS-3) — classificação que já alcança 157 municípios '
+           'brasileiros. A ANA reporta os reservatórios de Serra da Mesa '
+           '(53,6%, −3,1 p.p. sobre julho) e Tucuruí (77,7%, −7,5 p.p.) '
+           'na bacia do Tocantins — ambos em Faixa Normal, porém em queda.')
+
+    p_limite = par_corpo(doc)
+    run(p_limite, 'Nota de limite: ', bold=True, cor=CINZA)
+    run(p_limite, 'o Monitor de Secas da ANA não classifica a Região Norte com foco de '
+           'seca grave em julho/2026 — quadro melhor que o observado em 2023/24. Isso '
+           'não contradiz o IIS-3 do CEMADEN: são índices diferentes, e o Tocantins '
+           'situa-se na fronteira entre as classificações regionais Norte/Centro-Oeste '
+           'usadas em cada base.', tam=8.5, cor=CINZA)
+
     # ── 2. Projeção ─────────────────────────────────────────────────────
     titulo_secao(doc, '2. Projeção de precipitação por cenário')
 
@@ -530,8 +647,15 @@ def montar(d):
         run(p, '. O risco desloca-se do estresse hídrico para a trafegabilidade e '
                'para o encharcamento em solos de menor drenagem.')
 
-    # ── quebra de página ────────────────────────────────────────────────
-    doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+    # Sem quebra de página forçada aqui (havia uma antes de "4."): estava
+    # calibrada para o texto de quando as seções eram mais curtas — com o
+    # parágrafo novo do Boletim El Niño/ANA na seção 1, a quebra fixa
+    # empurrava a seção 4 inteira para uma 3ª página, com a 2ª página quase
+    # vazia. Fluxo natural do Word/LibreOffice já cabe nas 2 páginas com
+    # folga (testado com libreoffice --convert-to pdf). Se o conteúdo
+    # crescer de novo e voltar a estourar 2 páginas, cortar aqui é mais
+    # seguro que reintroduzir uma quebra fixa — decida com base na
+    # renderização real (rode e confira, não assuma).
 
     # ── 4. Recomendação ─────────────────────────────────────────────────
     titulo_secao(doc, '4. Recomendação operacional \u2014 janela de plantio')
@@ -593,6 +717,19 @@ def montar(d):
            f'{num(viz["total12m"])}\u00a0mm e a probabilidade de ano seco de '
            f'{num(linha_c["p_seca"],1)}% para {num(viz["p_seca"],1)}%, o que '
            f'redefine a postura da janela de transição.')
+
+    # ── fontes consultadas (institucionais — contexto, não alimentam o SARIMAX)
+    # URL por extenso e clicável — não só título/agência/data: assim
+    # qualquer leitor (inclusive a Diretoria) confirma a fonte primária
+    # direto, sem precisar confiar em quem redigiu o relatório.
+    titulo_secao(doc, 'Fontes consultadas')
+    p = par_corpo(doc, justificado=False, depois=2)
+    for i, f in enumerate(FONTES_EXTERNAS):
+        run(p, f'{f["titulo"]}. ', tam=8, italic=True, cor=CINZA)
+        run(p, f'{f["agencia"]}, {f["data"]}. ', tam=8, cor=CINZA)
+        hyperlink(p, f['url'], f['url'], tam=7.5)
+        if i < len(FONTES_EXTERNAS) - 1:
+            p.add_run().add_break(WD_BREAK.LINE)
 
     # ── rodapé ──────────────────────────────────────────────────────────
     p = doc.add_paragraph()
