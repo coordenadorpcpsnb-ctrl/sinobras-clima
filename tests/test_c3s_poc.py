@@ -159,10 +159,9 @@ class ConversaoUnidadeMetadataTestCase(unittest.TestCase):
     def test_unidade_correta_passa(self):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso(tmp, unidade='m s**-1')
-            import xarray as xr
-            ds = xr.open_dataset(caminho)
-            ds_validado, unidade = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            ds_validado, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             self.assertEqual(unidade, 'm s**-1')
+            self.assertEqual(esquema, 'leadtime_month')
 
     def test_unidade_errada_falha_explicitamente(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,6 +195,133 @@ class ConversaoUnidadeMetadataTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# ESQUEMA REAL DO CDS: step + valid_time (3ª execução real do workflow,
+# request cd5eba24-a49a-4ee7-ae56-9240aab18516 — cfgrib expôs number/
+# time/step/surface/latitude/longitude/valid_time, SEM forecastMonth/
+# leadtime_month). Seção 7 da correção: init janeiro, leads 1/2/3,
+# virada de ano, step como timedelta64, valid_time ausente falha,
+# nº de target months != nº de leads pedidos falha.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _dataset_falso_step_valid_time(tmpdir, init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'),
+                                    com_membro=True, unidade='m s**-1', step_como_timedelta=True,
+                                    valor_tprate=1.5e-8, nome_arquivo='fake_step.nc'):
+    rng = np.random.RandomState(4)
+    time_val = pd.Timestamp(init_date)
+    valid_times = pd.to_datetime([f'{m}-01' for m in target_months])
+    if step_como_timedelta:
+        steps = (valid_times - time_val).values   # timedelta64[ns]
+    else:
+        steps = ((valid_times - time_val) / pd.Timedelta('1h')).astype('int64').values   # horas, inteiro
+
+    n_steps = len(steps)
+    n_membros = 5 if com_membro else 1
+    lats = [-7.0, -6.0, -5.0]
+    lons = [-49.0, -48.0, -47.0]
+    shape = (1, n_steps, n_membros, len(lats), len(lons)) if com_membro else (1, n_steps, len(lats), len(lons))
+    data = valor_tprate + rng.normal(0, 1e-9, size=shape)
+    dims = ('time', 'step', 'number', 'latitude', 'longitude') if com_membro else ('time', 'step', 'latitude', 'longitude')
+    coords = {
+        'time': [time_val], 'step': steps, 'latitude': lats, 'longitude': lons,
+        'valid_time': (('time', 'step'), valid_times.values.reshape(1, n_steps)),
+    }
+    if com_membro:
+        coords['number'] = list(range(n_membros))
+    ds = xr.Dataset({'tprate': (dims, data)}, coords=coords)
+    ds['tprate'].attrs['units'] = unidade
+    caminho = Path(tmpdir) / nome_arquivo
+    ds.to_netcdf(caminho)
+    return caminho
+
+
+def _dataset_falso_so_step_sem_valid_time(tmpdir, leads_como_steps=(1, 2, 3)):
+    """Simula um arquivo com 'step' mas SEM 'valid_time' — caso que deve
+    falhar explicitamente (nunca assumir que o valor bruto de step é o
+    lead mensal)."""
+    rng = np.random.RandomState(5)
+    n_steps = len(leads_como_steps)
+    data = 1.5e-8 + rng.normal(0, 1e-9, size=(1, n_steps, 5, 3, 3))
+    ds = xr.Dataset(
+        {'tprate': (('time', 'step', 'number', 'latitude', 'longitude'), data)},
+        coords={'time': [pd.Timestamp('2015-01-01')], 'step': list(leads_como_steps),
+                'number': list(range(5)), 'latitude': [-7.0, -6.0, -5.0], 'longitude': [-49.0, -48.0, -47.0]},
+    )
+    ds['tprate'].attrs['units'] = 'm s**-1'
+    caminho = Path(tmpdir) / 'sem_valid_time.nc'
+    ds.to_netcdf(caminho)
+    return caminho
+
+
+class EsquemaStepValidTimeTestCase(unittest.TestCase):
+
+    def test_init_janeiro_leads_1_2_3_mapeiam_jan_fev_mar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(
+                tmp, init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
+            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertEqual(esquema, 'step_valid_time')
+            self.assertEqual(mapa, {1: '2015-01', 2: '2015-02', 3: '2015-03'})
+
+    def test_virada_de_ano(self):
+        """Init novembro/2014, leads 1,2,3 -> nov/dez/2014 + jan/2015."""
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(
+                tmp, init_date='2014-11-01', target_months=('2014-11', '2014-12', '2015-01'),
+                nome_arquivo='virada.nc')
+            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertEqual(mapa, {1: '2014-11', 2: '2014-12', 3: '2015-01'})
+
+    def test_step_como_timedelta64(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(tmp, step_como_timedelta=True, nome_arquivo='td.nc')
+            import xarray as xr
+            ds_bruto = xr.open_dataset(caminho)
+            self.assertTrue(np.issubdtype(ds_bruto['step'].dtype, np.timedelta64))
+            # mesmo com step em timedelta64, o lead é derivado corretamente via valid_time
+            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertEqual(sorted(mapa), [1, 2, 3])
+
+    def test_step_como_horas_inteiras_tambem_funciona_via_valid_time(self):
+        """step como inteiro (horas) em vez de timedelta64 — o parser
+        NUNCA lê esse valor bruto, só valid_time, então o resultado tem
+        que ser idêntico ao caso timedelta64."""
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(tmp, step_como_timedelta=False, nome_arquivo='horas.nc')
+            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertEqual(mapa, {1: '2015-01', 2: '2015-02', 3: '2015-03'})
+
+    def test_step_sem_valid_time_falha_explicitamente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_so_step_sem_valid_time(tmp)
+            with self.assertRaises(KeyError) as ctx:
+                poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertIn('valid_time', str(ctx.exception))
+
+    def test_numero_de_target_months_diferente_do_pedido_falha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(
+                tmp, target_months=('2015-01', '2015-02', '2015-03'), nome_arquivo='tres_meses.nc')
+            with self.assertRaises(RuntimeError) as ctx:
+                poc.abrir_e_validar_grib(caminho, [1, 2, 3, 4, 5])   # pediu 5, arquivo só tem 3
+            self.assertIn('lead', str(ctx.exception).lower())
+
+    def test_nao_le_valor_bruto_de_step_para_decidir_o_lead(self):
+        """Prova direta: um dataset com step DELIBERADAMENTE 'errado'
+        (valores de step que não são 1,2,3 se lidos como inteiro bruto,
+        ex.: seriam 744/1416/2160 horas) ainda dá o mapeamento correto
+        1/2/3 porque a decisão vem só de valid_time."""
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(tmp, step_como_timedelta=False, nome_arquivo='bruto.nc')
+            import xarray as xr
+            ds_bruto = xr.open_dataset(caminho)
+            steps_brutos = list(ds_bruto['step'].values)
+            self.assertNotEqual(sorted(int(s) for s in steps_brutos), [1, 2, 3],
+                                 "pré-condição do teste: step bruto não deveria parecer 1,2,3")
+            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertEqual(sorted(mapa), [1, 2, 3])
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Teste 6 — nearest grid point
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -205,7 +331,7 @@ class GridPointTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso(tmp)
             import c3s_processar as proc
-            ds, _ = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            ds, _, _, _, _ = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             ponto = proc.extrair_ponto(ds, lat=-6.02, lon=-47.90)
             self.assertAlmostEqual(float(ponto['latitude']), -6.0)
             dist = poc.distancia_km_aprox(-6.02, -47.90, float(ponto['latitude']), float(ponto['longitude']))
