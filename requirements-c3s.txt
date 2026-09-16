@@ -15,3 +15,12 @@ cdsapi>=0.7
 xarray>=2026.1
 cfgrib>=0.9
 eccodes>=2.48
+
+# Usado só por tests/test_c3s_poc.py para validar a estrutura do YAML
+# do workflow (on.workflow_dispatch.inputs, ausência de cron) — não é
+# dependência de produção nem do restante do pipeline C3S. Declarado
+# aqui explicitamente porque o workflow instala requirements.txt +
+# requirements-c3s.txt num runner limpo, que não tem nada instalado
+# "incidentalmente" (ao contrário de um ambiente de desenvolvimento
+# local onde PyYAML costuma já estar presente por outra dependência).
+PyYAML>=6
