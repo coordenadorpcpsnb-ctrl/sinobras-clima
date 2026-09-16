@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -159,9 +160,10 @@ class ConversaoUnidadeMetadataTestCase(unittest.TestCase):
     def test_unidade_correta_passa(self):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso(tmp, unidade='m s**-1')
-            ds_validado, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            ds_validado, unidade, esquema, mapa, diag, mpf = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             self.assertEqual(unidade, 'm s**-1')
             self.assertEqual(esquema, 'leadtime_month')
+            self.assertIsNone(mpf)   # esquema A não usa/precisa do mapeamento eccodes
 
     def test_unidade_errada_falha_explicitamente(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,10 +207,21 @@ class ConversaoUnidadeMetadataTestCase(unittest.TestCase):
 
 def _dataset_falso_step_valid_time(tmpdir, init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'),
                                     com_membro=True, unidade='m s**-1', step_como_timedelta=True,
-                                    valor_tprate=1.5e-8, nome_arquivo='fake_step.nc'):
+                                    valor_tprate=1.5e-8, nome_arquivo='fake_step.nc',
+                                    valid_time_e_limite_final=True):
+    """`valid_time_e_limite_final=True` (default) reproduz o arquivo REAL
+    do CDS: valid_time é o limite final do mês-alvo (início do mês
+    seguinte), não o mês-alvo em si — ex. target_month=2015-01 ->
+    valid_time=2015-02-01. É deliberadamente a armadilha corrigida nesta
+    sessão; por isso `abrir_e_validar_grib` não deriva mais target_month
+    de valid_time (ver EsquemaStepValidTimeTestCase abaixo)."""
     rng = np.random.RandomState(4)
     time_val = pd.Timestamp(init_date)
-    valid_times = pd.to_datetime([f'{m}-01' for m in target_months])
+    alvos_p = [pd.Period(m, 'M') for m in target_months]
+    if valid_time_e_limite_final:
+        valid_times = pd.to_datetime([str((a + 1).start_time.date()) for a in alvos_p])
+    else:
+        valid_times = pd.to_datetime([f'{m}-01' for m in target_months])
     if step_como_timedelta:
         steps = (valid_times - time_val).values   # timedelta64[ns]
     else:
@@ -252,15 +265,52 @@ def _dataset_falso_so_step_sem_valid_time(tmpdir, leads_como_steps=(1, 2, 3)):
     return caminho
 
 
+def _mapeamento_mock(init_date, target_months, steps_horas=None):
+    """Simula o retorno de proc.extrair_mapeamento_temporal_grib (leitura
+    eccodes de um GRIB real) — usado para testar a ORQUESTRAÇÃO em
+    abrir_e_validar_grib sem precisar de um arquivo GRIB real (os
+    fixtures deste arquivo escrevem NetCDF sintético, que eccodes não
+    lê). A lógica real de leitura via eccodes/fcmonth/verifyingMonth é
+    testada em tests/test_c3s.py::ExtrairMapeamentoTemporalGribTestCase."""
+    from _c3s_utils import mes_alvo_para_leadtime
+    init_date = pd.Period(init_date, 'M')
+    alvos = [pd.Period(m, 'M') for m in target_months]
+    if steps_horas is None:
+        steps_horas = list(range(1, len(alvos) + 1))
+    return {
+        step_h: {'fcmonth': mes_alvo_para_leadtime(init_date, alvo),
+                 'lead': mes_alvo_para_leadtime(init_date, alvo),
+                 'target_month': alvo}
+        for step_h, alvo in zip(steps_horas, alvos)
+    }
+
+
 class EsquemaStepValidTimeTestCase(unittest.TestCase):
+    """Esquema real do CDS (step+valid_time). `abrir_e_validar_grib` usa
+    `proc.extrair_mapeamento_temporal_grib` (eccodes sobre o GRIB real)
+    como fonte autoritativa de lead/target_month — aqui essa chamada é
+    mockada (ver `_mapeamento_mock`), porque os fixtures deste arquivo
+    escrevem NetCDF sintético, não GRIB. O que se testa aqui é a
+    ORQUESTRAÇÃO: abrir_e_validar_grib repassa caminho/init_date/
+    leads_esperados corretamente, usa o mapeamento retornado (nunca
+    deriva de valid_time) e propaga falhas da fonte autoritativa."""
 
     def test_init_janeiro_leads_1_2_3_mapeiam_jan_fev_mar(self):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso_step_valid_time(
                 tmp, init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
-            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            mapeamento = _mapeamento_mock('2015-01', ('2015-01', '2015-02', '2015-03'))
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib',
+                                    return_value=mapeamento) as m:
+                ds, unidade, esquema, mapa, diag, mpf = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             self.assertEqual(esquema, 'step_valid_time')
             self.assertEqual(mapa, {1: '2015-01', 2: '2015-02', 3: '2015-03'})
+            self.assertEqual(mpf, mapeamento)
+            m.assert_called_once()
+            args, kwargs = m.call_args
+            self.assertEqual(args[0], caminho)
+            self.assertEqual(pd.Period(args[1], 'M'), pd.Period('2015-01', 'M'))
+            self.assertEqual(kwargs.get('leads_esperados'), [1, 2, 3])
 
     def test_virada_de_ano(self):
         """Init novembro/2014, leads 1,2,3 -> nov/dez/2014 + jan/2015."""
@@ -268,26 +318,30 @@ class EsquemaStepValidTimeTestCase(unittest.TestCase):
             caminho = _dataset_falso_step_valid_time(
                 tmp, init_date='2014-11-01', target_months=('2014-11', '2014-12', '2015-01'),
                 nome_arquivo='virada.nc')
-            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            mapeamento = _mapeamento_mock('2014-11', ('2014-11', '2014-12', '2015-01'))
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib', return_value=mapeamento):
+                ds, unidade, esquema, mapa, diag, mpf = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             self.assertEqual(mapa, {1: '2014-11', 2: '2014-12', 3: '2015-01'})
 
     def test_step_como_timedelta64(self):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso_step_valid_time(tmp, step_como_timedelta=True, nome_arquivo='td.nc')
-            import xarray as xr
             ds_bruto = xr.open_dataset(caminho)
             self.assertTrue(np.issubdtype(ds_bruto['step'].dtype, np.timedelta64))
-            # mesmo com step em timedelta64, o lead é derivado corretamente via valid_time
-            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            mapeamento = _mapeamento_mock('2015-01', ('2015-01', '2015-02', '2015-03'))
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib', return_value=mapeamento):
+                ds, unidade, esquema, mapa, diag, mpf = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             self.assertEqual(sorted(mapa), [1, 2, 3])
 
-    def test_step_como_horas_inteiras_tambem_funciona_via_valid_time(self):
-        """step como inteiro (horas) em vez de timedelta64 — o parser
-        NUNCA lê esse valor bruto, só valid_time, então o resultado tem
-        que ser idêntico ao caso timedelta64."""
+    def test_step_como_horas_inteiras_tambem_funciona(self):
+        """step como inteiro (horas) em vez de timedelta64 — não afeta
+        abrir_e_validar_grib, que nem lê 'step' diretamente nesse
+        esquema (só repassa caminho para a fonte autoritativa)."""
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso_step_valid_time(tmp, step_como_timedelta=False, nome_arquivo='horas.nc')
-            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            mapeamento = _mapeamento_mock('2015-01', ('2015-01', '2015-02', '2015-03'))
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib', return_value=mapeamento):
+                ds, unidade, esquema, mapa, diag, mpf = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             self.assertEqual(mapa, {1: '2015-01', 2: '2015-02', 3: '2015-03'})
 
     def test_step_sem_valid_time_falha_explicitamente(self):
@@ -301,24 +355,57 @@ class EsquemaStepValidTimeTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso_step_valid_time(
                 tmp, target_months=('2015-01', '2015-02', '2015-03'), nome_arquivo='tres_meses.nc')
-            with self.assertRaises(RuntimeError) as ctx:
-                poc.abrir_e_validar_grib(caminho, [1, 2, 3, 4, 5])   # pediu 5, arquivo só tem 3
+            # a fonte autoritativa só encontrou 3 leads; pedimos 5 —
+            # abrir_e_validar_grib tem que falhar (mesma checagem que
+            # vale para o esquema A).
+            mapeamento = _mapeamento_mock('2015-01', ('2015-01', '2015-02', '2015-03'))
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib', return_value=mapeamento):
+                with self.assertRaises(RuntimeError) as ctx:
+                    poc.abrir_e_validar_grib(caminho, [1, 2, 3, 4, 5])   # pediu 5, arquivo só tem 3
             self.assertIn('lead', str(ctx.exception).lower())
 
-    def test_nao_le_valor_bruto_de_step_para_decidir_o_lead(self):
-        """Prova direta: um dataset com step DELIBERADAMENTE 'errado'
-        (valores de step que não são 1,2,3 se lidos como inteiro bruto,
-        ex.: seriam 744/1416/2160 horas) ainda dá o mapeamento correto
-        1/2/3 porque a decisão vem só de valid_time."""
+    def test_regressao_valid_time_nao_sobrescreve_verifyingmonth(self):
+        """Regressão direta do bug real desta sessão: mesmo com valid_time
+        do lead 1 apontando para 2015-02-01 (limite final de janeiro —
+        comportamento default do fixture, igual ao arquivo real do CDS),
+        o resultado tem que vir do mapeamento eccodes (fcmonth/
+        verifyingMonth via extrair_mapeamento_temporal_grib), nunca de
+        Period(valid_time,'M')."""
         with tempfile.TemporaryDirectory() as tmp:
-            caminho = _dataset_falso_step_valid_time(tmp, step_como_timedelta=False, nome_arquivo='bruto.nc')
-            import xarray as xr
-            ds_bruto = xr.open_dataset(caminho)
-            steps_brutos = list(ds_bruto['step'].values)
-            self.assertNotEqual(sorted(int(s) for s in steps_brutos), [1, 2, 3],
-                                 "pré-condição do teste: step bruto não deveria parecer 1,2,3")
-            ds, unidade, esquema, mapa, diag = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
-            self.assertEqual(sorted(mapa), [1, 2, 3])
+            caminho = _dataset_falso_step_valid_time(
+                tmp, init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'),
+                valid_time_e_limite_final=True, nome_arquivo='regressao.nc')
+            mapeamento = _mapeamento_mock('2015-01', ('2015-01', '2015-02', '2015-03'))
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib', return_value=mapeamento):
+                ds, unidade, esquema, mapa, diag, mpf = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            # confirma a premissa: valid_time do lead 1 (índice 0) É fevereiro,
+            # não janeiro — é exatamente a armadilha da correção anterior
+            vt_lead1 = pd.Timestamp(ds['valid_time'].isel(time=0, step=0).values)
+            self.assertEqual(pd.Period(vt_lead1, 'M'), pd.Period('2015-02', 'M'))
+            # mas o resultado usado (via mapeamento eccodes) é janeiro, não fevereiro
+            self.assertEqual(mapa[1], '2015-01')
+
+    def test_falha_na_fonte_autoritativa_se_propaga(self):
+        """Se extrair_mapeamento_temporal_grib falhar (metadado GRIB
+        inconsistente, leads não batem etc.), abrir_e_validar_grib nunca
+        engole o erro nem tenta um fallback silencioso."""
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = _dataset_falso_step_valid_time(tmp, nome_arquivo='falha.nc')
+            with mock.patch.object(poc.proc, 'extrair_mapeamento_temporal_grib',
+                                    side_effect=RuntimeError('conflito de metadado GRIB simulado')):
+                with self.assertRaises(RuntimeError) as ctx:
+                    poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            self.assertIn('conflito de metadado GRIB simulado', str(ctx.exception))
+
+    def test_nao_chama_mais_cross_check_eccodes_removido(self):
+        """cross_check_eccodes foi removido de c3s_processar.py (Seção 7
+        da correção — substituído pela função uncapped
+        extrair_mapeamento_temporal_grib); abrir_e_validar_grib não pode
+        mais referenciá-lo."""
+        import inspect
+        self.assertFalse(hasattr(poc.proc, 'cross_check_eccodes'))
+        src = inspect.getsource(poc.abrir_e_validar_grib)
+        self.assertNotIn('cross_check_eccodes', src)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -331,7 +418,7 @@ class GridPointTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = _dataset_falso(tmp)
             import c3s_processar as proc
-            ds, _, _, _, _ = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
+            ds, _, _, _, _, _ = poc.abrir_e_validar_grib(caminho, [1, 2, 3])
             ponto = proc.extrair_ponto(ds, lat=-6.02, lon=-47.90)
             self.assertAlmostEqual(float(ponto['latitude']), -6.0)
             dist = poc.distancia_km_aprox(-6.02, -47.90, float(ponto['latitude']), float(ponto['longitude']))

@@ -13,8 +13,10 @@ Roda com:
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -155,13 +157,26 @@ class ProcessarTestCase(unittest.TestCase):
 
 
 def _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'),
-                              n_membros=5, lats=(-6.0, -5.5), lons=(-48.0, -47.5), valor_tprate=2e-8, seed=6):
+                              n_membros=5, lats=(-6.0, -5.5), lons=(-48.0, -47.5), valor_tprate=2e-8, seed=6,
+                              valid_time_e_limite_final=True):
     """Esquema B (Seção 7): o que o arquivo REAL do CDS mostrou —
     number/time/step/latitude/longitude/valid_time, SEM forecastMonth/
-    leadtime_month."""
+    leadtime_month.
+
+    `valid_time_e_limite_final=True` (default, reproduz o arquivo real):
+    valid_time é o LIMITE FINAL do mês-alvo (início do mês seguinte) —
+    ex. target_month=2015-01 -> valid_time=2015-02-01. Isso é
+    deliberado: é exatamente a armadilha que produziu o bug de +1 mês
+    corrigido nesta sessão (Period(valid_time,'M') != target_month).
+    `step` é o intervalo em horas entre `time` (init) e esse valid_time.
+    """
     rng = np.random.RandomState(seed)
     time_val = pd.Timestamp(init_date)
-    valid_times = pd.to_datetime([f'{m}-01' for m in target_months])
+    alvos = [pd.Period(m, 'M') for m in target_months]
+    if valid_time_e_limite_final:
+        valid_times = pd.to_datetime([str((a + 1).start_time.date()) for a in alvos])
+    else:
+        valid_times = pd.to_datetime([f'{m}-01' for m in target_months])
     steps = (valid_times - time_val).values   # timedelta64[ns] — nunca lido como número bruto
     n_steps = len(steps)
     data = valor_tprate + rng.normal(0, 1e-9, size=(1, n_steps, n_membros, len(lats), len(lons)))
@@ -174,10 +189,26 @@ def _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '
     return ds
 
 
+def _mapeamento_explicito(init_date, target_months, steps_horas):
+    """Constrói o dict `mapeamento_step_fcmonth` que normalmente viria de
+    `extrair_mapeamento_temporal_grib` (via eccodes/GRIB real) — usado
+    nos testes de `dataset_para_tabela` para não depender de GRIB real
+    (ver `ExtrairMapeamentoTemporalGribTestCase` para o eccodes real)."""
+    init_date = pd.Period(init_date, 'M')
+    alvos = [pd.Period(m, 'M') for m in target_months]
+    return {
+        step_h: {'fcmonth': cu.mes_alvo_para_leadtime(init_date, alvo), 'lead': cu.mes_alvo_para_leadtime(init_date, alvo),
+                 'target_month': alvo}
+        for step_h, alvo in zip(steps_horas, alvos)
+    }
+
+
 class EsquemaTemporalStepValidTimeTestCase(unittest.TestCase):
     """Teste 7C — dataset com step+valid_time (esquema real do CDS),
     testado direto em memória (sem GRIB/NetCDF real — ver ressalva no
-    topo do arquivo)."""
+    topo do arquivo). `dataset_para_tabela` exige um mapeamento explícito
+    de step->fcmonth/target_month para este esquema (nunca deriva de
+    valid_time diretamente — ver docstring de c3s_processar.py)."""
 
     def test_detectar_esquema_reconhece_step_valid_time(self):
         ds = _dataset_step_valid_time()
@@ -185,11 +216,24 @@ class EsquemaTemporalStepValidTimeTestCase(unittest.TestCase):
         self.assertEqual(esquema, proc.ESQUEMA_STEP_VALID_TIME)
         self.assertEqual(nome_dim, 'step')
 
-    def test_dataset_para_tabela_deriva_lead_via_valid_time(self):
+    def test_dataset_para_tabela_usa_mapeamento_explicito_nao_valid_time(self):
+        """Regressão do bug real: valid_time é o limite final (mês+1),
+        NUNCA o target_month. Aqui valid_time do lead 1 é 2015-02-01
+        (fim de janeiro), mas o mapeamento explícito (fonte autoritativa,
+        equivalente ao que fcmonth/verifyingMonth diriam) diz lead1 ->
+        2015-01 — e é isso que tem que aparecer na tabela, não fevereiro."""
         ds = _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
-        df = proc.dataset_para_tabela(ds, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
+        steps_h = [int(v / np.timedelta64(1, 'h')) for v in ds['step'].values]
+        mapeamento = _mapeamento_explicito('2015-01', ('2015-01', '2015-02', '2015-03'), steps_h)
+
+        # confirma a premissa do teste: valid_time do lead 1 NÃO é 2015-01
+        vt_lead1 = pd.Timestamp(ds['valid_time'].isel(time=0, step=0).values)
+        self.assertEqual(pd.Period(vt_lead1, 'M'), pd.Period('2015-02', 'M'))
+
+        df = proc.dataset_para_tabela(ds, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0,
+                                       mapeamento_step_fcmonth=mapeamento)
         mapa = dict(zip(df['lead'], df['target_month']))
-        self.assertEqual(mapa[1], '2015-01')
+        self.assertEqual(mapa[1], '2015-01')   # e não '2015-02'
         self.assertEqual(mapa[2], '2015-02')
         self.assertEqual(mapa[3], '2015-03')
 
@@ -199,8 +243,11 @@ class EsquemaTemporalStepValidTimeTestCase(unittest.TestCase):
         codificada de formas diferentes pelo cfgrib."""
         ds_a = _dataset_sintetico(init_dates=('2015-01-01',), leads=(1, 2, 3))
         ds_b = _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
+        steps_h = [int(v / np.timedelta64(1, 'h')) for v in ds_b['step'].values]
+        mapeamento = _mapeamento_explicito('2015-01', ('2015-01', '2015-02', '2015-03'), steps_h)
         df_a = proc.dataset_para_tabela(ds_a, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
-        df_b = proc.dataset_para_tabela(ds_b, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
+        df_b = proc.dataset_para_tabela(ds_b, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0,
+                                         mapeamento_step_fcmonth=mapeamento)
         self.assertEqual(sorted(df_a['target_month'].unique()), sorted(df_b['target_month'].unique()))
         self.assertEqual(set(zip(df_a['lead'], df_a['target_month'])),
                           set(zip(df_b['lead'], df_b['target_month'])))
@@ -215,6 +262,173 @@ class EsquemaTemporalStepValidTimeTestCase(unittest.TestCase):
         with self.assertRaises(KeyError) as ctx:
             proc.detectar_esquema_temporal(ds)
         self.assertIn('valid_time', str(ctx.exception))
+
+    def test_dataset_para_tabela_sem_mapeamento_falha_explicitamente(self):
+        """Seção 4 da correção: para o esquema step_valid_time,
+        mapeamento_step_fcmonth é obrigatório — sem ele, ValueError
+        explícito, nunca um fallback silencioso para valid_time."""
+        ds = _dataset_step_valid_time()
+        with self.assertRaises(ValueError) as ctx:
+            proc.dataset_para_tabela(ds, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
+        self.assertIn('mapeamento_step_fcmonth', str(ctx.exception))
+
+    def test_dataset_para_tabela_step_fora_do_mapeamento_falha(self):
+        """Se o mapeamento não cobre o step presente no dataset, falha
+        explícita (KeyError) em vez de adivinhar."""
+        ds = _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
+        with self.assertRaises(KeyError):
+            proc.dataset_para_tabela(ds, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0,
+                                      mapeamento_step_fcmonth={})
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# extrair_mapeamento_temporal_grib — fonte autoritativa via eccodes real.
+# eccodes é simulado (mock) para não depender de um arquivo GRIB real
+# nestes testes offline — só a INTERFACE (codes_grib_new_from_file/
+# codes_get/codes_release) é simulada; a lógica de dedup/validação
+# testada é a função real de c3s_processar.py.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _fake_eccodes_modulo(mensagens):
+    """`mensagens`: lista de dicts, uma por 'mensagem GRIB' simulada, com
+    as chaves lidas via codes_get ('step', 'fcmonth', 'verifyingMonth').
+    Simula N mensagens (uma por membro x lead, como um GRIB real de
+    hindcast) que extrair_mapeamento_temporal_grib deve deduplicar."""
+    estado = {'indice': 0}
+
+    class _FakeEccodes:
+        @staticmethod
+        def codes_grib_new_from_file(f):
+            if estado['indice'] >= len(mensagens):
+                return None
+            gid = estado['indice']
+            estado['indice'] += 1
+            return gid
+
+        @staticmethod
+        def codes_get(gid, chave):
+            return mensagens[gid][chave]
+
+        @staticmethod
+        def codes_release(gid):
+            pass
+
+    return _FakeEccodes()
+
+
+def _mensagens_ensemble(init_date, mapa_lead_step_alvo, n_membros=25):
+    """Gera `n_membros` mensagens por lead — reproduz a estrutura real de
+    um GRIB de hindcast SEAS5 (25 membros), onde step/fcmonth/
+    verifyingMonth se repetem idênticos entre membros do mesmo lead."""
+    verifying = {lead: int(f'{alvo.year:04d}{alvo.month:02d}') for lead, (step, alvo) in mapa_lead_step_alvo.items()}
+    msgs = []
+    for lead, (step, _alvo) in mapa_lead_step_alvo.items():
+        for _m in range(n_membros):
+            msgs.append({'step': step, 'fcmonth': lead, 'verifyingMonth': verifying[lead]})
+    return msgs
+
+
+class ExtrairMapeamentoTemporalGribTestCase(unittest.TestCase):
+    """Testa a fonte autoritativa da correção (Seção 4/7/8 da tarefa):
+    lead=fcmonth, target_month=verifyingMonth, deduplicado, validado
+    contra leadtime_para_mes_alvo, percorrendo o arquivo inteiro."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix='.grib', delete=False)
+        self._tmp.close()
+        self.caminho = self._tmp.name
+
+    def tearDown(self):
+        Path(self.caminho).unlink(missing_ok=True)
+
+    def _rodar(self, mensagens, init_date='2015-01', leads_esperados=None):
+        fake = _fake_eccodes_modulo(mensagens)
+        with mock.patch.dict(sys.modules, {'eccodes': fake}):
+            return proc.extrair_mapeamento_temporal_grib(self.caminho, init_date, leads_esperados=leads_esperados)
+
+    def test_evidencia_real_lead1_e_janeiro_nao_fevereiro(self):
+        """Reproduz literalmente a evidência real desta sessão: init
+        2015-01, fcmonth=1, verifyingMonth=201501, step=744h. A
+        correção anterior (valid_time=2015-02-01 -> Period='2015-02')
+        teria dado fevereiro — aqui tem que dar janeiro."""
+        mensagens = [{'step': 744, 'fcmonth': 1, 'verifyingMonth': 201501}]
+        mapa = self._rodar(mensagens, init_date='2015-01', leads_esperados=[1])
+        self.assertEqual(mapa[744]['lead'], 1)
+        self.assertEqual(mapa[744]['target_month'], pd.Period('2015-01', 'M'))
+        self.assertNotEqual(mapa[744]['target_month'], pd.Period('2015-02', 'M'))
+
+    def test_25_membros_3_leads_dao_3_combinacoes_unicas(self):
+        """Seção 4/7: um arquivo com 25 membros x 3 leads = 75 mensagens
+        tem que deduplicar para exatamente 3 combinações — nunca 75 nem
+        25."""
+        mapa_lead_step_alvo = {
+            1: (744, pd.Period('2015-01', 'M')),
+            2: (1416, pd.Period('2015-02', 'M')),
+            3: (2160, pd.Period('2015-03', 'M')),
+        }
+        mensagens = _mensagens_ensemble('2015-01', mapa_lead_step_alvo, n_membros=25)
+        self.assertEqual(len(mensagens), 75)
+        mapa = self._rodar(mensagens, init_date='2015-01', leads_esperados=[1, 2, 3])
+        self.assertEqual(len(mapa), 3)
+        self.assertEqual(sorted(v['lead'] for v in mapa.values()), [1, 2, 3])
+        self.assertEqual(mapa[744]['target_month'], pd.Period('2015-01', 'M'))
+        self.assertEqual(mapa[1416]['target_month'], pd.Period('2015-02', 'M'))
+        self.assertEqual(mapa[2160]['target_month'], pd.Period('2015-03', 'M'))
+
+    def test_percorre_arquivo_inteiro_nao_so_as_primeiras_mensagens(self):
+        """Regressão do bug do diagnóstico antigo (capado em 20
+        mensagens): lead 3 só aparece na mensagem 51 em diante (25
+        membros de lead1 + 25 de lead2 antes) — tem que ser encontrado."""
+        mapa_lead_step_alvo = {
+            1: (744, pd.Period('2015-01', 'M')),
+            2: (1416, pd.Period('2015-02', 'M')),
+            3: (2160, pd.Period('2015-03', 'M')),
+        }
+        mensagens = _mensagens_ensemble('2015-01', mapa_lead_step_alvo, n_membros=25)
+        mapa = self._rodar(mensagens, init_date='2015-01', leads_esperados=[1, 2, 3])
+        self.assertIn(2160, mapa)
+        self.assertEqual(mapa[2160]['lead'], 3)
+
+    def test_virada_de_ano(self):
+        mensagens = [{'step': 3624, 'fcmonth': 6, 'verifyingMonth': 202004}]
+        mapa = self._rodar(mensagens, init_date='2019-11', leads_esperados=[6])
+        self.assertEqual(mapa[3624]['target_month'], pd.Period('2020-04', 'M'))
+
+    def test_conflito_fcmonth_verifyingmonth_falha(self):
+        """fcmonth=1 implica target_month=2015-01 pela convenção (lead 1 =
+        mês de inicialização), mas a mensagem diz verifyingMonth=201502 —
+        metadado GRIB inconsistente, tem que falhar, nunca aceitar."""
+        mensagens = [{'step': 744, 'fcmonth': 1, 'verifyingMonth': 201502}]
+        with self.assertRaises(RuntimeError) as ctx:
+            self._rodar(mensagens, init_date='2015-01', leads_esperados=[1])
+        self.assertIn('Conflito', str(ctx.exception))
+
+    def test_step_com_combinacoes_conflitantes_falha(self):
+        mensagens = [{'step': 744, 'fcmonth': 1, 'verifyingMonth': 201501},
+                      {'step': 744, 'fcmonth': 2, 'verifyingMonth': 201502}]
+        with self.assertRaises(RuntimeError) as ctx:
+            self._rodar(mensagens, init_date='2015-01', leads_esperados=None)
+        self.assertIn('step=744h', str(ctx.exception))
+
+    def test_leads_encontrados_diferentes_dos_pedidos_falha(self):
+        mensagens = [{'step': 744, 'fcmonth': 1, 'verifyingMonth': 201501},
+                      {'step': 1416, 'fcmonth': 2, 'verifyingMonth': 201502}]
+        with self.assertRaises(RuntimeError) as ctx:
+            self._rodar(mensagens, init_date='2015-01', leads_esperados=[1, 2, 3])
+        self.assertIn('leads encontrados', str(ctx.exception))
+
+    def test_nenhuma_mensagem_falha(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._rodar([], init_date='2015-01', leads_esperados=[1])
+        self.assertIn('nenhuma mensagem', str(ctx.exception))
+
+    def test_nao_usa_valid_time_nenhuma_vez(self):
+        """A função não deve sequer tentar ler 'valid_time' via eccodes —
+        só step/fcmonth/verifyingMonth (Seção 3)."""
+        import inspect
+        src = inspect.getsource(proc.extrair_mapeamento_temporal_grib)
+        self.assertNotIn("'valid_time'", src)
+        self.assertNotIn('"valid_time"', src)
 
 
 # ══════════════════════════════════════════════════════════════════════════
