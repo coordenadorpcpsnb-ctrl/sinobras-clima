@@ -1,0 +1,110 @@
+name: C3S POC
+
+# Fase 2A — prova de conceito manual do C3S/SEAS5 (1 sistema, 1
+# município, 1 init_date, poucos leads). NÃO é o hindcast completo.
+# Existe porque o ambiente Claude Code Web bloqueia por política de
+# rede o domínio cds.climate.copernicus.eu — este workflow roda num
+# runner do GitHub Actions, onde essa rede não está bloqueada.
+#
+# Requer o secret de repositório CDS_API_KEY (Settings → Secrets and
+# variables → Actions). Ver docs/c3s-poc.md para o passo a passo de
+# criar a conta CDS e o token. Nunca disparado por cron — só manual.
+
+on:
+  workflow_dispatch:
+    inputs:
+      municipio:
+        description: 'Município (chave interna ou nome de exibição, ex.: Ananas / Ananás)'
+        required: true
+        default: 'Sao_Bento_do_Tocantins'
+      init_year:
+        description: 'Ano de inicialização — precisa cair no período de hindcast do SEAS5 (1993-2016)'
+        required: true
+        default: '2015'
+      init_month:
+        description: 'Mês de inicialização (1-12)'
+        required: true
+        default: '01'
+      leads:
+        description: 'Leadtime months, separados por vírgula (ex.: 1,2,3)'
+        required: true
+        default: '1,2,3'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c3s-poc
+  cancel-in-progress: false
+
+jobs:
+  poc:
+    name: C3S POC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verificar secret CDS_API_KEY presente
+        env:
+          CDS_KEY_PRESENTE: ${{ secrets.CDS_API_KEY != '' }}
+        run: |
+          if [ "$CDS_KEY_PRESENTE" != "true" ]; then
+            echo "::error::O secret CDS_API_KEY não está configurado neste repositório."
+            {
+              echo "## ❌ Secret ausente"
+              echo ""
+              echo "Configure o secret **CDS_API_KEY** em Settings → Secrets and variables →"
+              echo "Actions → New repository secret, com o Personal Access Token da sua conta"
+              echo "CDS (https://cds.climate.copernicus.eu). Veja \`docs/c3s-poc.md\` para o"
+              echo "passo a passo completo."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Secret CDS_API_KEY está definido (conteúdo nunca exibido neste log)."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências C3S (isoladas de requirements.txt)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      - name: Criar ~/.cdsapirc (temporário, nunca commitado)
+        env:
+          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' "$CDS_API_KEY" > "$HOME/.cdsapirc"
+          chmod 600 "$HOME/.cdsapirc"
+          echo "~/.cdsapirc criado (permissão 600, conteúdo nunca exibido)."
+
+      - name: Rodar prova de conceito C3S
+        run: |
+          python scripts/c3s_poc.py \
+            --municipio "${{ inputs.municipio }}" \
+            --init-year "${{ inputs.init_year }}" \
+            --init-month "${{ inputs.init_month }}" \
+            --leads "${{ inputs.leads }}"
+
+      - name: Remover credencial
+        if: always()
+        run: rm -f "$HOME/.cdsapirc"
+
+      - name: Publicar artifacts (raw/summary/metadata — nunca GRIB/NetCDF)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c3s-poc-resultado
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn

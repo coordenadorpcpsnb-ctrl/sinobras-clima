@@ -1,2 +1,7 @@
 *.bak
 __pycache__/
+
+# C3S POC (.github/workflows/c3s_poc.yml) — credencial e artefatos locais
+.cdsapirc
+data/c3s_cache/
+artifacts/
