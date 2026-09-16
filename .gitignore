@@ -1,2 +1,10 @@
 *.bak
 __pycache__/
+
+# Fase 2A — cache local de dados C3S (GRIB/NetCDF podem ser grandes;
+# nunca commitar — só scripts, CSVs pequenos derivados e metadados vão
+# para o Git, ver scripts/c3s_download.py)
+data/c3s_cache/
+*.grib
+*.grib2
+*.nc

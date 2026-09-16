@@ -1,0 +1,17 @@
+# Dependências extras da Fase 2A (C3S) — não fazem parte do pipeline de
+# produção (requirements.txt) nem das Fases 1.x. Instaladas nesta sessão
+# via `pip install cdsapi xarray cfgrib`; documentadas aqui separadamente
+# para não confundir com as dependências de produção.
+#
+# NOTA: instalar isso no MESMO ambiente das Fases 1.x atualizou numpy
+# (>=1.24 -> 2.4.6) e pandas (>=2.0 -> 3.0.5) como dependências
+# transitivas — verificado nesta sessão que a suíte de testes completa
+# (139 testes, Fases 1/1.1/1.2/1.3) continua passando com essas versões
+# mais novas, mas isso não é o mesmo que garantir que não há nenhuma
+# diferença sutil de comportamento fora do que os testes cobrem. Rodar
+# num ambiente virtual separado (`python -m venv .venv-c3s`) é a forma
+# mais segura de evitar esse acoplamento numa fase futura.
+cdsapi>=0.7
+xarray>=2026.1
+cfgrib>=0.9
+eccodes>=2.48
