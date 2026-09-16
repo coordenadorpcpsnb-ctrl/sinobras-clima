@@ -534,6 +534,33 @@ def calcular_metricas_por_periodo_operacional(df):
     return resultado
 
 
+def calcular_skill_todos_modelos(metrics_by_lead, metrics_by_block, modelos):
+    """Versão genérica de bt.calcular_skill (que só cobre os 4 modelos
+    fixos de bt.MODELOS) — aqui cobre TODOS os modelos desta fase,
+    incluindo os 22 candidatos novos. Só modo operacional_simulado (nenhum
+    candidato novo tem variante oracle_exog nesta fase)."""
+    clim_lead = metrics_by_lead.get('Climatologia', {}).get(bt.MODO_OPERACIONAL, {})
+    clim_block = metrics_by_block.get('Climatologia', {}).get(bt.MODO_OPERACIONAL, {})
+    skill = {}
+    for modelo in modelos:
+        if modelo == 'Climatologia':
+            continue
+        por_lead = metrics_by_lead.get(modelo, {}).get(bt.MODO_OPERACIONAL)
+        if not por_lead:
+            continue
+        sk_lead = {}
+        for lead, m in por_lead.items():
+            rc = clim_lead.get(lead, {}).get('rmse')
+            sk_lead[lead] = round(1 - m['rmse'] / rc, 4) if (rc and m['rmse'] is not None) else None
+        por_bloco = metrics_by_block.get(modelo, {}).get(bt.MODO_OPERACIONAL, {})
+        sk_bloco = {}
+        for nome, m in por_bloco.items():
+            rc = clim_block.get(nome, {}).get('rmse')
+            sk_bloco[nome] = round(1 - m['rmse'] / rc, 4) if (rc and m['rmse'] is not None) else None
+        skill[modelo] = {bt.MODO_OPERACIONAL: {'por_lead': sk_lead, 'por_bloco': sk_bloco}}
+    return skill
+
+
 def calcular_complexidade(especificacoes_relevantes):
     """especificacoes_relevantes: dict nome_modelo -> {'n_features':int,
     'n_parametros_aprox':int, 'descricao':str}. Preenchido manualmente por
@@ -557,11 +584,34 @@ def rodar_lote(serie, origens, specs, maxiter=MAXITER_PADRAO, verbose=True):
     return pd.DataFrame(todos_registros), pd.DataFrame(todos_diag), tempos
 
 
+def rodar_residuos_candidatos(serie, origens, candidatos, maxiter=MAXITER_PADRAO, verbose=True):
+    """Seção 8: ACF lag1, Ljung-Box lag12, bias por mês, % que rejeita
+    ruído branco — só para os candidatos 'mais relevantes' passados
+    (evita rodar isso para os 22 candidatos, que seria custo redundante
+    já que a maioria não passou no screening por skill)."""
+    registros = []
+    for i, origem in enumerate(origens):
+        serie_cortada = bt.cortar_serie(serie, origem)
+        d_cortado = bt.construir_lags(serie_cortada)
+        for nome_modelo, order, seasonal_order, representacao, com_exog in candidatos:
+            res, diag, media, desvio_seg = treinar_sarimax_representacao(
+                serie_cortada, d_cortado, order, seasonal_order, representacao, com_exog, maxiter=maxiter)
+            base_df = d_cortado if com_exog else serie_cortada
+            row = bt.resumo_residuos_origem(res, base_df, origem)
+            row['modelo'] = nome_modelo
+            registros.append(row)
+        if verbose and (i + 1) % 50 == 0:
+            print(f"  [{i+1}/{len(origens)}] origem={origem}")
+    return pd.DataFrame(registros)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--screening', action='store_true')
     ap.add_argument('--confirmacao', action='store_true')
     ap.add_argument('--merge', action='store_true')
+    ap.add_argument('--residuos', action='store_true',
+                     help='roda diagnóstico de resíduos (Seção 8) para os candidatos mais relevantes')
     ap.add_argument('--modelos', type=str, default=None,
                      help='lista separada por vírgula de nomes de modelo (default: todos)')
     ap.add_argument('--step-screening', type=int, default=6)
@@ -574,6 +624,29 @@ def main():
         return
 
     serie = bt.carregar_serie()
+
+    if args.residuos:
+        origens = bt.gerar_origens(serie, step=bt.STEP_MENSAL)
+        if args.smoke:
+            origens = origens[:3]
+        # Candidatos mais relevantes (Seção 8): melhor de cada família
+        # (E=anomalia, F=z) pelo skill H1-12 confirmado, mais a checagem
+        # de que a família 'semexog' (quase idêntica à climatologia) não
+        # tem o mesmo padrão de resíduo do 'atual'.
+        candidatos = [
+            ('SARIMAX_anom_E2_exog', (1, 0, 2), (0, 0, 0, 0), 'anom', True),
+            ('SARIMAX_z_E4_exog', (1, 0, 1), (0, 0, 1, 12), 'z', True),
+        ]
+        print(f"Diagnóstico de resíduos — {len(candidatos)} candidatos x {len(origens)} origens")
+        t0 = time.time()
+        df_resid = rodar_residuos_candidatos(serie, origens, candidatos, maxiter=args.maxiter)
+        print(f"  Tempo total: {time.time()-t0:.1f}s")
+        if not args.smoke:
+            out = DATA / 'model_benchmark_residuals.csv'
+            df_resid.to_csv(out, index=False)
+            print(f"  ✅ {out.relative_to(ROOT)}")
+        return
+
     specs_todas = gerar_specs_candidatos()
     if args.modelos:
         nomes_pedidos = set(n.strip() for n in args.modelos.split(','))
@@ -653,7 +726,7 @@ def merge_resultados():
     padronizadas = calcular_metricas_padronizadas(df)
     por_estacao = calcular_metricas_por_estacao(df)
     por_periodo_op = calcular_metricas_por_periodo_operacional(df)
-    skill = bt.calcular_skill(metrics_by_lead, metrics_by_block)
+    skill = calcular_skill_todos_modelos(metrics_by_lead, metrics_by_block, sorted(df['modelo'].unique()))
 
     candidatos_bootstrap = ['SARIMAX_atual', 'SARIMA_sem_exog', 'XGBoost_atual', 'SeasonalNaive'] + \
         [m for m in df['modelo'].unique() if m not in
