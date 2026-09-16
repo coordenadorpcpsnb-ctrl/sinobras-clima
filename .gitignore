@@ -8,3 +8,12 @@ data/c3s_cache/
 *.grib
 *.grib2
 *.nc
+
+# Credencial CDS — nunca deve existir dentro do repositório (o workflow
+# escreve em $HOME/.cdsapirc, fora do checkout); esta entrada é defesa
+# extra caso alguém rode localmente e crie um por engano na raiz do repo.
+.cdsapirc
+
+# Saída local da prova de conceito C3S (o workflow publica isso como
+# GitHub Actions Artifact, não como commit — ver Seção 11 da Fase 2A)
+artifacts/
