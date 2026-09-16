@@ -154,6 +154,69 @@ class ProcessarTestCase(unittest.TestCase):
         self.assertEqual(set(df['local'].unique()), {'Ananas', 'Araguatins'})
 
 
+def _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'),
+                              n_membros=5, lats=(-6.0, -5.5), lons=(-48.0, -47.5), valor_tprate=2e-8, seed=6):
+    """Esquema B (Seção 7): o que o arquivo REAL do CDS mostrou —
+    number/time/step/latitude/longitude/valid_time, SEM forecastMonth/
+    leadtime_month."""
+    rng = np.random.RandomState(seed)
+    time_val = pd.Timestamp(init_date)
+    valid_times = pd.to_datetime([f'{m}-01' for m in target_months])
+    steps = (valid_times - time_val).values   # timedelta64[ns] — nunca lido como número bruto
+    n_steps = len(steps)
+    data = valor_tprate + rng.normal(0, 1e-9, size=(1, n_steps, n_membros, len(lats), len(lons)))
+    ds = xr.Dataset(
+        {'tprate': (('time', 'step', 'number', 'latitude', 'longitude'), data)},
+        coords={'time': [time_val], 'step': steps, 'number': list(range(n_membros)),
+                'latitude': list(lats), 'longitude': list(lons),
+                'valid_time': (('time', 'step'), valid_times.values.reshape(1, n_steps))},
+    )
+    return ds
+
+
+class EsquemaTemporalStepValidTimeTestCase(unittest.TestCase):
+    """Teste 7C — dataset com step+valid_time (esquema real do CDS),
+    testado direto em memória (sem GRIB/NetCDF real — ver ressalva no
+    topo do arquivo)."""
+
+    def test_detectar_esquema_reconhece_step_valid_time(self):
+        ds = _dataset_step_valid_time()
+        esquema, nome_dim = proc.detectar_esquema_temporal(ds)
+        self.assertEqual(esquema, proc.ESQUEMA_STEP_VALID_TIME)
+        self.assertEqual(nome_dim, 'step')
+
+    def test_dataset_para_tabela_deriva_lead_via_valid_time(self):
+        ds = _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
+        df = proc.dataset_para_tabela(ds, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
+        mapa = dict(zip(df['lead'], df['target_month']))
+        self.assertEqual(mapa[1], '2015-01')
+        self.assertEqual(mapa[2], '2015-02')
+        self.assertEqual(mapa[3], '2015-03')
+
+    def test_forecastMonth_e_step_valid_time_dao_o_mesmo_resultado(self):
+        """Os dois esquemas, com o mesmo init/leads, têm que produzir a
+        mesma tabela lead<->target_month — é a mesma convenção, só
+        codificada de formas diferentes pelo cfgrib."""
+        ds_a = _dataset_sintetico(init_dates=('2015-01-01',), leads=(1, 2, 3))
+        ds_b = _dataset_step_valid_time(init_date='2015-01-01', target_months=('2015-01', '2015-02', '2015-03'))
+        df_a = proc.dataset_para_tabela(ds_a, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
+        df_b = proc.dataset_para_tabela(ds_b, local='X', centre='ECMWF', system='SEAS5', lat=-6.0, lon=-48.0)
+        self.assertEqual(sorted(df_a['target_month'].unique()), sorted(df_b['target_month'].unique()))
+        self.assertEqual(set(zip(df_a['lead'], df_a['target_month'])),
+                          set(zip(df_b['lead'], df_b['target_month'])))
+
+    def test_step_sem_valid_time_falha_explicitamente(self):
+        ds = xr.Dataset(
+            {'tprate': (('time', 'step', 'number', 'latitude', 'longitude'),
+                        np.zeros((1, 3, 5, 2, 2)) + 1.5e-8)},
+            coords={'time': [pd.Timestamp('2015-01-01')], 'step': [1, 2, 3],
+                    'number': list(range(5)), 'latitude': [-6.0, -5.5], 'longitude': [-48.0, -47.5]},
+        )
+        with self.assertRaises(KeyError) as ctx:
+            proc.detectar_esquema_temporal(ds)
+        self.assertIn('valid_time', str(ctx.exception))
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Teste 5 — climatologia leakage-safe
 # ══════════════════════════════════════════════════════════════════════════
