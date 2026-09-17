@@ -1,0 +1,163 @@
+name: C3S Hindcast Completo São Bento
+
+# Fase 2A.3 — hindcast completo SEAS5 / São Bento do Tocantins, 1981-2016
+# (período homogêneo de hindcast, 25 membros — nunca misturar com
+# real-time forecast pós-2016, 51 membros, já barrado explicitamente em
+# scripts/c3s_hindcast_completo.py::validar_intervalo_hindcast). Avaliação
+# de SKILL (RAW/BC vs climatologia leakage-safe), não só teste de pipeline
+# — isso já foi feito e aprovado na Fase 2A.2.
+#
+# Mesmo padrão seguro dos workflows C3S anteriores: requer o secret de
+# repositório CDS_API_KEY, ~/.cdsapirc temporário nunca commitado/impresso,
+# só manual (nunca cron).
+#
+# GitHub Actions cache para data/c3s_cache/ NÃO está implementado nesta
+# primeira versão (Seção 8 da tarefa) — documentado, não implementado.
+# Cada execução baixa tudo de novo; não há resume automático entre
+# execuções independentes do workflow.
+#
+# IMPORTANTE: os resultados só são OFICIAIS da Fase 2A.3 com
+# start_year=1981/end_year=2016 completo, todos os 12 meses. Uma execução
+# parcial (para depuração) é aceita pelo script mas sinalizada como não
+# oficial no log/relatório.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: 'Ano inicial (1981-2016) — resultado só é oficial com 1981'
+        required: true
+        default: '1981'
+      end_year:
+        description: 'Ano final (1981-2016) — resultado só é oficial com 2016'
+        required: true
+        default: '2016'
+      init_months:
+        description: 'Meses de inicialização, separados por vírgula (default: todos os 12) — deixar vazio para oficial'
+        required: false
+        default: ''
+      dry_run_plan:
+        description: 'true = só mostra o plano de execução, não acessa o CDS'
+        required: true
+        default: 'false'
+      pilot:
+        description: 'true = roda só as 6 origens fixas do piloto (ignora start/end year e init_months)'
+        required: true
+        default: 'false'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c3s-hindcast-completo
+  cancel-in-progress: false
+
+jobs:
+  hindcast-completo:
+    name: C3S Hindcast Completo São Bento
+    runs-on: ubuntu-latest
+    # Job substancialmente maior que a POC/validação multi-origem
+    # (até 432 downloads reais) — timeout generoso; se não couber,
+    # preferir dividir em blocos via --start-year/--end-year/--init-months
+    # (várias execuções manuais) a um workflow monolítico frágil.
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verificar secret CDS_API_KEY presente
+        env:
+          CDS_KEY_PRESENTE: ${{ secrets.CDS_API_KEY != '' }}
+        run: |
+          if [ "$CDS_KEY_PRESENTE" != "true" ]; then
+            echo "::error::O secret CDS_API_KEY não está configurado neste repositório."
+            {
+              echo "## ❌ Secret ausente"
+              echo ""
+              echo "Configure o secret **CDS_API_KEY** em Settings → Secrets and variables →"
+              echo "Actions → New repository secret, com o Personal Access Token da sua conta"
+              echo "CDS (https://cds.climate.copernicus.eu). Veja \`docs/c3s-poc.md\` para o"
+              echo "passo a passo completo."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Secret CDS_API_KEY está definido (conteúdo nunca exibido neste log)."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      - name: Mostrar plano de execução (dry-run, nunca acessa o CDS)
+        run: |
+          python scripts/c3s_hindcast_completo.py \
+            --start-year "${{ inputs.start_year }}" \
+            --end-year "${{ inputs.end_year }}" \
+            ${{ inputs.init_months != '' && format('--init-months {0}', inputs.init_months) || '' }} \
+            --dry-run-plan
+
+      - name: Criar ~/.cdsapirc (temporário, nunca commitado)
+        if: inputs.dry_run_plan != 'true'
+        env:
+          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' "$CDS_API_KEY" > "$HOME/.cdsapirc"
+          chmod 600 "$HOME/.cdsapirc"
+          echo "~/.cdsapirc criado (permissão 600, conteúdo nunca exibido)."
+
+      # Sai com código != 0 se a auditoria de leakage reprovar (ver
+      # c3s_hindcast_completo.py::main()) — os passos seguintes usam
+      # if: always() de propósito para rodar mesmo assim.
+      - name: Rodar hindcast completo C3S (pode ser piloto, parcial ou oficial)
+        if: inputs.dry_run_plan != 'true'
+        run: |
+          if [ "${{ inputs.pilot }}" = "true" ]; then
+            python scripts/c3s_hindcast_completo.py --pilot
+          else
+            python scripts/c3s_hindcast_completo.py \
+              --start-year "${{ inputs.start_year }}" \
+              --end-year "${{ inputs.end_year }}" \
+              ${{ inputs.init_months != '' && format('--init-months {0}', inputs.init_months) || '' }}
+          fi
+
+      - name: Remover credencial
+        if: always()
+        run: rm -f "$HOME/.cdsapirc"
+
+      - name: Publicar artifacts (CSVs/JSON/relatório — nunca GRIB/NetCDF)
+        if: always() && inputs.dry_run_plan != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: c3s-hindcast-completo
+          path: |
+            artifacts/c3s_hindcast/c3s_hindcast_raw.csv
+            artifacts/c3s_hindcast/c3s_hindcast_summary.csv
+            artifacts/c3s_hindcast/chirps_sao_bento_1981_2016.csv
+            artifacts/c3s_hindcast/c3s_hindcast_calibrated.csv
+            artifacts/c3s_hindcast/skill_deterministic_overall.csv
+            artifacts/c3s_hindcast/skill_deterministic_by_lead.csv
+            artifacts/c3s_hindcast/skill_deterministic_by_month.csv
+            artifacts/c3s_hindcast/skill_deterministic_by_month_lead.csv
+            artifacts/c3s_hindcast/skill_operational_seasons.csv
+            artifacts/c3s_hindcast/skill_probabilistic_overall.csv
+            artifacts/c3s_hindcast/skill_probabilistic_by_lead.csv
+            artifacts/c3s_hindcast/bootstrap_skill.csv
+            artifacts/c3s_hindcast/temporal_audit.csv
+            artifacts/c3s_hindcast/leakage_audit.csv
+            artifacts/c3s_hindcast/metadata.json
+            artifacts/c3s_hindcast/RELATORIO.md
+          retention-days: 30
+          if-no-files-found: warn
