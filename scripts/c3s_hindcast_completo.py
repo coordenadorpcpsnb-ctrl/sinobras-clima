@@ -111,6 +111,17 @@ SEED_BOOTSTRAP = 42
 # Seção 37 — pilot fixo, 6 origens (2 por década: 1991/2000/2010, jan e jul).
 PILOT_ORIGENS = [(1991, 1), (1991, 7), (2000, 1), (2000, 7), (2010, 1), (2010, 7)]
 
+# Correção pós-pilot real (run 35257900850): buscar CHIRPS 1981-2016
+# inteiro numa única chamada ao ClimateSERV estourou o serviço ("Error
+# occurred while processing data request" / resposta vazia). Buscar em
+# blocos ANUAIS (36 blocos) — simples, auditável, menor risco de
+# timeout, fácil retry, isola o ano problemático. Nunca mensal por
+# padrão (seriam 432 requests desnecessárias).
+CHIRPS_BLOCOS_DIR = ARTIFACTS_DIR / '_chirps_blocos'
+CHIRPS_CHECKPOINT_PATH = ARTIFACTS_DIR / 'chirps_checkpoint.json'
+CHIRPS_MAX_TENTATIVAS = 3
+CHIRPS_ESPERAS_RETRY_SEGUNDOS = [5, 15, 30]
+
 ARTIFACT_FILENAMES = [
     'c3s_hindcast_raw.csv', 'c3s_hindcast_summary.csv', 'chirps_sao_bento_1981_2016.csv',
     'c3s_hindcast_calibrated.csv', 'skill_deterministic_overall.csv', 'skill_deterministic_by_lead.csv',
@@ -250,43 +261,163 @@ def _com_periods(df, colunas=('init_date', 'target_month')):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# CHIRPS consolidado 1981-2016 — uma única chamada (Seção 9), mesmo
-# núcleo de _chirps.py (_geometria_ponto/_buscar_prec_chirps_geom) e o
-# mesmo intervalo mensal corrigido de _c3s_utils.py
-# (intervalo_mensal_chirps). Nunca cai para ERA5/CHC-Preliminar/
-# Open-Meteo — falha explícita se CHIRPS não cobrir o período inteiro.
+# CHIRPS consolidado 1981-2016 — em BLOCOS ANUAIS (correção pós-pilot
+# real: uma única chamada de 36 anos estourou o ClimateSERV — run
+# 35257900850, "Error occurred while processing data request" seguido
+# de resposta vazia). Mesmo núcleo de _chirps.py
+# (_geometria_ponto/_buscar_prec_chirps_geom) e o mesmo intervalo
+# mensal corrigido de _c3s_utils.py (intervalo_mensal_chirps). Nunca
+# cai para ERA5/CHC-Preliminar/Open-Meteo — falha explícita, com
+# retry, se um ano não estiver disponível.
 # ══════════════════════════════════════════════════════════════════════════
 
-def buscar_chirps_consolidado(ano_ini=ANO_INICIO_HINDCAST, mes_ini=1, ano_fim=ANO_FIM_HINDCAST, mes_fim=12):
+def _buscar_chirps_ano(ano, sleep_fn=time.sleep):
+    """Busca CHIRPS municipal de UM ano (jan->dez), com retry
+    controlado (máx. CHIRPS_MAX_TENTATIVAS, backoff progressivo).
+    Levanta RuntimeError explícito se esgotar as tentativas — nunca
+    continua silenciosamente com NaN nem troca de fonte."""
     info = MUNICIPIOS[MUNICIPIO]
     geom = _geometria_ponto(info['lat'], info['lon'])
-    ini, fim = intervalo_mensal_chirps(ano_ini, mes_ini, ano_fim, mes_fim)
-    df = _buscar_prec_chirps_geom(ini, fim, geom, rotulo=MUNICIPIO)
-    if df.empty:
-        raise RuntimeError("CHIRPS indisponível para o período do hindcast completo — FALHANDO "
-                            "(Seção 9: nunca cair para ERA5/CHC-Preliminar/Open-Meteo aqui).")
-    df = df.copy()
-    df['target_month'] = pd.PeriodIndex(pd.to_datetime(dict(year=df.ano, month=df.mes, day=1)), freq='M')
-    df = df.rename(columns={'prec': 'chirps_prec_mm'})
-    df['source'] = 'CHIRPS'
+    ini, fim = intervalo_mensal_chirps(ano, 1, ano, 12)
 
-    esperado = pd.period_range(f'{ano_ini}-{mes_ini:02d}', f'{ano_fim}-{mes_fim:02d}', freq='M')
+    df = pd.DataFrame()
+    ultimo_erro = None
+    for tentativa in range(1, CHIRPS_MAX_TENTATIVAS + 1):
+        try:
+            df = _buscar_prec_chirps_geom(ini, fim, geom, rotulo=f'{MUNICIPIO}-{ano}')
+        except Exception as e:
+            df = pd.DataFrame()
+            ultimo_erro = e
+        if not df.empty:
+            break
+        if ultimo_erro is None:
+            ultimo_erro = RuntimeError('resposta vazia ou sem dados')
+        if tentativa < CHIRPS_MAX_TENTATIVAS:
+            espera = CHIRPS_ESPERAS_RETRY_SEGUNDOS[min(tentativa - 1, len(CHIRPS_ESPERAS_RETRY_SEGUNDOS) - 1)]
+            print(f"    ⚠ CHIRPS {ano}: tentativa {tentativa}/{CHIRPS_MAX_TENTATIVAS} falhou "
+                  f"({ultimo_erro}); aguardando {espera}s…")
+            sleep_fn(espera)
+
+    if df.empty:
+        raise RuntimeError(f"CHIRPS falhou para o ano {ano} após {CHIRPS_MAX_TENTATIVAS} tentativas "
+                            f"— último erro: {ultimo_erro} — FALHANDO (nunca ERA5/CHC-Preliminar/"
+                            f"Open-Meteo como fallback).")
+    return df
+
+
+def _validar_bloco_chirps(df, ano):
+    """Valida um bloco anual: 12 meses (jan-dez), 1 valor cada, sem
+    duplicado/NaN/negativo. Ano incompleto ou inconsistente falha
+    explicitamente — nunca completa com fallback."""
+    d = df.copy()
+    d['target_month'] = pd.PeriodIndex(pd.to_datetime(dict(year=d.ano, month=d.mes, day=1)), freq='M')
+    d = d.rename(columns={'prec': 'chirps_prec_mm'})
+
+    esperado = pd.period_range(f'{ano}-01', f'{ano}-12', freq='M')
+    faltando = [str(m) for m in esperado if m not in set(d['target_month'])]
+    if faltando:
+        raise RuntimeError(f"CHIRPS do ano {ano} incompleto — faltando {faltando} — FALHANDO.")
+    if d['target_month'].duplicated().any():
+        dups = [str(v) for v in d.loc[d['target_month'].duplicated(), 'target_month']]
+        raise RuntimeError(f"CHIRPS do ano {ano} tem mês(es) duplicado(s): {dups} — FALHANDO.")
+    if d['chirps_prec_mm'].isna().any():
+        raise RuntimeError(f"CHIRPS do ano {ano} tem valor(es) NaN — FALHANDO.")
+    if (d['chirps_prec_mm'] < 0).any():
+        raise RuntimeError(f"CHIRPS do ano {ano} tem precipitação negativa — FALHANDO.")
+
+    d['source'] = 'CHIRPS'
+    d['year'] = d['target_month'].apply(lambda p: p.year)
+    d['month'] = d['target_month'].apply(lambda p: p.month)
+    return d[['year', 'month', 'target_month', 'chirps_prec_mm', 'source']] \
+        .sort_values('target_month').reset_index(drop=True)
+
+
+def _validar_consolidado_final(df, ano_ini, ano_fim):
+    """Validação final (Seção 7): 36x12=432 meses, sem duplicado/lacuna/
+    NaN/negativo, sequência exatamente contínua de {ano_ini}-01 a
+    {ano_fim}-12."""
+    esperado = list(pd.period_range(f'{ano_ini}-01', f'{ano_fim}-12', freq='M'))
+    if len(df) != len(esperado):
+        raise RuntimeError(f"CHIRPS consolidado tem {len(df)} meses, esperado {len(esperado)} "
+                            f"({ano_ini}-{ano_fim}) — FALHANDO.")
     faltando = [str(m) for m in esperado if m not in set(df['target_month'])]
     if faltando:
-        raise RuntimeError(f"CHIRPS não cobre {len(faltando)} mês(es) do período: "
+        raise RuntimeError(f"CHIRPS consolidado não cobre {len(faltando)} mês(es): "
                             f"{faltando[:5]}{'...' if len(faltando) > 5 else ''} — FALHANDO.")
     if df['target_month'].duplicated().any():
         dups = [str(v) for v in df.loc[df['target_month'].duplicated(), 'target_month']]
-        raise RuntimeError(f"CHIRPS tem mês(es) duplicado(s): {dups} — FALHANDO.")
+        raise RuntimeError(f"CHIRPS consolidado tem mês(es) duplicado(s): {dups} — FALHANDO.")
     if df['chirps_prec_mm'].isna().any():
-        raise RuntimeError("CHIRPS tem valor(es) NaN — FALHANDO.")
+        raise RuntimeError("CHIRPS consolidado tem valor(es) NaN — FALHANDO.")
     if (df['chirps_prec_mm'] < 0).any():
-        raise RuntimeError("CHIRPS tem precipitação negativa — FALHANDO.")
+        raise RuntimeError("CHIRPS consolidado tem precipitação negativa — FALHANDO.")
+    if sorted(df['target_month']) != esperado:
+        raise RuntimeError(f"CHIRPS consolidado não é uma sequência contínua de {ano_ini}-01 a "
+                            f"{ano_fim}-12 — FALHANDO.")
 
-    df['year'] = df['target_month'].apply(lambda p: p.year)
-    df['month'] = df['target_month'].apply(lambda p: p.month)
-    return df[['year', 'month', 'target_month', 'chirps_prec_mm', 'source']] \
-        .sort_values('target_month').reset_index(drop=True)
+
+def _chirps_checkpoint_vazio():
+    return {'anos_concluidos': [], 'anos_falhados': {}}
+
+
+def _carregar_chirps_checkpoint(caminho=None):
+    caminho = caminho or CHIRPS_CHECKPOINT_PATH
+    if caminho.exists():
+        return json.loads(caminho.read_text())
+    return _chirps_checkpoint_vazio()
+
+
+def _salvar_chirps_checkpoint(estado, caminho=None):
+    caminho = caminho or CHIRPS_CHECKPOINT_PATH
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    caminho.write_text(json.dumps(estado, indent=2, ensure_ascii=False))
+
+
+def _salvar_bloco_chirps(df_ano, ano, diretorio=None):
+    diretorio = diretorio or CHIRPS_BLOCOS_DIR
+    diretorio.mkdir(parents=True, exist_ok=True)
+    df_ano.to_csv(diretorio / f'chirps_{ano}.csv', index=False)
+
+
+def buscar_chirps_consolidado(ano_ini=ANO_INICIO_HINDCAST, ano_fim=ANO_FIM_HINDCAST, sleep_fn=time.sleep):
+    """Busca CHIRPS municipal (São Bento) ANO A ANO — nunca o período
+    inteiro numa request só (Seção 4 da correção). Cada ano: retry
+    controlado, validação individual, cache local em
+    artifacts/c3s_hindcast/_chirps_blocos/ e checkpoint local (Seção
+    9/10 — só protege dentro do MESMO processo/filesystem, não há
+    resume automático entre execuções independentes do workflow).
+    Concatena os blocos e valida o consolidado (36x12=432 meses,
+    contínuo, sem NaN/negativo/duplicado) antes de devolver."""
+    estado = _carregar_chirps_checkpoint()
+    blocos = []
+    for ano in range(ano_ini, ano_fim + 1):
+        caminho_bloco = CHIRPS_BLOCOS_DIR / f'chirps_{ano}.csv'
+        if ano in estado['anos_concluidos'] and caminho_bloco.exists():
+            print(f"  [{ano}] CHIRPS já concluído (checkpoint) — reaproveitando")
+            blocos.append(pd.read_csv(caminho_bloco))
+            continue
+
+        print(f"  buscando CHIRPS {ano}…")
+        try:
+            df_bruto = _buscar_chirps_ano(ano, sleep_fn=sleep_fn)
+            df_validado = _validar_bloco_chirps(df_bruto, ano)
+        except Exception as e:
+            estado['anos_falhados'][str(ano)] = str(e)
+            _salvar_chirps_checkpoint(estado)
+            raise
+
+        _salvar_bloco_chirps(df_validado, ano)
+        estado['anos_concluidos'].append(ano)
+        estado['anos_falhados'].pop(str(ano), None)
+        _salvar_chirps_checkpoint(estado)
+        blocos.append(df_validado)
+        print(f"  ✅ CHIRPS {ano}: 12 meses válidos")
+
+    consolidado = pd.concat(blocos, ignore_index=True)
+    consolidado['target_month'] = consolidado['target_month'].apply(
+        lambda s: s if isinstance(s, pd.Period) else pd.Period(s, 'M'))
+    _validar_consolidado_final(consolidado, ano_ini, ano_fim)
+    return consolidado.sort_values('target_month').reset_index(drop=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -589,8 +720,8 @@ def rodar(origens, pilot=False, sleep_fn=time.sleep):
     raw_df_str = pd.concat(raws, ignore_index=True) if raws else pd.DataFrame()
     raw_df = _com_periods(raw_df_str) if not raw_df_str.empty else raw_df_str
 
-    print("\n=== buscando CHIRPS consolidado 1981-2016 ===")
-    chirps_df = buscar_chirps_consolidado(ANO_INICIO_HINDCAST, 1, ANO_FIM_HINDCAST, 12)
+    print("\n=== buscando CHIRPS consolidado 1981-2016 (em blocos anuais) ===")
+    chirps_df = buscar_chirps_consolidado(ANO_INICIO_HINDCAST, ANO_FIM_HINDCAST, sleep_fn=sleep_fn)
     print(f"  ✅ CHIRPS: {len(chirps_df)} meses válidos")
 
     if raw_df.empty:
