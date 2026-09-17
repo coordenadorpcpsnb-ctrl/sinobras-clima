@@ -386,48 +386,235 @@ class ConfirmacaoNaoInfluenciaDesenvolvimentoTestCase(unittest.TestCase):
 # CHIRPS consolidado — nunca cai para ERA5/CHC-Preliminar/Open-Meteo
 # ══════════════════════════════════════════════════════════════════════════
 
-class ChirpsConsolidadoTestCase(unittest.TestCase):
+def _ano_de_ini(ini):
+    """ini no formato MM/DD/AAAA (o que intervalo_mensal_chirps produz)."""
+    return int(ini.split('/')[-1])
 
-    def test_nao_referencia_fallback_openmeteo(self):
+
+def _fake_ano_completo(ano, valor_base=100.0):
+    return pd.DataFrame({'ano': [ano] * 12, 'mes': list(range(1, 13)),
+                          'prec': [valor_base + m for m in range(1, 13)], 'fonte': ['CHIRPS'] * 12})
+
+
+class ChirpsConsolidadoTestCase(unittest.TestCase):
+    """Correção pós-pilot real (run 35257900850): buscar 1981-2016
+    numa request só estourou o ClimateSERV. Agora em blocos anuais —
+    ver Seção 12 (itens A-M) e Seção 13 (regressão) da tarefa."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        tmp_path = Path(self._tmp.name)
+        self._patches = [
+            mock.patch.object(h, 'ARTIFACTS_DIR', tmp_path),
+            mock.patch.object(h, 'CHIRPS_BLOCOS_DIR', tmp_path / '_chirps_blocos'),
+            mock.patch.object(h, 'CHIRPS_CHECKPOINT_PATH', tmp_path / 'chirps_checkpoint.json'),
+        ]
+        for p in self._patches:
+            p.start()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(lambda: [p.stop() for p in self._patches])
+
+    # L — nunca referencia fallback ERA5/CHC-Preliminar/Open-Meteo
+    def test_l_nao_referencia_fallback_openmeteo(self):
         src = Path(h.__file__).read_text(encoding='utf-8')
         self.assertNotIn('_openmeteo', src)
         self.assertNotIn('buscar_prec_openmeteo', src)
+        self.assertNotIn('chc_preliminar', src.lower())
 
-    def test_falha_se_mes_faltando(self):
-        df_incompleto = pd.DataFrame({
-            'ano': [1981], 'mes': [1], 'prec': [100.0], 'fonte': ['CHIRPS'],
-        })
-        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=df_incompleto):
-            with self.assertRaises(RuntimeError) as e:
-                h.buscar_chirps_consolidado(1981, 1, 1981, 3)
-        self.assertIn('não cobre', str(e.exception).lower())
+    # M — CHIRPS continua sendo municipal/ponto de São Bento (não zonal/envelope)
+    def test_m_usa_ponto_municipal_sao_bento(self):
+        chamadas = []
 
-    def test_falha_se_vazio(self):
-        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=pd.DataFrame()):
-            with self.assertRaises(RuntimeError) as e:
-                h.buscar_chirps_consolidado(1981, 1, 1981, 1)
-        self.assertIn('indisponível', str(e.exception).lower())
+        def _espiao(ini, fim, geom, rotulo=''):
+            chamadas.append(geom)
+            return _fake_ano_completo(_ano_de_ini(ini))
 
-    def test_falha_se_nan(self):
-        df = pd.DataFrame({'ano': [1981], 'mes': [1], 'prec': [float('nan')], 'fonte': ['CHIRPS']})
-        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=df):
-            with self.assertRaises(RuntimeError) as e:
-                h.buscar_chirps_consolidado(1981, 1, 1981, 1)
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            h.buscar_chirps_consolidado(1981, 1981, sleep_fn=lambda s: None)
+        info = h.MUNICIPIOS[h.MUNICIPIO]
+        geom_esperado = h._geometria_ponto(info['lat'], info['lon'])
+        self.assertEqual(chamadas[0], geom_esperado)
+
+    # A — 1981-2016 gera exatamente 36 blocos anuais
+    def test_a_36_blocos_anuais(self):
+        with mock.patch.object(h, '_buscar_prec_chirps_geom',
+                                side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
+                                    _ano_de_ini(ini))) as m:
+            h.buscar_chirps_consolidado(1981, 2016, sleep_fn=lambda s: None)
+        self.assertEqual(m.call_count, 36)
+
+    # B — cada bloco pede jan->dez do mesmo ano
+    def test_b_bloco_pede_jan_a_dez_do_mesmo_ano(self):
+        capturado = {}
+
+        def _espiao(ini, fim, geom, rotulo=''):
+            capturado[_ano_de_ini(ini)] = (ini, fim)
+            return _fake_ano_completo(_ano_de_ini(ini))
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            h.buscar_chirps_consolidado(1995, 1995, sleep_fn=lambda s: None)
+        ini, fim = capturado[1995]
+        self.assertEqual(ini, '01/01/1995')
+        self.assertEqual(fim, '12/31/1995')
+
+    # C — ano bissexto é tratado corretamente (o bloco sempre vai até 31/12,
+    # então fevereiro — bissexto ou não — cai inteiro dentro do intervalo)
+    def test_c_ano_bissexto_intervalo_ate_31_12(self):
+        capturado = {}
+
+        def _espiao(ini, fim, geom, rotulo=''):
+            capturado[_ano_de_ini(ini)] = (ini, fim)
+            return _fake_ano_completo(_ano_de_ini(ini))
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            h.buscar_chirps_consolidado(2016, 2016, sleep_fn=lambda s: None)   # 2016 é bissexto
+        ini, fim = capturado[2016]
+        self.assertEqual(ini, '01/01/2016')
+        self.assertEqual(fim, '12/31/2016')
+        # a função de baixo nível já testada (test_c3s.py) usa monthrange —
+        # confirmamos aqui só que fevereiro bissexto is not special-cased
+        # incorretamente num intervalo mensal isolado
+        _, fim_fev = cu.intervalo_mensal_chirps(2016, 2, 2016, 2)
+        self.assertEqual(fim_fev, '02/29/2016')
+
+    # D — bloco com 11 meses falha
+    def test_d_bloco_com_11_meses_falha(self):
+        df = _fake_ano_completo(1990).iloc[:-1]   # remove dezembro
+        with self.assertRaises(RuntimeError) as e:
+            h._validar_bloco_chirps(df, 1990)
+        self.assertIn('incompleto', str(e.exception).lower())
+
+    # E — bloco com mês duplicado falha
+    def test_e_bloco_com_mes_duplicado_falha(self):
+        df = pd.concat([_fake_ano_completo(1990), _fake_ano_completo(1990).iloc[[0]]], ignore_index=True)
+        with self.assertRaises(RuntimeError) as e:
+            h._validar_bloco_chirps(df, 1990)
+        self.assertIn('duplicado', str(e.exception).lower())
+
+    # F — bloco com NaN falha
+    def test_f_bloco_com_nan_falha(self):
+        df = _fake_ano_completo(1990)
+        df.loc[0, 'prec'] = float('nan')
+        with self.assertRaises(RuntimeError) as e:
+            h._validar_bloco_chirps(df, 1990)
         self.assertIn('nan', str(e.exception).lower())
 
-    def test_falha_se_negativo(self):
-        df = pd.DataFrame({'ano': [1981], 'mes': [1], 'prec': [-5.0], 'fonte': ['CHIRPS']})
-        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=df):
-            with self.assertRaises(RuntimeError) as e:
-                h.buscar_chirps_consolidado(1981, 1, 1981, 1)
+    # G — bloco com valor negativo falha
+    def test_g_bloco_com_negativo_falha(self):
+        df = _fake_ano_completo(1990)
+        df.loc[0, 'prec'] = -1.0
+        with self.assertRaises(RuntimeError) as e:
+            h._validar_bloco_chirps(df, 1990)
         self.assertIn('negativa', str(e.exception).lower())
 
-    def test_sucesso_com_periodo_completo(self):
-        df = pd.DataFrame({'ano': [1981, 1981], 'mes': [1, 2], 'prec': [100.0, 120.0], 'fonte': ['CHIRPS'] * 2})
-        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=df):
-            r = h.buscar_chirps_consolidado(1981, 1, 1981, 2)
-        self.assertEqual(len(r), 2)
-        self.assertIn('chirps_prec_mm', r.columns)
+    # H — retry chega no máximo a 3 tentativas
+    def test_h_retry_no_maximo_3_tentativas(self):
+        sleeps = []
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=pd.DataFrame()) as m:
+            with self.assertRaises(RuntimeError):
+                h._buscar_chirps_ano(1990, sleep_fn=lambda s: sleeps.append(s))
+        self.assertEqual(m.call_count, h.CHIRPS_MAX_TENTATIVAS)
+        self.assertEqual(len(sleeps), h.CHIRPS_MAX_TENTATIVAS - 1)
+        self.assertEqual(sleeps, [5, 15])
+
+    def test_h_retry_sucesso_apos_falhas(self):
+        respostas = [pd.DataFrame(), pd.DataFrame(), _fake_ano_completo(1990)]
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=respostas):
+            df = h._buscar_chirps_ano(1990, sleep_fn=lambda s: None)
+        self.assertEqual(len(df), 12)
+
+    # I — falha em um ano informa explicitamente o ano
+    def test_i_falha_informa_o_ano_explicitamente(self):
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', return_value=pd.DataFrame()):
+            with self.assertRaises(RuntimeError) as e:
+                h._buscar_chirps_ano(1999, sleep_fn=lambda s: None)
+        self.assertIn('1999', str(e.exception))
+
+    def test_i_falha_de_um_ano_e_registrada_no_checkpoint(self):
+        def _espiao(ini, fim, geom, rotulo=''):
+            ano = _ano_de_ini(ini)
+            if ano == 1983:
+                return pd.DataFrame()
+            return _fake_ano_completo(ano)
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            with self.assertRaises(RuntimeError) as e:
+                h.buscar_chirps_consolidado(1981, 1985, sleep_fn=lambda s: None)
+        self.assertIn('1983', str(e.exception))
+        estado = h._carregar_chirps_checkpoint()
+        self.assertIn('1983', estado['anos_falhados'])
+        self.assertEqual(estado['anos_concluidos'], [1981, 1982])
+
+    # J — 36 blocos válidos geram 432 meses
+    def test_j_36_blocos_geram_432_meses(self):
+        with mock.patch.object(h, '_buscar_prec_chirps_geom',
+                                side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
+                                    _ano_de_ini(ini))):
+            df = h.buscar_chirps_consolidado(1981, 2016, sleep_fn=lambda s: None)
+        self.assertEqual(len(df), 432)
+
+    # K — sequência final é contínua de 1981-01 a 2016-12
+    def test_k_sequencia_final_continua(self):
+        with mock.patch.object(h, '_buscar_prec_chirps_geom',
+                                side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
+                                    _ano_de_ini(ini))):
+            df = h.buscar_chirps_consolidado(1981, 2016, sleep_fn=lambda s: None)
+        esperado = list(pd.period_range('1981-01', '2016-12', freq='M'))
+        self.assertEqual(list(df['target_month']), esperado)
+
+    def test_validacao_final_detecta_lacuna(self):
+        df = _fake_ano_completo(1981)
+        df['target_month'] = pd.PeriodIndex(pd.to_datetime(dict(year=df.ano, month=df.mes, day=1)), freq='M')
+        df = df.rename(columns={'prec': 'chirps_prec_mm'})
+        with self.assertRaises(RuntimeError) as e:
+            h._validar_consolidado_final(df, 1981, 1982)   # só 1981 processado, falta 1982
+        self.assertIn('esperado', str(e.exception).lower())
+
+    # cache local dos blocos + checkpoint — dentro do mesmo processo
+    def test_bloco_e_salvo_localmente_por_ano(self):
+        with mock.patch.object(h, '_buscar_prec_chirps_geom',
+                                side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
+                                    _ano_de_ini(ini))):
+            h.buscar_chirps_consolidado(1981, 1983, sleep_fn=lambda s: None)
+        salvos = sorted(p.name for p in h.CHIRPS_BLOCOS_DIR.glob('*.csv'))
+        self.assertEqual(salvos, ['chirps_1981.csv', 'chirps_1982.csv', 'chirps_1983.csv'])
+
+    def test_ano_ja_concluido_no_checkpoint_nao_e_rebuscado(self):
+        chamados = []
+
+        def _espiao(ini, fim, geom, rotulo=''):
+            ano = _ano_de_ini(ini)
+            chamados.append(ano)
+            return _fake_ano_completo(ano)
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            h.buscar_chirps_consolidado(1981, 1983, sleep_fn=lambda s: None)   # 1ª vez: busca tudo
+            chamados.clear()
+            df2 = h.buscar_chirps_consolidado(1981, 1983, sleep_fn=lambda s: None)   # 2ª vez: tudo em cache
+        self.assertEqual(chamados, [])
+        self.assertEqual(len(df2), 36)
+
+    # Seção 13 — regressão direta do bug real: uma request para o
+    # período inteiro (36 anos) falha (reproduz o ClimateSERV real);
+    # blocos anuais continuam funcionando.
+    def test_regressao_request_unica_36_anos_falha_blocos_anuais_funcionam(self):
+        def _simula_climateserv_real(ini, fim, geom, rotulo=''):
+            from datetime import datetime
+            dias = (datetime.strptime(fim, '%m/%d/%Y') - datetime.strptime(ini, '%m/%d/%Y')).days
+            if dias > 400:   # request multi-anual — exatamente o que quebrou na execução real
+                return pd.DataFrame()   # "resposta vazia ou sem dados"
+            return _fake_ano_completo(_ano_de_ini(ini))
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_simula_climateserv_real):
+            # a implementação ANTIGA (uma request para o período inteiro) teria falhado:
+            ini_completo, fim_completo = cu.intervalo_mensal_chirps(1981, 1, 2016, 12)
+            resposta_request_unica = h._buscar_prec_chirps_geom(ini_completo, fim_completo, None)
+            self.assertTrue(resposta_request_unica.empty, "pré-condição: request de 36 anos deve falhar")
+
+            # a implementação NOVA (blocos anuais) funciona sob a mesma condição
+            df = h.buscar_chirps_consolidado(1981, 1985, sleep_fn=lambda s: None)
+        self.assertEqual(len(df), 60)
+        self.assertFalse(df['chirps_prec_mm'].isna().any())
 
 
 # ══════════════════════════════════════════════════════════════════════════
