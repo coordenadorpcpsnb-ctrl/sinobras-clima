@@ -30,7 +30,7 @@ import c3s_catalogo as cat  # noqa: E402
 import c3s_download as dl  # noqa: E402
 import c3s_processar as proc  # noqa: E402
 import c3s_hindcast as hc  # noqa: E402
-from _c3s_utils import MUNICIPIOS, leadtime_para_mes_alvo, mes_alvo_para_leadtime, tprate_para_mm  # noqa: E402
+from _c3s_utils import MUNICIPIOS, leadtime_para_mes_alvo, tprate_para_mm  # noqa: E402
 from _chirps import _geometria_ponto, _buscar_prec_chirps_geom  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
@@ -112,9 +112,16 @@ def abrir_e_validar_grib(caminho, leads_esperados):
     nunca adapta silenciosamente. Aceita os dois esquemas temporais
     observados (Seção 5): forecastMonth/leadtime_month prontos, OU
     step+valid_time (o que o arquivo REAL do CDS mostrou — 3ª execução,
-    request cd5eba24-a49a-4ee7-ae56-9240aab18516) — nesse caso o lead
-    nunca é lido do valor bruto de `step`, só reconstruído via
-    valid_time (ver c3s_processar.py::detectar_esquema_temporal)."""
+    request cd5eba24-a49a-4ee7-ae56-9240aab18516).
+
+    Para o esquema step+valid_time, a 4ª execução real provou que
+    reconstruir o lead a partir de `Period(valid_time,'M')` introduz um
+    deslocamento de +1 mês (valid_time é o LIMITE FINAL do período de
+    média mensal, não o mês em si — ver docstring de c3s_processar.py).
+    Por isso lead/target_month vêm da fonte autoritativa
+    `proc.extrair_mapeamento_temporal_grib()`, que lê `fcmonth`/
+    `verifyingMonth` diretamente do GRIB via eccodes, percorrendo o
+    arquivo inteiro (não só as primeiras mensagens)."""
     import xarray as xr
     # engine por extensão: cfgrib para GRIB real (download do CDS),
     # padrão do xarray para .nc — usado só nos testes offline, que
@@ -127,7 +134,6 @@ def abrir_e_validar_grib(caminho, leads_esperados):
     # Seção 1 — diagnóstico ANTES de qualquer validação estrita, para
     # deixar rastro suficiente no log mesmo se algo mais falhar depois.
     diag_info = proc.diagnostico_dataset(ds)
-    proc.cross_check_eccodes(caminho)   # Seção 6 — opcional, nunca lança
 
     if 'tprate' not in ds.data_vars:
         raise RuntimeError(f"variável 'tprate' ausente no arquivo real — variáveis presentes: "
@@ -143,14 +149,17 @@ def abrir_e_validar_grib(caminho, leads_esperados):
     init_val = ds['time'].values[0] if ('time' in ds.dims and ds.sizes['time'] > 0) else ds['time'].values
     init_date = pd.Period(pd.Timestamp(init_val), 'M')
 
+    mapeamento_step_fcmonth = None
     if esquema == proc.ESQUEMA_LEAD_PRONTO:
         leads_no_arquivo = sorted(int(v) for v in np.atleast_1d(ds[nome_dim].values))
         mapa_lead_alvo = {L: str(leadtime_para_mes_alvo(init_date, L)) for L in leads_no_arquivo}
     else:
-        vt = ds['valid_time']
-        vt_vals = vt.isel(time=0).values if ('time' in vt.dims) else vt.values
-        alvos = sorted(set(pd.Period(pd.Timestamp(v), 'M') for v in np.atleast_1d(vt_vals)))
-        mapa_lead_alvo = {mes_alvo_para_leadtime(init_date, a): str(a) for a in alvos}
+        # Fonte autoritativa (Seção 3/7 da correção): fcmonth/verifyingMonth
+        # via eccodes, arquivo inteiro, nunca valid_time nem step bruto.
+        mapeamento_step_fcmonth = proc.extrair_mapeamento_temporal_grib(
+            caminho, init_date, leads_esperados=leads_esperados)
+        mapa_lead_alvo = {entrada['lead']: str(entrada['target_month'])
+                           for entrada in mapeamento_step_fcmonth.values()}
         leads_no_arquivo = sorted(mapa_lead_alvo)
 
     if leads_no_arquivo != sorted(leads_esperados):
@@ -168,8 +177,8 @@ def abrir_e_validar_grib(caminho, leads_esperados):
 
     print(f"  validado: esquema={esquema} variável=tprate unidade={unidade!r} leads={leads_no_arquivo} "
           f"membros={ds.sizes['number']} lat={ds.sizes['latitude']} lon={ds.sizes['longitude']}")
-    print(f"  mapeamento lead -> target_month: {mapa_lead_alvo}")
-    return ds, unidade, esquema, mapa_lead_alvo, diag_info
+    print(f"  mapeamento lead -> target_month (verifyingMonth): {mapa_lead_alvo}")
+    return ds, unidade, esquema, mapa_lead_alvo, diag_info, mapeamento_step_fcmonth
 
 
 def buscar_chirps_target_months(municipio_chave, target_months):
@@ -227,7 +236,7 @@ def rodar(municipio_arg, init_year, init_month, leads, forcar_download=False):
     caminho = dl.baixar('seasonal-monthly-single-levels', request, extensao='grib', forcar=forcar_download)
     print(f"  arquivo: {caminho}")
 
-    ds, unidade, esquema, mapa_lead_alvo, diag_info = abrir_e_validar_grib(caminho, leads)
+    ds, unidade, esquema, mapa_lead_alvo, diag_info, mapeamento_step_fcmonth = abrir_e_validar_grib(caminho, leads)
 
     ponto = proc.extrair_ponto(ds, lat, lon)
     lat_grade = float(ponto['latitude'])
@@ -235,7 +244,8 @@ def rodar(municipio_arg, init_year, init_month, leads, forcar_download=False):
     dist_km = distancia_km_aprox(lat, lon, lat_grade, lon_grade)
     print(f"  ponto pedido=({lat},{lon})  ponto de grade=({lat_grade},{lon_grade})  dist~{dist_km:.1f}km")
 
-    tabela = proc.dataset_para_tabela(ponto, local=municipio_chave, centre=centro, system=sistema)
+    tabela = proc.dataset_para_tabela(ponto, local=municipio_chave, centre=centro, system=sistema,
+                                       mapeamento_step_fcmonth=mapeamento_step_fcmonth)
     tabela['init_date'] = str(init_date)
 
     for v in tabela['forecast_prec_mm']:
@@ -263,6 +273,17 @@ def rodar(municipio_arg, init_year, init_month, leads, forcar_download=False):
         })
     resumo = pd.DataFrame(resumo_linhas).sort_values('lead')
 
+    # Seção 12 da correção — tabela lead | verifyingMonth | limite temporal
+    # (fim do mês, o que valid_time realmente representa), só para o
+    # esquema step_valid_time (na Seção A não há valid_time para confundir).
+    metadados_temporais_grib = None
+    if mapeamento_step_fcmonth is not None:
+        metadados_temporais_grib = sorted(
+            ({'lead': e['lead'], 'verifying_month': str(e['target_month']),
+              'valid_time_limite_temporal': str((e['target_month'] + 1).start_time.date())}
+             for e in mapeamento_step_fcmonth.values()),
+            key=lambda r: r['lead'])
+
     metadata = {
         'data_execucao': pd.Timestamp.now().isoformat(),
         'sistema': {'centro': centro, 'sistema': sistema, 'cds_system_code': '51'},
@@ -273,6 +294,7 @@ def rodar(municipio_arg, init_year, init_month, leads, forcar_download=False):
         'unidade_tprate_detectada': unidade,
         'esquema_temporal_detectado': esquema,
         'mapeamento_lead_target_month': mapa_lead_alvo,
+        'metadados_temporais_grib': metadados_temporais_grib,
         'n_membros': int(ds.sizes['number']),
         'limites_plausibilidade_mm': [PREC_MM_MIN_PLAUSIVEL, PREC_MM_MAX_PLAUSIVEL],
         'request_cds': request,
@@ -314,12 +336,26 @@ def escrever_resumo_actions(metadata, resumo_df):
         f"a partir de `valid_time`, nunca do valor bruto de `step`)",
         f"- **Mapeamento lead → target_month observado**: {metadata['mapeamento_lead_target_month']}",
     ]
+    metadados_grib = metadata.get('metadados_temporais_grib')
+    if metadados_grib:
+        linhas += [
+            "", "### Metadados temporais (GRIB real — fcmonth/verifyingMonth via eccodes)", "",
+            "> `verifying_month` vem de `verifyingMonth` (eccodes) — é o mês-alvo real. "
+            "`valid_time_limite_temporal` é o LIMITE FINAL do período de média mensal decodificado "
+            "pelo cfgrib (início do mês seguinte) — NUNCA é o target_month.",
+            "",
+            "| lead | verifyingMonth | valid_time (limite temporal, fim do mês) |",
+            "|---|---|---|",
+        ]
+        for r in metadados_grib:
+            linhas.append(f"| {r['lead']} | {r['verifying_month']} | {r['valid_time_limite_temporal']} |")
     corresp = metadata.get('diagnostico_dataset', {}).get('correspondencia_time_step_valid_time') or []
     if corresp:
-        linhas += ["", "### Correspondência time / step / valid_time observada no arquivo real", "",
-                   "| time | step | valid_time |", "|---|---|---|"]
+        linhas += ["", "### Correspondência time / step / valid_time bruta observada no arquivo real "
+                        "(diagnóstico — valid_time aqui NÃO é o mês-alvo)", "",
+                   "| time | step | valid_time (limite temporal) |", "|---|---|---|"]
         for c in corresp:
-            linhas.append(f"| {c['time']} | {c['step']} | {c['valid_time']} |")
+            linhas.append(f"| {c['time']} | {c['step']} | {c['valid_time_limite_temporal']} |")
     linhas += [
         "", "### Previsão C3S (ensemble mean) vs CHIRPS observado, por lead", "",
         "| lead | target_month | ens_mean (mm) | chirps (mm) | diferença (mm) |",
