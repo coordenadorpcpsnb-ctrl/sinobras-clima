@@ -30,7 +30,7 @@ import c3s_catalogo as cat  # noqa: E402
 import c3s_download as dl  # noqa: E402
 import c3s_processar as proc  # noqa: E402
 import c3s_hindcast as hc  # noqa: E402
-from _c3s_utils import MUNICIPIOS, leadtime_para_mes_alvo, tprate_para_mm  # noqa: E402
+from _c3s_utils import MUNICIPIOS, leadtime_para_mes_alvo, tprate_para_mm, intervalo_mensal_chirps  # noqa: E402
 from _chirps import _geometria_ponto, _buscar_prec_chirps_geom  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
@@ -181,34 +181,67 @@ def abrir_e_validar_grib(caminho, leads_esperados):
     return ds, unidade, esquema, mapa_lead_alvo, diag_info, mapeamento_step_fcmonth
 
 
+def _extrair_chirps_validado(serie, target_months):
+    """Barreira observacional final (Seção 8 da correção): exatamente 1
+    valor mensal por target month, sem NaN, sem precipitação negativa —
+    nunca um limite climatológico rígido (eventos extremos reais podem
+    ocorrer; ver Seção 8: não travar em 'março precisa ter > Xmm').
+    `serie`: pandas Series indexada por pd.Period (freq='M'); pode ter
+    índice duplicado ou não cobrir todos os target_months — as duas
+    coisas falham explicitamente aqui, nunca escolhem um valor arbitrário
+    nem preenchem o que falta."""
+    resultado = {}
+    for m in target_months:
+        ocorrencias = serie.loc[serie.index == m]
+        if len(ocorrencias) == 0:
+            raise RuntimeError(f"CHIRPS não tem nenhum valor para o target month {m} — FALHANDO "
+                                f"(Seção 8: nunca preencher mês faltando).")
+        if len(ocorrencias) > 1:
+            raise RuntimeError(f"CHIRPS tem {len(ocorrencias)} valores para o mesmo target month "
+                                f"{m} ({list(ocorrencias)}) — FALHANDO em vez de escolher um "
+                                f"arbitrariamente (Seção 8).")
+        valor = float(ocorrencias.iloc[0])
+        if pd.isna(valor):
+            raise RuntimeError(f"CHIRPS retornou NaN para o target month {m} — FALHANDO (Seção 8).")
+        if valor < 0:
+            raise RuntimeError(f"CHIRPS retornou precipitação negativa ({valor}mm) para {m} — "
+                                f"FALHANDO (Seção 8).")
+        resultado[m] = valor
+    return resultado
+
+
 def buscar_chirps_target_months(municipio_chave, target_months):
     """Reaproveita o CSV já gerado (Seção 10: 'se CHIRPS real já estiver
     disponível pelo código atual, reutilizar'); se não cobrir os meses
-    pedidos, busca ao vivo pelo mesmo núcleo de _chirps.py."""
+    pedidos, busca ao vivo pelo mesmo núcleo de _chirps.py.
+
+    O intervalo pedido ao ClimateSERV vai do dia 1 do primeiro target
+    month até o ÚLTIMO DIA REAL do último target month
+    (intervalo_mensal_chirps, via monthrange) — nunca até o dia 1 do mês
+    final, que deixava esse mês incompleto no agregado mensal (bug real
+    desta sessão: março/2015 saiu como 8,6mm em vez de ~200mm porque só
+    o dia 01/03 entrava na soma)."""
     if CACHE_CHIRPS_POC.exists():
         cache = pd.read_csv(CACHE_CHIRPS_POC)
         cache['ym'] = pd.PeriodIndex(pd.to_datetime(dict(year=cache.ano, month=cache.mes, day=1)), freq='M')
         sub = cache[cache['local'] == municipio_chave]
         faltando = [m for m in target_months if m not in set(sub['ym'])]
         if not faltando:
-            r = sub[sub['ym'].isin(target_months)][['ym', 'prec']].set_index('ym')['prec']
-            return {m: float(r[m]) for m in target_months}
+            r = sub.set_index('ym')['prec']
+            return _extrair_chirps_validado(r, target_months)
 
     info = MUNICIPIOS[municipio_chave]
     geom = _geometria_ponto(info['lat'], info['lon'])
     ano_ini, mes_ini = min(target_months).year, min(target_months).month
     ano_fim, mes_fim = max(target_months).year, max(target_months).month
-    ini, fim = f'{mes_ini:02d}/01/{ano_ini}', f'{mes_fim:02d}/01/{ano_fim}'
+    ini, fim = intervalo_mensal_chirps(ano_ini, mes_ini, ano_fim, mes_fim)
     df = _buscar_prec_chirps_geom(ini, fim, geom, rotulo=municipio_chave)
     if df.empty:
         raise RuntimeError("CHIRPS indisponível para os target months desta POC — FALHANDO "
                             "(Seção 14: nunca converter indisponibilidade em zero).")
     df['ym'] = pd.PeriodIndex(pd.to_datetime(dict(year=df.ano, month=df.mes, day=1)), freq='M')
     r = df.set_index('ym')['prec']
-    faltando = [m for m in target_months if m not in r.index]
-    if faltando:
-        raise RuntimeError(f"CHIRPS não cobre os target months {faltando} — FALHANDO.")
-    return {m: float(r[m]) for m in target_months}
+    return _extrair_chirps_validado(r, target_months)
 
 
 def rodar(municipio_arg, init_year, init_month, leads, forcar_download=False):

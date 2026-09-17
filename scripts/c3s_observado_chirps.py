@@ -25,7 +25,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _c3s_utils import MUNICIPIOS  # noqa: E402
+from _c3s_utils import MUNICIPIOS, intervalo_mensal_chirps  # noqa: E402
 from _chirps import _geometria_ponto, _buscar_prec_chirps_geom  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
@@ -39,8 +39,10 @@ PERIODO_POC = (2015, 1, 2024, 12)
 def buscar_municipio(chave, ano_ini, mes_ini, ano_fim, mes_fim):
     info = MUNICIPIOS[chave]
     geom = _geometria_ponto(info['lat'], info['lon'])
-    ini = f'{mes_ini:02d}/01/{ano_ini}'
-    fim = f'{mes_fim:02d}/01/{ano_fim}'   # dia exato não importa para o agregado mensal
+    # até o ÚLTIMO DIA REAL do mês final (intervalo_mensal_chirps, via
+    # monthrange) — usar o dia 1 do mês final deixava esse mês incompleto
+    # no agregado mensal (bug real corrigido nesta sessão).
+    ini, fim = intervalo_mensal_chirps(ano_ini, mes_ini, ano_fim, mes_fim)
     df = _buscar_prec_chirps_geom(ini, fim, geom, rotulo=chave)
     if not df.empty:
         df['local'] = chave
