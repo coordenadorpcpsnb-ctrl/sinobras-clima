@@ -22,8 +22,9 @@ name: C3S Hindcast Completo São Bento
 # oficial no log/relatório.
 #
 # GUARDRAIL DE SEGURANÇA OPERACIONAL: o default de `pilot` é `true` —
-# clicar em "Run workflow" sem mexer em nada roda só as 6 origens do
-# piloto, NUNCA o hindcast completo. Rodar com pilot=false (hindcast
+# clicar em "Run workflow" sem mexer em nada roda só o pilot longitudinal
+# (72 origens — todos jan/jul de 1981-2016), NUNCA o hindcast completo
+# (432 origens). Rodar com pilot=false (hindcast
 # completo/parcial real) exige preencher `confirm_full_hindcast` com o
 # texto exato `EXECUTAR_1981_2016` — sem isso, o job falha antes de
 # instalar qualquer dependência ou criar qualquer request ao CDS (ver
@@ -51,7 +52,7 @@ on:
         required: true
         default: 'false'
       pilot:
-        description: 'true (default) = roda só as 6 origens fixas do piloto (ignora start/end year e init_months). false = hindcast completo/parcial — exige confirm_full_hindcast'
+        description: 'true (default) = roda o pilot longitudinal (72 origens — todos jan/jul de 1981-2016; ignora start/end year e init_months). false = hindcast completo/parcial — exige confirm_full_hindcast'
         required: true
         default: 'true'
       confirm_full_hindcast:
@@ -113,7 +114,7 @@ jobs:
               echo "exige preencher o input **confirm_full_hindcast** com o texto exato"
               echo "\`EXECUTAR_1981_2016\`."
               echo ""
-              echo "A regra da Fase 2A.3 é: primeiro validar com **pilot=true** (6 origens fixas —"
+              echo "A regra da Fase 2A.3 é: primeiro validar com **pilot=true** (pilot longitudinal, 72 origens —"
               echo "é o default deste workflow). Só depois de revisar e aprovar o resultado do"
               echo "piloto é que o hindcast completo deve ser liberado."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -139,8 +140,8 @@ jobs:
         run: python scripts/verificar_dashboard.py
 
       # Reflete exatamente o que a etapa "Rodar hindcast completo" abaixo
-      # vai executar — com pilot=true mostra o plano das 6 origens do
-      # piloto, nunca o plano de 432 origens do hindcast completo.
+      # vai executar — com pilot=true mostra o plano das 72 origens do
+      # pilot longitudinal, nunca o plano de 432 origens do hindcast completo.
       - name: Mostrar plano de execução (dry-run, nunca acessa o CDS)
         run: |
           if [ "${{ inputs.pilot }}" = "true" ]; then
