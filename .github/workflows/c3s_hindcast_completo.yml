@@ -20,6 +20,16 @@ name: C3S Hindcast Completo São Bento
 # start_year=1981/end_year=2016 completo, todos os 12 meses. Uma execução
 # parcial (para depuração) é aceita pelo script mas sinalizada como não
 # oficial no log/relatório.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: o default de `pilot` é `true` —
+# clicar em "Run workflow" sem mexer em nada roda só as 6 origens do
+# piloto, NUNCA o hindcast completo. Rodar com pilot=false (hindcast
+# completo/parcial real) exige preencher `confirm_full_hindcast` com o
+# texto exato `EXECUTAR_1981_2016` — sem isso, o job falha antes de
+# instalar qualquer dependência ou criar qualquer request ao CDS (ver
+# step "Guardrail" abaixo). A regra da Fase 2A.3 é: primeiro o piloto,
+# só depois — com aprovação humana do resultado do piloto — o hindcast
+# completo.
 
 on:
   workflow_dispatch:
@@ -41,9 +51,13 @@ on:
         required: true
         default: 'false'
       pilot:
-        description: 'true = roda só as 6 origens fixas do piloto (ignora start/end year e init_months)'
+        description: 'true (default) = roda só as 6 origens fixas do piloto (ignora start/end year e init_months). false = hindcast completo/parcial — exige confirm_full_hindcast'
         required: true
-        default: 'false'
+        default: 'true'
+      confirm_full_hindcast:
+        description: 'Só necessário quando pilot=false: digite EXECUTAR_1981_2016 para liberar o hindcast completo/parcial'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -83,6 +97,30 @@ jobs:
           fi
           echo "Secret CDS_API_KEY está definido (conteúdo nunca exibido neste log)."
 
+      # Bloqueia hindcast completo/parcial acidental (pilot=false) sem
+      # confirmação explícita — roda ANTES de instalar dependências ou
+      # tocar no CDS. Pulado quando dry_run_plan=true (nenhum download
+      # de qualquer forma) ou pilot=true (default seguro).
+      - name: Guardrail — hindcast completo exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.pilot != 'true'
+        run: |
+          if [ "${{ inputs.confirm_full_hindcast }}" != "EXECUTAR_1981_2016" ]; then
+            echo "::error::Hindcast completo/parcial (pilot=false) bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ Hindcast completo bloqueado"
+              echo ""
+              echo "Rodar com **pilot=false** (hindcast completo ou parcial, até 432 origens reais)"
+              echo "exige preencher o input **confirm_full_hindcast** com o texto exato"
+              echo "\`EXECUTAR_1981_2016\`."
+              echo ""
+              echo "A regra da Fase 2A.3 é: primeiro validar com **pilot=true** (6 origens fixas —"
+              echo "é o default deste workflow). Só depois de revisar e aprovar o resultado do"
+              echo "piloto é que o hindcast completo deve ser liberado."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_full_hindcast=EXECUTAR_1981_2016) — liberando execução."
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -100,13 +138,20 @@ jobs:
       - name: Verificar integridade do dashboard (produção)
         run: python scripts/verificar_dashboard.py
 
+      # Reflete exatamente o que a etapa "Rodar hindcast completo" abaixo
+      # vai executar — com pilot=true mostra o plano das 6 origens do
+      # piloto, nunca o plano de 432 origens do hindcast completo.
       - name: Mostrar plano de execução (dry-run, nunca acessa o CDS)
         run: |
-          python scripts/c3s_hindcast_completo.py \
-            --start-year "${{ inputs.start_year }}" \
-            --end-year "${{ inputs.end_year }}" \
-            ${{ inputs.init_months != '' && format('--init-months {0}', inputs.init_months) || '' }} \
-            --dry-run-plan
+          if [ "${{ inputs.pilot }}" = "true" ]; then
+            python scripts/c3s_hindcast_completo.py --pilot --dry-run-plan
+          else
+            python scripts/c3s_hindcast_completo.py \
+              --start-year "${{ inputs.start_year }}" \
+              --end-year "${{ inputs.end_year }}" \
+              ${{ inputs.init_months != '' && format('--init-months {0}', inputs.init_months) || '' }} \
+              --dry-run-plan
+          fi
 
       - name: Criar ~/.cdsapirc (temporário, nunca commitado)
         if: inputs.dry_run_plan != 'true'

@@ -17,7 +17,10 @@ Roda com:
 """
 
 import contextlib
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -562,6 +565,137 @@ class WorkflowTestCase(unittest.TestCase):
     def test_tem_passo_de_dry_run(self):
         texto = WORKFLOW_PATH.read_text(encoding='utf-8')
         self.assertIn('--dry-run-plan', texto)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Guardrail de segurança operacional — pilot=true é o default; o
+# hindcast completo/parcial (pilot=false) exige confirm_full_hindcast
+# == EXECUTAR_1981_2016, verificado ANTES de qualquer instalação/
+# download. Correção pedida depois de revisar o diff da Fase 2A.3: sem
+# isso, clicar "Run workflow" sem mexer em nada disparava os 432 casos
+# reais direto.
+# ══════════════════════════════════════════════════════════════════════════
+
+class GuardrailWorkflowTestCase(unittest.TestCase):
+
+    def setUp(self):
+        self.spec = yaml.safe_load(WORKFLOW_PATH.read_text(encoding='utf-8'))
+        self.steps = next(iter(self.spec['jobs'].values()))['steps']
+        gatilhos = self.spec.get('on', self.spec.get(True))
+        self.inputs = gatilhos['workflow_dispatch']['inputs']
+
+    def _step(self, nome_substring):
+        for s in self.steps:
+            if nome_substring.lower() in s.get('name', '').lower():
+                return s
+        self.fail(f"nenhum step com nome contendo {nome_substring!r} encontrado")
+
+    def _indice(self, nome_substring):
+        for i, s in enumerate(self.steps):
+            if nome_substring.lower() in s.get('name', '').lower():
+                return i
+        self.fail(f"nenhum step com nome contendo {nome_substring!r} encontrado")
+
+    # A — pilot default é true
+    def test_a_pilot_default_e_true(self):
+        self.assertEqual(self.inputs['pilot']['default'], 'true')
+
+    def test_confirm_full_hindcast_default_vazio(self):
+        self.assertEqual(self.inputs['confirm_full_hindcast']['default'], '')
+
+    # B — sem alterar inputs, o workflow nunca dispara o hindcast completo
+    def test_b_defaults_do_click_run_rodam_so_o_piloto(self):
+        defaults = {nome: cfg.get('default', '') for nome, cfg in self.inputs.items()}
+        self.assertEqual(defaults['pilot'], 'true')
+        self.assertEqual(defaults['dry_run_plan'], 'false')
+        # com pilot=true (default), a condição do guardrail é falsa — nunca bloqueia nem libera
+        # o hindcast completo; o step de execução usa --pilot nesse caso.
+        step_exec = self._step('rodar hindcast completo')
+        self.assertIn('--pilot', step_exec['run'])
+        self.assertIn("inputs.pilot", step_exec['run'])
+
+    def test_guardrail_vem_antes_do_setup_python_e_do_download(self):
+        self.assertLess(self._indice('guardrail'), self._indice('set up python'))
+        self.assertLess(self._indice('guardrail'), self._indice('criar ~/.cdsapirc'))
+        self.assertLess(self._indice('guardrail'), self._indice('rodar hindcast completo'))
+
+    def test_guardrail_condicao_e_a_esperada(self):
+        step = self._step('guardrail')
+        self.assertEqual(step['if'], "inputs.dry_run_plan != 'true' && inputs.pilot != 'true'")
+
+    def test_g_guardrail_nao_referencia_script_python_nem_cdsapi(self):
+        """O guardrail é bash puro — nenhum request CDS pode acontecer
+        nele, já que nem chama o script Python nem o pacote cdsapi."""
+        step = self._step('guardrail')
+        self.assertNotIn('c3s_hindcast_completo.py', step['run'])
+        self.assertNotIn('cdsapi', step['run'].lower())
+
+    def _rodar_guardrail_bash(self, pilot, dry_run_plan, confirm):
+        """Executa o script bash REAL extraído do YAML (mesma lógica de
+        avaliação de `if:` do GitHub Actions: só roda quando a condição
+        é verdadeira) — devolve None se o step nem chegaria a rodar."""
+        step = self._step('guardrail')
+        condicao_ativa = (dry_run_plan != 'true') and (pilot != 'true')
+        if not condicao_ativa:
+            return None
+        script = step['run'].replace("${{ inputs.confirm_full_hindcast }}", confirm)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
+            summary_path = tmp.name
+        try:
+            env = dict(os.environ, GITHUB_STEP_SUMMARY=summary_path)
+            return subprocess.run(['bash', '-c', script], capture_output=True, text=True, env=env)
+        finally:
+            Path(summary_path).unlink(missing_ok=True)
+
+    # C — pilot=false sem confirmação explícita falha antes de chamar o script
+    def test_c_pilot_false_sem_confirmacao_falha(self):
+        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='false', confirm='')
+        self.assertIsNotNone(r)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_c_pilot_false_confirmacao_errada_tambem_falha(self):
+        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='false', confirm='sim, por favor')
+        self.assertIsNotNone(r)
+        self.assertNotEqual(r.returncode, 0)
+
+    # D — pilot=false + confirm_full_hindcast correto libera a execução
+    def test_d_pilot_false_com_confirmacao_correta_libera(self):
+        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='false', confirm='EXECUTAR_1981_2016')
+        self.assertIsNotNone(r)
+        self.assertEqual(r.returncode, 0)
+
+    # E — dry_run_plan=true nunca exige confirmação (guardrail nem roda)
+    def test_e_dry_run_true_nao_exige_confirmacao(self):
+        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='true', confirm='')
+        self.assertIsNone(r)
+
+    def test_pilot_true_nao_exige_confirmacao(self):
+        r = self._rodar_guardrail_bash(pilot='true', dry_run_plan='false', confirm='')
+        self.assertIsNone(r)
+
+    # F — plano exibido no modo piloto mostra 6 origens, nunca 432
+    def test_f_plano_piloto_tem_6_origens(self):
+        plano = h.plano_piloto()
+        self.assertEqual(plano['n_origens'], 6)
+        self.assertEqual(len(plano['origens']), 6)
+        self.assertEqual(plano['modo'], 'PILOT')
+
+    def test_f_mostrar_plano_ramifica_por_pilot_no_yaml(self):
+        step = self._step('mostrar plano de execução')
+        self.assertIn('--pilot --dry-run-plan', step['run'])
+        self.assertIn("inputs.pilot", step['run'])
+
+    def test_f_dry_run_plan_com_pilot_usa_plano_piloto_nao_o_completo(self):
+        with mock.patch.object(h, 'plano_execucao') as m_completo, \
+             mock.patch.object(h, 'plano_piloto', wraps=h.plano_piloto) as m_piloto, \
+             mock.patch.object(h, 'imprimir_plano') as m_imprimir, \
+             mock.patch('sys.argv', ['c3s_hindcast_completo.py', '--pilot', '--dry-run-plan']):
+            h.main()
+        m_completo.assert_not_called()
+        m_piloto.assert_called_once()
+        args, kwargs = m_imprimir.call_args
+        modo = kwargs.get('modo', args[1] if len(args) > 1 else None)
+        self.assertIn('PILOT', modo)
 
 
 if __name__ == '__main__':

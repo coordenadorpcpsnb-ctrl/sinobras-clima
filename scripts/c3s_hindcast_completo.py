@@ -543,8 +543,26 @@ def plano_execucao(ano_ini=ANO_INICIO_HINDCAST, ano_fim=ANO_FIM_HINDCAST, meses=
     }
 
 
-def imprimir_plano(plano):
-    print("=== C3S Hindcast Completo — DRY RUN PLAN (nenhum acesso ao CDS) ===")
+def plano_piloto():
+    """Plano do MODO PILOTO (Seção 37/39) — 6 origens fixas, nunca as
+    432 do hindcast completo. Usado por --pilot --dry-run-plan para que
+    o plano mostrado bata com o que --pilot de verdade vai processar
+    (correção de segurança: antes, --dry-run-plan sempre mostrava o
+    plano de 432 origens mesmo com --pilot, o que podia confundir sobre
+    o que ia rodar de fato)."""
+    n = len(PILOT_ORIGENS)
+    return {
+        'modo': 'PILOT', 'n_origens': n, 'origens': [_origem_str(a, m) for a, m in PILOT_ORIGENS],
+        'requests_cds_previstos': n,
+        'raw_rows_esperadas': n * N_MEMBROS_ESPERADO * len(LEADS),
+        'summary_rows_esperadas': n * len(LEADS),
+        'min_anos_treino': MIN_ANOS_TREINO, 'municipio': MUNICIPIO, 'leads': LEADS,
+        'n_membros_esperado': N_MEMBROS_ESPERADO, 'artifacts_esperados': ARTIFACT_FILENAMES,
+    }
+
+
+def imprimir_plano(plano, modo='COMPLETO/PARCIAL'):
+    print(f"=== C3S Hindcast Completo — DRY RUN PLAN — MODO: {modo} (nenhum acesso ao CDS) ===")
     for chave, valor in plano.items():
         print(f"  {chave}: {valor}")
 
@@ -747,8 +765,10 @@ def main():
     meses = [int(x) for x in args.init_months.split(',')] if args.init_months else None
 
     if args.dry_run_plan:
-        plano = plano_execucao(args.start_year, args.end_year, meses)
-        imprimir_plano(plano)
+        if args.pilot:
+            imprimir_plano(plano_piloto(), modo=f'PILOT ({len(PILOT_ORIGENS)} origens)')
+        else:
+            imprimir_plano(plano_execucao(args.start_year, args.end_year, meses))
         return
 
     status = dl.verificar_acesso(verbose=True)
