@@ -1,0 +1,97 @@
+name: C3S Validação Multi-origem
+
+# Fase 2A.2 — valida o pipeline C3S/SEAS5 (já confirmado tecnicamente na
+# POC de origem única, PRs #14/#15) em 12 origens históricas controladas
+# (3 anos x 4 estações), 1 município (São Bento do Tocantins), leads
+# 1-6. NÃO é o hindcast completo, NÃO seleciona sistema/modelo, NÃO faz
+# bias correction — só inspeciona consistência técnica do dado bruto
+# real em mais de uma origem. Ver scripts/c3s_validacao_multiorigem.py.
+#
+# Mesmo padrão seguro do C3S POC (.github/workflows/c3s_poc.yml): requer
+# o secret de repositório CDS_API_KEY, ~/.cdsapirc temporário nunca
+# commitado/impresso, só manual (nunca cron).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c3s-validacao-multi
+  cancel-in-progress: false
+
+jobs:
+  validacao-multiorigem:
+    name: C3S Validação Multi-origem
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verificar secret CDS_API_KEY presente
+        env:
+          CDS_KEY_PRESENTE: ${{ secrets.CDS_API_KEY != '' }}
+        run: |
+          if [ "$CDS_KEY_PRESENTE" != "true" ]; then
+            echo "::error::O secret CDS_API_KEY não está configurado neste repositório."
+            {
+              echo "## ❌ Secret ausente"
+              echo ""
+              echo "Configure o secret **CDS_API_KEY** em Settings → Secrets and variables →"
+              echo "Actions → New repository secret, com o Personal Access Token da sua conta"
+              echo "CDS (https://cds.climate.copernicus.eu). Veja \`docs/c3s-poc.md\` para o"
+              echo "passo a passo completo."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Secret CDS_API_KEY está definido (conteúdo nunca exibido neste log)."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      - name: Criar ~/.cdsapirc (temporário, nunca commitado)
+        env:
+          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' "$CDS_API_KEY" > "$HOME/.cdsapirc"
+          chmod 600 "$HOME/.cdsapirc"
+          echo "~/.cdsapirc criado (permissão 600, conteúdo nunca exibido)."
+
+      - name: Rodar validação multi-origem C3S (12 origens, leads 1-6)
+        run: python scripts/c3s_validacao_multiorigem.py
+
+      - name: Remover credencial
+        if: always()
+        run: rm -f "$HOME/.cdsapirc"
+
+      - name: Publicar artifacts (CSVs/JSON/relatório — nunca GRIB/NetCDF)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c3s-validacao-multiorigem
+          path: |
+            artifacts/c3s_multi/c3s_multi_raw.csv
+            artifacts/c3s_multi/c3s_multi_summary.csv
+            artifacts/c3s_multi/c3s_multi_temporal_check.csv
+            artifacts/c3s_multi/c3s_multi_metadata.json
+            artifacts/c3s_multi/checkpoint.json
+            artifacts/c3s_multi/RELATORIO.md
+          retention-days: 14
+          if-no-files-found: warn
