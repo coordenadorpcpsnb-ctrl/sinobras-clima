@@ -44,18 +44,18 @@ WORKFLOW_PATH = ROOT / '.github' / 'workflows' / 'c3s_validacao_multi.yml'
 class OrigensConfiguradasTestCase(unittest.TestCase):
 
     def test_12_origens_exatas(self):
-        esperado = [(2015, 1), (2015, 4), (2015, 7), (2015, 10),
-                    (2018, 1), (2018, 4), (2018, 7), (2018, 10),
-                    (2021, 1), (2021, 4), (2021, 7), (2021, 10)]
+        esperado = [(2005, 1), (2005, 4), (2005, 7), (2005, 10),
+                    (2010, 1), (2010, 4), (2010, 7), (2010, 10),
+                    (2015, 1), (2015, 4), (2015, 7), (2015, 10)]
         self.assertEqual(mvo.ORIGENS, esperado)
         self.assertEqual(len(mvo.ORIGENS), 12)
 
     def test_3_anos_espacados(self):
         anos = sorted(set(a for a, _ in mvo.ORIGENS))
-        self.assertEqual(anos, [2015, 2018, 2021])
+        self.assertEqual(anos, [2005, 2010, 2015])
 
     def test_4_meses_por_ano_jan_abr_jul_out(self):
-        for ano in {2015, 2018, 2021}:
+        for ano in {2005, 2010, 2015}:
             meses = sorted(m for a, m in mvo.ORIGENS if a == ano)
             self.assertEqual(meses, [1, 4, 7, 10])
 
@@ -77,6 +77,55 @@ class OrigensConfiguradasTestCase(unittest.TestCase):
 
     def test_retry_maximo_3_tentativas(self):
         self.assertEqual(mvo.MAX_TENTATIVAS_CDS, 3)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Guardrail contra misturar hindcast (25 membros) e real-time forecast
+# (51 membros) — achado real da 1ª execução (run 35225848837): 2018 e
+# 2021 voltaram com number=51, fora do período homogêneo de hindcast do
+# SEAS5 (1981-2016). Falha ANTES de qualquer download.
+# ══════════════════════════════════════════════════════════════════════════
+
+class GuardrailPeriodoHindcastTestCase(unittest.TestCase):
+
+    def test_nenhuma_origem_configurada_e_posterior_a_2016(self):
+        for ano, _ in mvo.ORIGENS:
+            self.assertLessEqual(ano, mvo.PERIODO_HINDCAST_SEAS5_ANO_MAX)
+
+    def test_origens_configuradas_sao_2005_2010_2015(self):
+        anos = sorted(set(a for a, _ in mvo.ORIGENS))
+        self.assertEqual(anos, [2005, 2010, 2015])
+
+    def test_25_membros_continua_sendo_o_esperado(self):
+        self.assertEqual(mvo.N_MEMBROS_ESPERADO, 25)
+
+    def test_validar_periodo_hindcast_aceita_as_origens_configuradas(self):
+        mvo.validar_periodo_hindcast(mvo.ORIGENS)   # não deve levantar
+
+    def test_ano_2017_falha_explicitamente(self):
+        with self.assertRaises(ValueError) as e:
+            mvo.validar_periodo_hindcast([(2017, 1)])
+        self.assertIn('2017-01', str(e.exception))
+        self.assertIn('hindcast', str(e.exception).lower())
+
+    def test_ano_2018_falha_explicitamente_como_na_execucao_real(self):
+        with self.assertRaises(ValueError):
+            mvo.validar_periodo_hindcast([(2018, 1)])
+
+    def test_rodar_falha_antes_de_qualquer_download_para_origem_fora_do_periodo(self):
+        """A barreira tem que disparar ANTES de processar_origem (e,
+        portanto, antes de qualquer download) — nunca depender só da
+        contagem de membros descoberta depois do download."""
+        with mock.patch.object(mvo, 'processar_origem') as m_processar:
+            with self.assertRaises(ValueError):
+                mvo.rodar(origens=[(2017, 1)])
+        m_processar.assert_not_called()
+
+    def test_mistura_de_origem_valida_e_invalida_tambem_falha_antes(self):
+        with mock.patch.object(mvo, 'processar_origem') as m_processar:
+            with self.assertRaises(ValueError):
+                mvo.rodar(origens=[(2015, 1), (2020, 1)])
+        m_processar.assert_not_called()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -171,6 +220,18 @@ class ProcessarOrigemTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError) as e:
                 mvo.processar_origem(ano, mes)
         self.assertIn('Seção 9.A', str(e.exception))
+
+    def test_a_51_membros_falha_regressao_execucao_real(self):
+        """Regressão direta do achado real (run 35225848837): origens
+        fora do período de hindcast (2018/2021) voltaram com number=51
+        (real-time forecast) — esta fase continua exigindo 25 membros
+        exatos, nunca aceita 51 nem trunca para os primeiros 25."""
+        ctx, ano, mes = _mock_processar_origem(n_membros=51)
+        with ctx:
+            with self.assertRaises(RuntimeError) as e:
+                mvo.processar_origem(ano, mes)
+        self.assertIn('Seção 9.A', str(e.exception))
+        self.assertIn('51', str(e.exception))
 
     def test_b_5_leads_falha(self):
         origem = '2015-01'
@@ -276,6 +337,85 @@ class ProcessarOrigemTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError) as e:
                 mvo.processar_origem(ano, mes)
         self.assertIn('Seção 9.J', str(e.exception))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Veredito final / exit code — regressão do achado real: o script
+# marcava origens como FALHOU mas terminava com exit 0, deixando o
+# workflow "success" mesmo com a Fase 2A.2 reprovada.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _meta_origem_generica():
+    return {'cache_hit': True, 'retries': 0, 'n_membros': 25, 'lat_grade': -6.5, 'lon_grade': -47.5,
+            'distancia_grade_km': 10.0, 'unidade': 'm s**-1', 'esquema_temporal': 'leadtime_month'}
+
+
+class VereditoAprovadoTestCase(unittest.TestCase):
+
+    def test_aprovado_so_com_todas_concluidas_e_zero_falhas(self):
+        estado = mvo._checkpoint_vazio()
+        for a, m in mvo.ORIGENS:
+            estado['concluidas'][mvo._origem_str(a, m)] = _meta_origem_generica()
+        self.assertTrue(mvo.veredito_aprovado(estado, mvo.ORIGENS))
+
+    def test_reprovado_com_uma_falha(self):
+        estado = mvo._checkpoint_vazio()
+        for a, m in mvo.ORIGENS[:-1]:
+            estado['concluidas'][mvo._origem_str(a, m)] = _meta_origem_generica()
+        estado['falhadas'][mvo._origem_str(*mvo.ORIGENS[-1])] = {'motivo': 'simulado', 'quando': 'x'}
+        self.assertFalse(mvo.veredito_aprovado(estado, mvo.ORIGENS))
+
+    def test_reprovado_com_origem_pendente_nao_processada(self):
+        estado = mvo._checkpoint_vazio()
+        for a, m in mvo.ORIGENS[:-1]:
+            estado['concluidas'][mvo._origem_str(a, m)] = _meta_origem_generica()
+        # última origem nem concluída nem falhada — ainda assim não é 12/12
+        self.assertFalse(mvo.veredito_aprovado(estado, mvo.ORIGENS))
+
+
+class MainExitCodeTestCase(unittest.TestCase):
+    """main() é testado com rodar()/escrever_saidas() mockados — o
+    comportamento de cache/download/validação por origem já está coberto
+    em ProcessarOrigemTestCase/DownloadCacheRetryTestCase; aqui o que
+    importa é só a decisão de exit code a partir do veredito."""
+
+    def _rodar_main_mockado(self, estado):
+        contadores = {'requests_cds': 0, 'cache_hits': 0, 'downloads': 0, 'retries': 0}
+        vazio = pd.DataFrame()
+        with mock.patch.object(mvo.dl, 'verificar_acesso',
+                                return_value={'credenciais_configuradas': True,
+                                              'pacote_cdsapi_instalado': True}), \
+             mock.patch.object(mvo, 'rodar', return_value=(vazio, vazio, vazio, estado, contadores)), \
+             mock.patch.object(mvo, 'verificar_grid_point_constante', return_value=[]), \
+             mock.patch.object(mvo, 'escrever_saidas', return_value=({}, 'relatorio')) as m_escrever:
+            mvo.main()
+        return m_escrever
+
+    def test_reprovado_sai_com_codigo_diferente_de_zero(self):
+        estado = mvo._checkpoint_vazio()
+        estado['falhadas'][mvo._origem_str(*mvo.ORIGENS[0])] = {'motivo': 'simulado', 'quando': 'x'}
+        contadores = {'requests_cds': 0, 'cache_hits': 0, 'downloads': 0, 'retries': 0}
+        vazio = pd.DataFrame()
+        with mock.patch.object(mvo.dl, 'verificar_acesso',
+                                return_value={'credenciais_configuradas': True,
+                                              'pacote_cdsapi_instalado': True}), \
+             mock.patch.object(mvo, 'rodar', return_value=(vazio, vazio, vazio, estado, contadores)), \
+             mock.patch.object(mvo, 'verificar_grid_point_constante', return_value=[]), \
+             mock.patch.object(mvo, 'escrever_saidas', return_value=({}, 'relatorio')) as m_escrever:
+            with self.assertRaises(SystemExit) as e:
+                mvo.main()
+        self.assertNotEqual(e.exception.code, 0)
+        m_escrever.assert_called_once()   # artifacts gravados ANTES do exit (Seção 5)
+
+    def test_aprovado_nao_levanta_systemexit(self):
+        estado = mvo._checkpoint_vazio()
+        for a, m in mvo.ORIGENS:
+            estado['concluidas'][mvo._origem_str(a, m)] = _meta_origem_generica()
+        try:
+            m_escrever = self._rodar_main_mockado(estado)
+        except SystemExit as e:
+            self.fail(f"main() não deveria levantar SystemExit quando aprovado (code={e.code})")
+        m_escrever.assert_called_once()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -495,6 +635,57 @@ class WorkflowManualTestCase(unittest.TestCase):
         texto = WORKFLOW_PATH.read_text(encoding='utf-8')
         self.assertIn('unittest discover tests', texto)
         self.assertIn('verificar_dashboard.py', texto)
+
+    def _step(self, nome_substring):
+        steps = next(iter(self.spec['jobs'].values()))['steps']
+        for s in steps:
+            if nome_substring.lower() in s.get('name', '').lower():
+                return s
+        self.fail(f"nenhum step com nome contendo {nome_substring!r} encontrado")
+
+    def test_remocao_de_credencial_tem_if_always(self):
+        """Seção 6 da correção: como o script principal agora pode sair
+        com erro (veredito REPROVADO), este passo precisa rodar mesmo
+        assim — se não rodar, a credencial temporária fica no runner."""
+        s = self._step('remover credencial')
+        self.assertEqual(s.get('if'), 'always()')
+
+    def test_publicacao_de_artifacts_tem_if_always(self):
+        """Mesma razão do teste acima — os artifacts (incluindo o
+        RELATORIO.md com o motivo da reprovação) têm que ser publicados
+        mesmo quando o passo principal falha."""
+        s = self._step('publicar artifacts')
+        self.assertEqual(s.get('if'), 'always()')
+
+    def test_step_principal_nao_tem_continue_on_error(self):
+        """Se alguém adicionar continue-on-error: true ao passo
+        principal, o job voltaria a terminar 'success' mesmo com a
+        validação reprovada — exatamente o bug desta correção."""
+        s = self._step('rodar validação multi-origem')
+        self.assertNotIn('continue-on-error', s)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Checkpoint — documentação não pode afirmar resume automático entre
+# execuções independentes do workflow (isso não existe hoje).
+# ══════════════════════════════════════════════════════════════════════════
+
+class ChecklistDocumentacaoCheckpointTestCase(unittest.TestCase):
+
+    def test_docstring_esclarece_que_nao_ha_resume_automatico_entre_runners(self):
+        src = Path(mvo.__file__).read_text(encoding='utf-8')
+        self.assertIn('filesystem limpo', src.lower())
+        self.assertIn('não há resume automático entre', src.lower())
+
+    def test_nota_real_time_forecast_pos_2016_existe_e_e_incluida_no_relatorio(self):
+        self.assertIn('51 membros', mvo.NOTA_REAL_TIME_FORECAST_POS_2016)
+        self.assertIn('separadamente', mvo.NOTA_REAL_TIME_FORECAST_POS_2016.lower())
+
+        estado = mvo._checkpoint_vazio()
+        contadores = {'requests_cds': 0, 'cache_hits': 0, 'downloads': 0, 'retries': 0}
+        vazio = pd.DataFrame()
+        relatorio = mvo.gerar_relatorio_markdown(estado, contadores, vazio, vazio, [])
+        self.assertIn(mvo.NOTA_REAL_TIME_FORECAST_POS_2016, relatorio)
 
 
 # ══════════════════════════════════════════════════════════════════════════

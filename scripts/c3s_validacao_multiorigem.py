@@ -12,6 +12,28 @@ completo, NÃO seleciona sistema/modelo, NÃO faz bias correction — só
 inspeciona o dado bruto real em mais de uma origem (a POC de 2015-01
 sozinha não é evidência suficiente disso).
 
+REGIME DE MEMBROS DO SEAS5 (achado real da 1ª execução, run 35225848837)
+— a documentação ECMWF/Copernicus confirma dois regimes distintos, não
+intercambiáveis:
+
+  - reforecast/hindcast 1981-2016: 25 membros (o que esta fase pede).
+  - real-time forecast a partir de 2017: 51 membros.
+
+A 1ª execução real pediu origens de 2015/2018/2021 e viu exatamente
+isso: 2015 (dentro do hindcast) voltou com 25 membros e passou; 2018 e
+2021 (fora do hindcast) voltaram com 51 membros e foram corretamente
+rejeitados pela barreira `N_MEMBROS_ESPERADO = 25` (Seção 9.A) — não é
+bug do CDS nem do parser, é a mistura de dois regimes heterogêneos.
+Por isso `ORIGENS` só usa anos <= 2016 (`validar_periodo_hindcast`
+falha ANTES de qualquer download se isso mudar) e `N_MEMBROS_ESPERADO`
+continua 25, nunca 51 nem "25 ou 51".
+
+Os dados de 2018/2021 (51 membros) não são descartados conceitualmente
+— são potencialmente úteis como um "archived real-time forecast
+confirmation set" prospectivo, mas isso é trabalho de uma FASE FUTURA
+SEPARADA, não implementado aqui (ver `NOTA_REAL_TIME_FORECAST_POS_2016`,
+sempre incluída no RELATORIO.md gerado).
+
 Este módulo ORQUESTRA várias execuções da lógica já validada em
 c3s_poc.py/c3s_download.py/c3s_processar.py/c3s_hindcast.py/
 _c3s_utils.py — não reimplementa nada dela (abertura/validação de GRIB,
@@ -21,6 +43,20 @@ lá). O que é específico daqui: iterar sobre origens, cache/retry/
 checkpoint por origem, as barreiras de fail-fast adicionais da Seção 9
 (contagem exata de membros/leads/linhas) e a consolidação dos resultados
 em artifacts/c3s_multi/.
+
+CHECKPOINT/RESUME — O QUE É E O QUE NÃO É (achado real da 1ª execução):
+`artifacts/c3s_multi/checkpoint.json` protege/reaproveita processamento
+já feito DENTRO DO MESMO FILESYSTEM/PROCESSO — por exemplo, se o script
+for reexecutado localmente ou numa mesma sessão sem apagar
+`artifacts/c3s_multi/`. Um runner NOVO do GitHub Actions sempre começa
+com filesystem limpo (o checkout é sempre do zero); publicar o
+checkpoint como artifact NÃO faz o próximo `workflow_dispatch` baixá-lo
+de volta automaticamente. Ou seja: **não há resume automático entre
+execuções independentes do workflow hoje** — isso exigiria um passo
+explícito de download do artifact anterior, que esta correção
+deliberadamente NÃO implementa (fora de escopo). O checkpoint publicado
+serve para auditoria/diagnóstico de qual origem falhou e por quê, não
+como mecanismo de retomada entre runs.
 """
 
 import json
@@ -61,14 +97,25 @@ UNIDADE_TPRATE_ESPERADA = 'm s**-1'
 
 # Seção 4 — 12 origens controladas: 4 meses por ano (jan=chuvosa,
 # abr=fim/transição da chuvosa, jul=seca, out=início/transição para a
-# chuvosa) x 3 anos espaçados no tempo. 2015-01 (já validada na POC de
-# origem única) entra de novo aqui só como mais um caso do conjunto —
-# Seção 5: a fase só é válida se TODAS as 12 passarem, não só essa.
+# chuvosa) x 3 anos espaçados no tempo, TODOS dentro do período
+# homogêneo de hindcast do SEAS5 (1981-2016, 25 membros — ver docstring
+# do módulo). 2005/2010/2015 substituem 2018/2021 depois que a 1ª
+# execução real (run 35225848837) mostrou 2018/2021 retornando
+# number=51 (real-time forecast, regime diferente). 2015-01 continua no
+# conjunto só como mais um caso — Seção 5: a fase só é válida se TODAS
+# as 12 passarem, não só essa.
 ORIGENS = [
+    (2005, 1), (2005, 4), (2005, 7), (2005, 10),
+    (2010, 1), (2010, 4), (2010, 7), (2010, 10),
     (2015, 1), (2015, 4), (2015, 7), (2015, 10),
-    (2018, 1), (2018, 4), (2018, 7), (2018, 10),
-    (2021, 1), (2021, 4), (2021, 7), (2021, 10),
 ]
+
+# Seção 4 da correção — guardrail contra misturar hindcast (25 membros)
+# com real-time forecast (51 membros): nenhuma origem desta fase pode
+# ser posterior a este ano. Falha ANTES de qualquer download (ver
+# validar_periodo_hindcast) — nunca depende só da contagem de membros
+# descoberta depois do download para pegar isso.
+PERIODO_HINDCAST_SEAS5_ANO_MAX = 2016
 
 # Seção 7 — retry controlado, nunca loop infinito (MAX_TENTATIVAS_CDS
 # limita). Esperas progressivas; com 3 tentativas só as 2 primeiras
@@ -84,6 +131,33 @@ CHIRPS_LIMIAR_MM_PARA_ERRO_PCT = 10.0
 
 def _origem_str(ano, mes):
     return f'{ano:04d}-{mes:02d}'
+
+
+# Seção 7 — nota metodológica fixa, sempre incluída no RELATORIO.md.
+# Achado real desta fase (não implementado aqui, só documentado): 2018 e
+# 2021 (51 membros, real-time forecast) não são descartados
+# conceitualmente, só adiados para uma fase separada futura.
+NOTA_REAL_TIME_FORECAST_POS_2016 = (
+    "Forecasts pós-2016 do SEAS5 usam 51 membros (regime operacional de real-time forecast, "
+    "diferente do hindcast 1981-2016 com 25 membros) e serão avaliados separadamente como "
+    "conjunto de confirmação prospectiva/real-time archive. Não implementado nesta fase."
+)
+
+
+def validar_periodo_hindcast(origens):
+    """Guardrail (Seção 4 da correção): a Fase 2A.2 exige exclusivamente
+    origens do período homogêneo de hindcast do SEAS5 (1981-2016, 25
+    membros) — ver docstring do módulo. Chamado ANTES de qualquer
+    download (dentro de `rodar()`), para nunca depender só da contagem
+    de membros descoberta depois do download."""
+    fora = [(a, m) for a, m in origens if a > PERIODO_HINDCAST_SEAS5_ANO_MAX]
+    if fora:
+        raise ValueError(
+            f"Fase 2A.2 exige origens do período homogêneo de hindcast SEAS5 "
+            f"(1981–{PERIODO_HINDCAST_SEAS5_ANO_MAX}). Origens fora do período: "
+            f"{[_origem_str(a, m) for a, m in fora]} — FALHANDO antes de qualquer download. "
+            f"Real-time forecasts pós-{PERIODO_HINDCAST_SEAS5_ANO_MAX} usam 51 membros, um "
+            f"regime diferente (não misturar — ver docstring do módulo).")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -271,10 +345,16 @@ def processar_origem(ano, mes, sleep_fn=time.sleep):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Checkpoint/resume (Seção 8) — artifact de execução, nunca commitado
+# Checkpoint (Seção 8) — artifact de execução, nunca commitado
 # (artifacts/ já está no .gitignore). Registra concluídas/falhadas/
-# pendentes; numa reexecução, origens concluídas (com dados em cache)
-# não são reprocessadas.
+# pendentes; se `rodar()` for chamado de novo NO MESMO FILESYSTEM
+# (mesma sessão local, mesmo processo/job) sem apagar
+# artifacts/c3s_multi/, origens já concluídas não são reprocessadas.
+#
+# NÃO é resume automático entre execuções independentes do workflow do
+# GitHub Actions — um runner novo sempre começa com filesystem limpo
+# (checkout do zero); publicar checkpoint.json como artifact não o
+# baixa de volta no próximo workflow_dispatch. Ver docstring do módulo.
 # ══════════════════════════════════════════════════════════════════════════
 
 def _checkpoint_vazio():
@@ -317,6 +397,7 @@ def _carregar_dados_origem(origem):
 
 def rodar(origens=None, sleep_fn=time.sleep):
     origens = origens if origens is not None else ORIGENS
+    validar_periodo_hindcast(origens)   # Seção 4 — falha antes de qualquer download
     estado = carregar_checkpoint()
     contadores = {'requests_cds': 0, 'cache_hits': 0, 'downloads': 0, 'retries': 0}
     raws, summaries, temporais = [], [], []
@@ -429,13 +510,23 @@ def montar_metadata(estado, contadores, grid_alertas):
 # Relatório markdown (Seção 23)
 # ══════════════════════════════════════════════════════════════════════════
 
-def gerar_relatorio_markdown(estado, contadores, raw_final, summary_final, grid_alertas):
+def veredito_aprovado(estado, origens=None):
+    """Critério mínimo da Seção 23: todas as origens concluídas, zero
+    falhadas — nunca reprova por erro meteorológico alto (Section 16).
+    Usado tanto no relatório quanto para decidir o exit code de main()
+    (Seção 5 da correção)."""
+    origens = origens if origens is not None else ORIGENS
+    return len(estado['concluidas']) == len(origens) and len(estado['falhadas']) == 0
+
+
+def gerar_relatorio_markdown(estado, contadores, raw_final, summary_final, grid_alertas, origens=None):
+    origens = origens if origens is not None else ORIGENS
     n_ok, n_falhas = len(estado['concluidas']), len(estado['falhadas'])
-    aprovado = (n_ok == len(ORIGENS)) and n_falhas == 0
+    aprovado = veredito_aprovado(estado, origens)
 
     linhas = [
         "# Validação Multi-origem C3S/SEAS5 — Fase 2A.2", "",
-        f"- Origens concluídas: {n_ok}/{len(ORIGENS)}",
+        f"- Origens concluídas: {n_ok}/{len(origens)}",
         f"- Origens falhadas: {n_falhas}",
     ]
     if estado['falhadas']:
@@ -445,11 +536,12 @@ def gerar_relatorio_markdown(estado, contadores, raw_final, summary_final, grid_
 
     linhas += [
         "", f"- Linhas raw totais: {len(raw_final)} "
-            f"(esperado {len(ORIGENS) * LINHAS_RAW_ESPERADAS_POR_ORIGEM} se {len(ORIGENS)}/{len(ORIGENS)})",
+            f"(esperado {len(origens) * LINHAS_RAW_ESPERADAS_POR_ORIGEM} se {len(origens)}/{len(origens)})",
         f"- Linhas summary totais: {len(summary_final)} "
-        f"(esperado {len(ORIGENS) * LINHAS_SUMMARY_ESPERADAS_POR_ORIGEM} se {len(ORIGENS)}/{len(ORIGENS)})",
+        f"(esperado {len(origens) * LINHAS_SUMMARY_ESPERADAS_POR_ORIGEM} se {len(origens)}/{len(origens)})",
         f"- Membros esperados por origem: {N_MEMBROS_ESPERADO}",
         f"- Unidade tprate: `{UNIDADE_TPRATE_ESPERADA}`",
+        "", "## Nota metodológica", "", NOTA_REAL_TIME_FORECAST_POS_2016,
     ]
 
     if grid_alertas:
@@ -496,7 +588,8 @@ def gerar_relatorio_markdown(estado, contadores, raw_final, summary_final, grid_
     return '\n'.join(linhas) + '\n'
 
 
-def escrever_saidas(raw_final, summary_final, temporal_final, estado, contadores, grid_alertas):
+def escrever_saidas(raw_final, summary_final, temporal_final, estado, contadores, grid_alertas, origens=None):
+    origens = origens if origens is not None else ORIGENS
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     raw_final.to_csv(ARTIFACTS_DIR / 'c3s_multi_raw.csv', index=False)
     summary_final.to_csv(ARTIFACTS_DIR / 'c3s_multi_summary.csv', index=False)
@@ -505,7 +598,7 @@ def escrever_saidas(raw_final, summary_final, temporal_final, estado, contadores
     metadata = montar_metadata(estado, contadores, grid_alertas)
     (ARTIFACTS_DIR / 'c3s_multi_metadata.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
 
-    relatorio = gerar_relatorio_markdown(estado, contadores, raw_final, summary_final, grid_alertas)
+    relatorio = gerar_relatorio_markdown(estado, contadores, raw_final, summary_final, grid_alertas, origens=origens)
     (ARTIFACTS_DIR / 'RELATORIO.md').write_text(relatorio)
 
     print(f"\n✅ artifacts/c3s_multi/c3s_multi_raw.csv ({len(raw_final)} linhas)")
@@ -533,7 +626,16 @@ def main():
     print(f"=== C3S Validação Multi-origem — {MUNICIPIO} — {len(ORIGENS)} origens — leads {LEADS} ===")
     raw_final, summary_final, temporal_final, estado, contadores = rodar()
     grid_alertas = verificar_grid_point_constante(estado)
+    # Seção 5 da correção: artifacts SEMPRE gravados antes de decidir o
+    # exit code — um veredito REPROVADO não pode impedir o diagnóstico
+    # de chegar aos artifacts do Actions.
     escrever_saidas(raw_final, summary_final, temporal_final, estado, contadores, grid_alertas)
+
+    if not veredito_aprovado(estado, ORIGENS):
+        print("\n❌ VALIDAÇÃO MULTI-ORIGEM REPROVADA — artifacts gravados; encerrando com código de "
+              "erro (Seção 5 da correção: o workflow não pode terminar 'success' com a fase reprovada).")
+        sys.exit(1)
+    print("\n✅ VALIDAÇÃO MULTI-ORIGEM APROVADA")
 
 
 if __name__ == '__main__':
