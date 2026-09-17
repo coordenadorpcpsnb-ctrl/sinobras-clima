@@ -61,6 +61,45 @@ class ConversaoUnidadeTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# intervalo_mensal_chirps — regressão do bug real: fim do intervalo era o
+# dia 1 do mês final (deixava o último target month incompleto no
+# agregado do ClimateSERV), tem que ser o ÚLTIMO DIA REAL desse mês.
+# ══════════════════════════════════════════════════════════════════════════
+
+class IntervaloMensalChirpsTestCase(unittest.TestCase):
+
+    def test_jan_a_marco_2015_fim_e_31_de_marco(self):
+        ini, fim = cu.intervalo_mensal_chirps(2015, 1, 2015, 3)
+        self.assertEqual(ini, '01/01/2015')
+        self.assertEqual(fim, '03/31/2015')
+
+    def test_fevereiro_2015_comum_fim_dia_28(self):
+        ini, fim = cu.intervalo_mensal_chirps(2015, 2, 2015, 2)
+        self.assertEqual(fim, '02/28/2015')
+
+    def test_fevereiro_2016_bissexto_fim_dia_29(self):
+        ini, fim = cu.intervalo_mensal_chirps(2016, 2, 2016, 2)
+        self.assertEqual(fim, '02/29/2016')
+
+    def test_abril_fim_dia_30(self):
+        ini, fim = cu.intervalo_mensal_chirps(2020, 4, 2020, 4)
+        self.assertEqual(fim, '04/30/2020')
+
+    def test_dezembro_fim_dia_31(self):
+        ini, fim = cu.intervalo_mensal_chirps(2020, 12, 2020, 12)
+        self.assertEqual(fim, '12/31/2020')
+
+    def test_dia_final_nunca_hardcoded_em_31(self):
+        """Se alguém 'simplificar' para sempre usar dia 31, este teste
+        pega — fevereiro e abril não podem terminar em 31."""
+        import inspect
+        src = inspect.getsource(cu.intervalo_mensal_chirps)
+        self.assertNotIn("'31'", src)
+        self.assertNotIn('/31/', src)
+        self.assertIn('monthrange', src)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Testes 2 e 3 — leadtime_month e target_month
 # ══════════════════════════════════════════════════════════════════════════
 

@@ -110,3 +110,32 @@ def segundos_no_mes(ano, mes):
 def tprate_para_mm(tprate_m_s, ano, mes):
     """tprate_m_s pode ser escalar ou array numpy — funciona nos dois casos."""
     return tprate_m_s * segundos_no_mes(ano, mes) * 1000.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# INTERVALO MENSAL PARA O CLIMATESERV (bug real desta sessão) — os dois
+# consumidores C3S (c3s_poc.py, c3s_observado_chirps.py) construíam o fim
+# do intervalo como o DIA 1 do último mês (`{mes_fim}/01/{ano_fim}`), não
+# o último dia real. _buscar_prec_chirps_geom soma por ano/mês o que a
+# API devolve dentro do intervalo pedido — com fim=dia 1, o último mês do
+# intervalo fica cortado (só o dia 1), então o agregado mensal desse mês
+# vem drasticamente subestimado (ex.: 8,6mm em vez de ~200mm em março).
+#
+# _chirps.py::buscar_prec_chirps (produção) já faz isso certo via
+# monthrange — replicado aqui como função pura para os dois consumidores
+# C3S, sem tocar em _chirps.py (Seção 4 da correção: função de produção
+# intocada) nem duplicar a regra em dois lugares (armadilha 2 do
+# CLAUDE.md: duas implementações divergentes do "mesmo" corte de data já
+# causaram bug real antes).
+# ══════════════════════════════════════════════════════════════════════════
+
+def intervalo_mensal_chirps(ano_ini, mes_ini, ano_fim, mes_fim):
+    """Devolve (ini, fim) no formato MM/DD/AAAA que _buscar_prec_chirps_geom
+    espera — do dia 1 do mês inicial até o ÚLTIMO DIA REAL do mês final
+    (via monthrange, nunca hardcoded — cobre fevereiro comum/bissexto e
+    meses de 30/31 dias corretamente)."""
+    ano_ini, mes_ini, ano_fim, mes_fim = int(ano_ini), int(mes_ini), int(ano_fim), int(mes_fim)
+    ultimo_dia = monthrange(ano_fim, mes_fim)[1]
+    ini = f'{mes_ini:02d}/01/{ano_ini}'
+    fim = f'{mes_fim:02d}/{ultimo_dia:02d}/{ano_fim}'
+    return ini, fim

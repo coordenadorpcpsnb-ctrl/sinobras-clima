@@ -427,6 +427,97 @@ class GridPointTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# buscar_chirps_target_months — regressão do bug real encontrado na
+# execução #6: fim do intervalo pedido ao ClimateSERV era o dia 1 do
+# último target month, cortando esse mês quase inteiro no agregado
+# (março/2015 saiu como 8,6mm em vez de ~200mm). Também cobre a Seção 8:
+# validação observacional final (1 valor por mês, sem NaN, sem negativo).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _serie_chirps(pares):
+    """pares: lista de (target_month_str, prec) -> pandas Series indexada
+    por Period, no formato que buscar_chirps_target_months monta a partir
+    do DataFrame retornado por _buscar_prec_chirps_geom."""
+    idx = pd.PeriodIndex([p[0] for p in pares], freq='M')
+    return pd.Series([p[1] for p in pares], index=idx, name='prec')
+
+
+class BuscarChirpsTargetMonthsTestCase(unittest.TestCase):
+
+    def setUp(self):
+        # garante que o cache local (data/c3s_observado_chirps_poc.csv)
+        # nunca interfere nestes testes — sempre exercitam o caminho de
+        # busca ao vivo, que é onde o bug estava.
+        self._patch_cache = mock.patch.object(poc, 'CACHE_CHIRPS_POC', Path('/inexistente/nao_existe.csv'))
+        self._patch_cache.start()
+        self.addCleanup(self._patch_cache.stop)
+
+    def test_intervalo_pedido_cobre_o_mes_final_inteiro(self):
+        """Regressão direta (Seção 6 da correção): para target months
+        jan/fev/mar de 2015, o intervalo pedido ao ClimateSERV tem que
+        ir até 03/31/2015 — não 03/01/2015 (o bug real). Com a
+        implementação antiga (fim = dia 1 do mês final) este teste falha."""
+        target_months = [pd.Period('2015-01', 'M'), pd.Period('2015-02', 'M'), pd.Period('2015-03', 'M')]
+        df_fake = pd.DataFrame({'ano': [2015, 2015, 2015], 'mes': [1, 2, 3],
+                                 'prec': [335.7, 259.9, 197.1], 'fonte': ['CHIRPS'] * 3})
+        with mock.patch.object(poc, '_buscar_prec_chirps_geom', return_value=df_fake) as m:
+            resultado = poc.buscar_chirps_target_months('Sao_Bento_do_Tocantins', target_months)
+        args, kwargs = m.call_args
+        ini, fim = args[0], args[1]
+        self.assertEqual(ini, '01/01/2015')
+        self.assertEqual(fim, '03/31/2015')   # não '03/01/2015'
+        self.assertEqual(resultado[pd.Period('2015-03', 'M')], 197.1)
+
+    def test_fevereiro_bissexto_no_intervalo_pedido(self):
+        target_months = [pd.Period('2016-01', 'M'), pd.Period('2016-02', 'M')]
+        df_fake = pd.DataFrame({'ano': [2016, 2016], 'mes': [1, 2], 'prec': [300.0, 200.0],
+                                 'fonte': ['CHIRPS'] * 2})
+        with mock.patch.object(poc, '_buscar_prec_chirps_geom', return_value=df_fake) as m:
+            poc.buscar_chirps_target_months('Sao_Bento_do_Tocantins', target_months)
+        args, kwargs = m.call_args
+        self.assertEqual(args[1], '02/29/2016')
+
+    def test_mes_faltando_falha_explicitamente(self):
+        target_months = [pd.Period('2015-01', 'M'), pd.Period('2015-02', 'M'), pd.Period('2015-03', 'M')]
+        df_fake = pd.DataFrame({'ano': [2015, 2015], 'mes': [1, 2], 'prec': [335.7, 259.9],
+                                 'fonte': ['CHIRPS'] * 2})   # março ausente
+        with mock.patch.object(poc, '_buscar_prec_chirps_geom', return_value=df_fake):
+            with self.assertRaises(RuntimeError) as ctx:
+                poc.buscar_chirps_target_months('Sao_Bento_do_Tocantins', target_months)
+        self.assertIn('2015-03', str(ctx.exception))
+
+    def test_mes_duplicado_falha_explicitamente(self):
+        r = _serie_chirps([('2015-01', 335.7), ('2015-01', 999.0)])
+        with self.assertRaises(RuntimeError) as ctx:
+            poc._extrair_chirps_validado(r, [pd.Period('2015-01', 'M')])
+        self.assertIn('2015-01', str(ctx.exception))
+
+    def test_nan_falha_explicitamente(self):
+        r = _serie_chirps([('2015-01', float('nan'))])
+        with self.assertRaises(RuntimeError) as ctx:
+            poc._extrair_chirps_validado(r, [pd.Period('2015-01', 'M')])
+        self.assertIn('NaN', str(ctx.exception))
+
+    def test_negativo_falha_explicitamente(self):
+        r = _serie_chirps([('2015-01', -5.0)])
+        with self.assertRaises(RuntimeError) as ctx:
+            poc._extrair_chirps_validado(r, [pd.Period('2015-01', 'M')])
+        self.assertIn('negativa', str(ctx.exception).lower())
+
+    def test_valor_valido_unico_passa(self):
+        r = _serie_chirps([('2015-01', 197.1)])
+        resultado = poc._extrair_chirps_validado(r, [pd.Period('2015-01', 'M')])
+        self.assertEqual(resultado, {pd.Period('2015-01', 'M'): 197.1})
+
+    def test_evento_extremo_nao_e_bloqueado(self):
+        """Seção 8: nenhum limite climatológico rígido — um valor baixo
+        mas fisicamente válido (>=0, não-NaN) tem que passar."""
+        r = _serie_chirps([('2015-03', 8.6)])
+        resultado = poc._extrair_chirps_validado(r, [pd.Period('2015-03', 'M')])
+        self.assertEqual(resultado[pd.Period('2015-03', 'M')], 8.6)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Teste 7 — output schema
 # ══════════════════════════════════════════════════════════════════════════
 
