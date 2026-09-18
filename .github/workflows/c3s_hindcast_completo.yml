@@ -21,42 +21,58 @@ name: C3S Hindcast Completo São Bento
 # parcial (para depuração) é aceita pelo script mas sinalizada como não
 # oficial no log/relatório.
 #
-# GUARDRAIL DE SEGURANÇA OPERACIONAL: o default de `pilot` é `true` —
-# clicar em "Run workflow" sem mexer em nada roda só o pilot longitudinal
-# (72 origens — todos jan/jul de 1981-2016), NUNCA o hindcast completo
-# (432 origens). Rodar com pilot=false (hindcast
-# completo/parcial real) exige preencher `confirm_full_hindcast` com o
-# texto exato `EXECUTAR_1981_2016` — sem isso, o job falha antes de
-# instalar qualquer dependência ou criar qualquer request ao CDS (ver
-# step "Guardrail" abaixo). A regra da Fase 2A.3 é: primeiro o piloto,
-# só depois — com aprovação humana do resultado do piloto — o hindcast
-# completo.
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: o pilot longitudinal foi validado
+# em execução real (run 35340386904 — 72/72 origens, 10.800 raw, 432
+# summaries, 312 forecasts avaliáveis, leakage 100% aprovado). Este
+# workflow prepara o disparo do HINDCAST COMPLETO OFICIAL 1981-2016
+# (432 origens) sem tocar em metodologia/C3S/CHIRPS/métricas/produção —
+# só simplifica e protege o disparo.
+#
+# `modo_execucao` (choice) é o único input que controla o que roda:
+#   - PILOT (default) — clicar em "Run workflow" sem mexer em nada
+#     continua rodando só o pilot longitudinal (72 origens), NUNCA o
+#     hindcast completo.
+#   - HINDCAST_COMPLETO_1981_2016 — execução oficial (432 origens,
+#     1981-2016, todos os 12 meses, sempre — start_year/end_year/
+#     init_months são ignorados/forçados, nunca lidos do input humano
+#     nesse modo, Seção 10). Exige preencher `confirm_full_hindcast`
+#     com o texto exato `EXECUTAR_1981_2016` — sem isso, o job falha
+#     antes de instalar qualquer dependência ou criar qualquer request
+#     ao CDS (ver step "Guardrail" abaixo).
+#
+# start_year/end_year/init_months continuam nos inputs só por
+# compatibilidade (histórico de execuções manuais) — são ignorados por
+# ambos os modos hoje.
 
 on:
   workflow_dispatch:
     inputs:
-      start_year:
-        description: 'Ano inicial (1981-2016) — resultado só é oficial com 1981'
+      modo_execucao:
+        description: 'PILOT (default, seguro) = pilot longitudinal (72 origens). HINDCAST_COMPLETO_1981_2016 = execução OFICIAL (432 origens, 1981-2016 fixo) — exige confirm_full_hindcast.'
+        type: choice
         required: true
-        default: '1981'
-      end_year:
-        description: 'Ano final (1981-2016) — resultado só é oficial com 2016'
-        required: true
-        default: '2016'
-      init_months:
-        description: 'Meses de inicialização, separados por vírgula (default: todos os 12) — deixar vazio para oficial'
-        required: false
-        default: ''
+        default: 'PILOT'
+        options:
+          - PILOT
+          - HINDCAST_COMPLETO_1981_2016
       dry_run_plan:
         description: 'true = só mostra o plano de execução, não acessa o CDS'
         required: true
         default: 'false'
-      pilot:
-        description: 'true (default) = roda o pilot longitudinal (72 origens — todos jan/jul de 1981-2016; ignora start/end year e init_months). false = hindcast completo/parcial — exige confirm_full_hindcast'
-        required: true
-        default: 'true'
       confirm_full_hindcast:
-        description: 'Só necessário quando pilot=false: digite EXECUTAR_1981_2016 para liberar o hindcast completo/parcial'
+        description: 'Só necessário com modo_execucao=HINDCAST_COMPLETO_1981_2016: digite EXECUTAR_1981_2016 para liberar a execução oficial'
+        required: false
+        default: ''
+      start_year:
+        description: 'IGNORADO — mantido só por compatibilidade. modo_execucao=HINDCAST_COMPLETO_1981_2016 sempre força 1981; modo PILOT ignora este campo.'
+        required: false
+        default: '1981'
+      end_year:
+        description: 'IGNORADO — mantido só por compatibilidade. modo_execucao=HINDCAST_COMPLETO_1981_2016 sempre força 2016; modo PILOT ignora este campo.'
+        required: false
+        default: '2016'
+      init_months:
+        description: 'IGNORADO — mantido só por compatibilidade. modo_execucao=HINDCAST_COMPLETO_1981_2016 sempre roda todos os 12 meses; modo PILOT ignora este campo.'
         required: false
         default: ''
 
@@ -98,29 +114,62 @@ jobs:
           fi
           echo "Secret CDS_API_KEY está definido (conteúdo nunca exibido neste log)."
 
-      # Bloqueia hindcast completo/parcial acidental (pilot=false) sem
-      # confirmação explícita — roda ANTES de instalar dependências ou
-      # tocar no CDS. Pulado quando dry_run_plan=true (nenhum download
-      # de qualquer forma) ou pilot=true (default seguro).
+      # Bloqueia o hindcast completo oficial acidental sem confirmação
+      # explícita — roda ANTES de instalar dependências ou tocar no
+      # CDS. Pulado quando dry_run_plan=true (nenhum download de
+      # qualquer forma) ou modo_execucao=PILOT (default seguro).
       - name: Guardrail — hindcast completo exige confirmação explícita
-        if: inputs.dry_run_plan != 'true' && inputs.pilot != 'true'
+        if: inputs.dry_run_plan != 'true' && inputs.modo_execucao == 'HINDCAST_COMPLETO_1981_2016'
         run: |
           if [ "${{ inputs.confirm_full_hindcast }}" != "EXECUTAR_1981_2016" ]; then
-            echo "::error::Hindcast completo/parcial (pilot=false) bloqueado sem confirmação explícita."
+            echo "::error::Hindcast completo oficial (modo_execucao=HINDCAST_COMPLETO_1981_2016) bloqueado sem confirmação explícita."
             {
               echo "## ❌ Hindcast completo bloqueado"
               echo ""
-              echo "Rodar com **pilot=false** (hindcast completo ou parcial, até 432 origens reais)"
-              echo "exige preencher o input **confirm_full_hindcast** com o texto exato"
-              echo "\`EXECUTAR_1981_2016\`."
+              echo "Rodar com **modo_execucao=HINDCAST_COMPLETO_1981_2016** (execução oficial, 432"
+              echo "origens reais, 1981-2016) exige preencher o input **confirm_full_hindcast** com"
+              echo "o texto exato \`EXECUTAR_1981_2016\`."
               echo ""
-              echo "A regra da Fase 2A.3 é: primeiro validar com **pilot=true** (pilot longitudinal, 72 origens —"
-              echo "é o default deste workflow). Só depois de revisar e aprovar o resultado do"
-              echo "piloto é que o hindcast completo deve ser liberado."
+              echo "A regra da Fase 2A.3 é: primeiro validar com **modo_execucao=PILOT** (pilot"
+              echo "longitudinal, 72 origens — é o default deste workflow, já validado em execução"
+              echo "real). Só depois de revisar e aprovar o resultado do piloto é que o hindcast"
+              echo "completo oficial deve ser liberado."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "Confirmação explícita recebida (confirm_full_hindcast=EXECUTAR_1981_2016) — liberando execução."
+
+      # Seção 11 — resumo claro do modo ANTES da execução real. Números
+      # fixos (documentados aqui, não calculados) — não depende de
+      # Python nem acessa o CDS.
+      - name: Resumo do modo de execução
+        run: |
+          if [ "${{ inputs.modo_execucao }}" = "HINDCAST_COMPLETO_1981_2016" ]; then
+            {
+              echo "## MODO: HINDCAST COMPLETO OFICIAL 1981–2016"
+              echo ""
+              echo "- Origens: 432 (1981-2016, todos os 12 meses)"
+              echo "- Leads: 1-6"
+              echo "- Membros: 25"
+              echo "- Linhas raw esperadas: 64.800"
+              echo "- Summaries esperados: 2.592"
+              echo "- Período de avaliação: 1991-2016"
+              echo "- Warm-up: 1981-1990"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## MODO: PILOT LONGITUDINAL"
+              echo ""
+              echo "- Origens: 72 (todos jan/jul, 1981-2016)"
+              echo "- Leads: 1-6"
+              echo "- Membros: 25"
+              echo "- Linhas raw esperadas: 10.800"
+              echo "- Summaries esperados: 432"
+              echo "- Forecasts avaliáveis esperados: 312"
+              echo "- Período de avaliação: 1991-2016"
+              echo "- Warm-up: 1981-1990"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -140,18 +189,17 @@ jobs:
         run: python scripts/verificar_dashboard.py
 
       # Reflete exatamente o que a etapa "Rodar hindcast completo" abaixo
-      # vai executar — com pilot=true mostra o plano das 72 origens do
-      # pilot longitudinal, nunca o plano de 432 origens do hindcast completo.
+      # vai executar — com modo_execucao=PILOT mostra o plano das 72
+      # origens do pilot longitudinal; com HINDCAST_COMPLETO_1981_2016
+      # mostra o plano oficial de 432 origens, SEMPRE 1981-2016 fixo
+      # (Seção 10 — nunca lê start_year/end_year/init_months do input
+      # humano neste modo).
       - name: Mostrar plano de execução (dry-run, nunca acessa o CDS)
         run: |
-          if [ "${{ inputs.pilot }}" = "true" ]; then
-            python scripts/c3s_hindcast_completo.py --pilot --dry-run-plan
+          if [ "${{ inputs.modo_execucao }}" = "HINDCAST_COMPLETO_1981_2016" ]; then
+            python scripts/c3s_hindcast_completo.py --start-year 1981 --end-year 2016 --dry-run-plan
           else
-            python scripts/c3s_hindcast_completo.py \
-              --start-year "${{ inputs.start_year }}" \
-              --end-year "${{ inputs.end_year }}" \
-              ${{ inputs.init_months != '' && format('--init-months {0}', inputs.init_months) || '' }} \
-              --dry-run-plan
+            python scripts/c3s_hindcast_completo.py --pilot --dry-run-plan
           fi
 
       - name: Criar ~/.cdsapirc (temporário, nunca commitado)
@@ -164,19 +212,19 @@ jobs:
           chmod 600 "$HOME/.cdsapirc"
           echo "~/.cdsapirc criado (permissão 600, conteúdo nunca exibido)."
 
-      # Sai com código != 0 se a auditoria de leakage reprovar (ver
-      # c3s_hindcast_completo.py::main()) — os passos seguintes usam
-      # if: always() de propósito para rodar mesmo assim.
-      - name: Rodar hindcast completo C3S (pode ser piloto, parcial ou oficial)
+      # Sai com código != 0 se a barreira de aprovação reprovar (pilot:
+      # validar_pilot_aprovado; oficial: validar_full_aprovado — ambas
+      # em c3s_hindcast_completo.py::main()) — os passos seguintes usam
+      # if: always() de propósito para rodar mesmo assim. Modo oficial
+      # SEMPRE 1981-2016, todos os meses, sem --init-months (Seção 10 —
+      # hard-guarded, nunca lê start_year/end_year/init_months aqui).
+      - name: Rodar hindcast completo C3S (pilot ou oficial 1981-2016)
         if: inputs.dry_run_plan != 'true'
         run: |
-          if [ "${{ inputs.pilot }}" = "true" ]; then
-            python scripts/c3s_hindcast_completo.py --pilot
+          if [ "${{ inputs.modo_execucao }}" = "HINDCAST_COMPLETO_1981_2016" ]; then
+            python scripts/c3s_hindcast_completo.py --start-year 1981 --end-year 2016
           else
-            python scripts/c3s_hindcast_completo.py \
-              --start-year "${{ inputs.start_year }}" \
-              --end-year "${{ inputs.end_year }}" \
-              ${{ inputs.init_months != '' && format('--init-months {0}', inputs.init_months) || '' }}
+            python scripts/c3s_hindcast_completo.py --pilot
           fi
 
       - name: Remover credencial

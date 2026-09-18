@@ -858,12 +858,28 @@ def _versoes_pacotes():
     return versoes
 
 
+def _execution_mode(resultado):
+    """Seção 12 (preparação do hindcast oficial): rótulo de auditoria
+    gravado no metadata.json — PILOT_LONGITUDINAL, FULL_1981_2016 (só
+    quando as origens pedidas são EXATAMENTE as 432 oficiais) ou
+    PARTIAL (execução parcial/depuração, sem barreira extra de
+    integridade)."""
+    r = resultado
+    if r['pilot']:
+        return 'PILOT_LONGITUDINAL'
+    origens_oficiais = set(construir_origens(ANO_INICIO_HINDCAST, ANO_FIM_HINDCAST, None))
+    if set(r['origens']) == origens_oficiais:
+        return 'FULL_1981_2016'
+    return 'PARTIAL'
+
+
 def montar_metadata(resultado):
     centro, sistema = cat.SISTEMA_ESCOLHIDO_FASE_2A
     r = resultado
     return {
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'modo': 'piloto' if r['pilot'] else 'completo',
+        'execution_mode': _execution_mode(r),
         'sistema': {'centro': centro, 'sistema': sistema, 'cds_system_code': '51'},
         'municipio': MUNICIPIO, 'leads': LEADS, 'n_membros_esperado': N_MEMBROS_ESPERADO,
         'unidade_esperada': UNIDADE_TPRATE_ESPERADA,
@@ -1034,6 +1050,57 @@ def validar_pilot_aprovado(resultado):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Validação do HINDCAST COMPLETO OFICIAL (preparação do disparo real,
+# 1981-2016) — barreira de INTEGRIDADE DO EXPERIMENTO, nunca de skill.
+# MSESS/RPSS negativo, bias correction que piora ou um lead ruim são
+# resultados científicos válidos e NUNCA reprovam esta barreira; só
+# reprova se o experimento em si ficou incompleto ou corrompido
+# (origens faltando, contagens erradas, leakage, tabela/bootstrap
+# vazios). Só é aplicada quando a execução pedida é EXATAMENTE a
+# oficial (1981-2016, todos os 12 meses) — uma execução parcial/
+# depuração continua no gate de leakage já existente, sem essa barreira
+# extra.
+# ══════════════════════════════════════════════════════════════════════════
+
+def validar_full_aprovado(resultado):
+    """Retorna (aprovado: bool, motivos: list[str]) — mesmo formato de
+    validar_pilot_aprovado, mas para a execução oficial completa."""
+    r = resultado
+    motivos = []
+    n_origens_esperado = (ANO_FIM_HINDCAST - ANO_INICIO_HINDCAST + 1) * 12
+
+    n_ok = len(r['origens']) - len(r['falhas'])
+    if n_ok != n_origens_esperado:
+        motivos.append(f"origens: {n_ok}/{len(r['origens'])} processadas com sucesso, "
+                        f"esperado {n_origens_esperado}/{n_origens_esperado}")
+
+    raw_esperado = n_origens_esperado * N_MEMBROS_ESPERADO * len(LEADS)
+    if len(r['raw_df']) != raw_esperado:
+        motivos.append(f"raw: {len(r['raw_df'])} linhas, esperado {raw_esperado}")
+
+    summary_esperado = n_origens_esperado * len(LEADS)
+    if len(r['summary_df']) != summary_esperado:
+        motivos.append(f"summary: {len(r['summary_df'])} linhas, esperado {summary_esperado}")
+
+    if len(r['chirps_df']) != 432:
+        motivos.append(f"CHIRPS: {len(r['chirps_df'])} meses, esperado 432")
+
+    if not r['leakage_audit_aprovado']:
+        motivos.append("auditoria de leakage reprovada")
+
+    for nome in TABELAS_SKILL_OBRIGATORIAS:
+        tabela = r['tabelas_skill'].get(nome)
+        if tabela is None or tabela.empty:
+            motivos.append(f"tabela de skill obrigatória vazia: {nome}")
+
+    bootstrap_df = r['bootstrap_df']
+    if bootstrap_df is None or bootstrap_df.empty:
+        motivos.append("bootstrap_skill vazio")
+
+    return (len(motivos) == 0, motivos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # CLI
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -1092,6 +1159,21 @@ def main():
         print("⚠ PILOT — NÃO É CONCLUSÃO FINAL DE SKILL. É apenas um pilot metodológico "
               "longitudinal (72 origens, 1/6 do hindcast completo); skill anual completo só é "
               "conclusivo com 1981-2016, todos os 12 meses.")
+        return
+
+    execucao_oficial = (args.start_year, args.end_year) == (ANO_INICIO_HINDCAST, ANO_FIM_HINDCAST) and not meses
+    if execucao_oficial:
+        aprovado, motivos = validar_full_aprovado(resultado)
+        if not aprovado:
+            print("\n❌ HINDCAST COMPLETO OFICIAL REPROVADO — artifacts gravados para diagnóstico; "
+                  "encerrando com erro (guardrail de INTEGRIDADE DO EXPERIMENTO — skill negativo "
+                  "NUNCA é motivo de reprovação aqui, só experimento incompleto/corrompido):")
+            for motivo in motivos:
+                print(f"  - {motivo}")
+            sys.exit(1)
+        print("\n✅ HINDCAST COMPLETO OFICIAL 1981-2016 APROVADO — integridade do experimento "
+              "confirmada (432 origens, 64.800 raw, 2.592 summaries, CHIRPS 432 meses, leakage OK, "
+              "tabelas de skill e bootstrap preenchidos) — ver artifacts/c3s_hindcast/RELATORIO.md")
         return
 
     if not resultado['leakage_audit_aprovado']:
