@@ -35,7 +35,7 @@ roda bootstrap e audita leakage.
 ESCOPO DESTA ENTREGA (Seção 38 da tarefa): implementar pipeline +
 métricas + testes + workflow + --dry-run-plan + --pilot. NÃO executar
 os 432 casos reais agora — isso só acontece depois do merge, primeiro
-como PILOTO (6 origens), e só depois (se aprovado) como hindcast
+como PILOT LONGITUDINAL (72 origens), e só depois (se aprovado) como hindcast
 completo.
 
 GITHUB ACTIONS CACHE (Seção 8): NÃO implementado nesta primeira versão
@@ -108,8 +108,34 @@ NOME_BLOCO_OPERACIONAL_PRIORITARIO = 'SET_FEV_prioritario'
 N_BOOTSTRAP = 2000
 SEED_BOOTSTRAP = 42
 
-# Seção 37 — pilot fixo, 6 origens (2 por década: 1991/2000/2010, jan e jul).
-PILOT_ORIGENS = [(1991, 1), (1991, 7), (2000, 1), (2000, 7), (2010, 1), (2010, 7)]
+# Correção pós-pilot real (run 35260471652): o pilot de 6 origens
+# isoladas (1991/2000/2010, jan/jul) terminou "success" mas com
+# n_forecasts_avaliacao_principal=0 — nenhuma delas tinha histórico
+# PRÉVIO de origens C3S para treinar o bias (bias_training_n=0,
+# bias_mm=NaN, ens_mean_bc=NaN em todas). Substituído por um pilot
+# LONGITUDINAL: todos os janeiros e julhos de 1981 a 2016 (36 anos × 2
+# meses = 72 origens) — mantém o pilot em 1/6 do hindcast completo (72
+# vs. 432) mas garante série contínua o bastante para: warm-up
+# 1981-1990 alimentar o treino de bias/climatologia; avaliação real
+# 1991-2016; MIN_ANOS_TREINO=10 satisfeito no primeiro ano avaliado
+# (1991) porque jan/jul aparecem em TODOS os 36 anos, então qualquer
+# combinação lead×mês-alvo originada destas origens sempre tem 10 anos
+# anteriores do mesmo mês disponíveis; desenvolvimento (1991-2007) e
+# confirmação (2008-2016) ambos com dado real; bootstrap por ano
+# genuinamente exercitado. NÃO é conclusão de skill anual completo —
+# é um pilot metodológico para validar que o pipeline (bias/skill/
+# bootstrap) funciona fim-a-fim antes do hindcast completo (432
+# origens, todos os 12 meses).
+PILOT_INIT_MONTHS = [1, 7]
+PILOT_ORIGENS = [
+    (ano, mes)
+    for ano in range(ANO_INICIO_HINDCAST, ANO_FIM_HINDCAST + 1)
+    for mes in PILOT_INIT_MONTHS
+]
+# 52 origens avaliáveis (1991-2016, 2/ano) × 6 leads = 312.
+PILOT_FORECASTS_AVALIACAO_ESPERADOS = (
+    (AVALIACAO_ANO_FIM - AVALIACAO_ANO_INICIO + 1) * len(PILOT_INIT_MONTHS) * len(LEADS)
+)
 
 # Correção pós-pilot real (run 35257900850): buscar CHIRPS 1981-2016
 # inteiro numa única chamada ao ClimateSERV estourou o serviço ("Error
@@ -675,20 +701,28 @@ def plano_execucao(ano_ini=ANO_INICIO_HINDCAST, ano_fim=ANO_FIM_HINDCAST, meses=
 
 
 def plano_piloto():
-    """Plano do MODO PILOTO (Seção 37/39) — 6 origens fixas, nunca as
-    432 do hindcast completo. Usado por --pilot --dry-run-plan para que
-    o plano mostrado bata com o que --pilot de verdade vai processar
-    (correção de segurança: antes, --dry-run-plan sempre mostrava o
-    plano de 432 origens mesmo com --pilot, o que podia confundir sobre
-    o que ia rodar de fato)."""
+    """Plano do MODO PILOTO LONGITUDINAL (correção pós-run 35260471652)
+    — 72 origens (todos jan/jul de 1981-2016), nunca as 432 do hindcast
+    completo. Usado por --pilot --dry-run-plan para que o plano
+    mostrado bata com o que --pilot de verdade vai processar (mesma
+    correção de segurança de antes: o plano tem que refletir o que
+    --pilot roda de fato, não o plano do hindcast completo)."""
     n = len(PILOT_ORIGENS)
     return {
-        'modo': 'PILOT', 'n_origens': n, 'origens': [_origem_str(a, m) for a, m in PILOT_ORIGENS],
+        'modo': 'PILOT LONGITUDINAL', 'n_origens': n,
+        'origens': [_origem_str(a, m) for a, m in PILOT_ORIGENS],
+        'init_months': PILOT_INIT_MONTHS,
+        'periodo': f'{ANO_INICIO_HINDCAST}-{ANO_FIM_HINDCAST}',
         'requests_cds_previstos': n,
         'raw_rows_esperadas': n * N_MEMBROS_ESPERADO * len(LEADS),
         'summary_rows_esperadas': n * len(LEADS),
+        'forecasts_avaliacao_esperados': PILOT_FORECASTS_AVALIACAO_ESPERADOS,
+        'periodo_warmup': f'{WARMUP_ANO_INICIO}-{WARMUP_ANO_FIM}',
+        'periodo_avaliacao': f'{AVALIACAO_ANO_INICIO}-{AVALIACAO_ANO_FIM}',
         'min_anos_treino': MIN_ANOS_TREINO, 'municipio': MUNICIPIO, 'leads': LEADS,
         'n_membros_esperado': N_MEMBROS_ESPERADO, 'artifacts_esperados': ARTIFACT_FILENAMES,
+        'aviso': 'PILOT — NÃO É CONCLUSÃO FINAL DE SKILL. Pilot metodológico longitudinal '
+                 '(1/6 do hindcast completo) para validar bias/skill/bootstrap fim-a-fim.',
     }
 
 
@@ -743,6 +777,7 @@ def rodar(origens, pilot=False, sleep_fn=time.sleep):
         'leakage_audit_aprovado': bool(leakage_aprovado), 'tabelas_skill': tabelas_skill,
         'bootstrap_df': bootstrap_df, 'falhas': falhas, 'metadados_origem': metadados_origem,
         'origens': origens, 'pilot': pilot, 'avaliacao_n': len(avaliacao_df),
+        'avaliacao_df': avaliacao_df,
     }
 
 
@@ -797,8 +832,17 @@ def gerar_relatorio_markdown(resultado):
         ]
 
     linhas += ["", "## Nota metodológica", "", NOTA_HINDCAST_COMPLETO]
+    if r['pilot']:
+        linhas += ["", "## ⚠ PILOT — NÃO É CONCLUSÃO FINAL DE SKILL", "",
+                   f"Pilot metodológico LONGITUDINAL: {len(PILOT_ORIGENS)} origens "
+                   f"(todos os janeiros e julhos de {ANO_INICIO_HINDCAST}-{ANO_FIM_HINDCAST}, "
+                   f"1/6 do hindcast completo de {(ANO_FIM_HINDCAST - ANO_INICIO_HINDCAST + 1) * 12} "
+                   "origens). Objetivo é validar que bias correction, tabelas de skill e bootstrap "
+                   "são genuinamente exercitados fim-a-fim com histórico suficiente — não estimar "
+                   "skill anual completo a partir deste resultado."]
     linhas += ["", "---", "",
-               f"Relatório gerado a partir de {'PILOTO (6 origens fixas)' if r['pilot'] else 'execução completa'} "
+               f"Relatório gerado a partir de "
+               f"{f'PILOTO LONGITUDINAL ({len(PILOT_ORIGENS)} origens)' if r['pilot'] else 'execução completa'} "
                "— não promover para produção sem revisão humana (Seção 42)."]
     return '\n'.join(linhas) + '\n'
 
@@ -879,6 +923,117 @@ def escrever_saidas(resultado):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Validação do PILOT (correção pós-run 35260471652) — o pilot de 6
+# origens isoladas terminou "success" sem exercitar bias/skill/
+# bootstrap de verdade (n_forecasts_avaliacao_principal=0). Esta
+# barreira re-verifica de forma independente, sobre o resultado real do
+# pilot longitudinal (72 origens), que TODAS as camadas científicas
+# (bias training, probabilidades, tabelas de skill, bootstrap) foram
+# genuinamente exercitadas — critérios A-M da correção. Qualquer falha
+# aqui reprova o pilot (exit != 0), mesmo com artifacts gravados.
+# ══════════════════════════════════════════════════════════════════════════
+
+TABELAS_SKILL_OBRIGATORIAS = ['overall', 'by_lead', 'by_month', 'by_month_lead',
+                               'operational_seasons', 'prob_overall', 'prob_by_lead']
+
+
+def validar_pilot_aprovado(resultado):
+    """Critérios A-M — só aprova o pilot se TODAS as camadas científicas
+    (bias, probabilidades, skill, bootstrap) tiverem sido realmente
+    exercitadas com dado suficiente, não apenas se o pipeline rodou sem
+    exceção. Retorna (aprovado: bool, motivos: list[str])."""
+    r = resultado
+    motivos = []
+
+    n_ok = len(r['origens']) - len(r['falhas'])
+    if n_ok != len(PILOT_ORIGENS):
+        motivos.append(f"A) {n_ok}/{len(PILOT_ORIGENS)} origens processadas com sucesso, "
+                        f"esperado {len(PILOT_ORIGENS)}/{len(PILOT_ORIGENS)}")
+
+    raw_df = r['raw_df']
+    if raw_df.empty:
+        motivos.append("B/C) raw_df vazio — impossível checar membros/leads por origem")
+    else:
+        membros_por_origem = raw_df.groupby('init_date')['member'].nunique()
+        if not (membros_por_origem == N_MEMBROS_ESPERADO).all():
+            motivos.append(f"B) nem todas as origens têm {N_MEMBROS_ESPERADO} membros")
+        leads_por_origem = raw_df.groupby('init_date')['lead'].nunique()
+        if not (leads_por_origem == len(LEADS)).all():
+            motivos.append(f"C) nem todas as origens têm {len(LEADS)} leads")
+
+    esperado_raw = len(PILOT_ORIGENS) * N_MEMBROS_ESPERADO * len(LEADS)
+    if len(raw_df) != esperado_raw:
+        motivos.append(f"D) {len(raw_df)} linhas raw, esperado {esperado_raw}")
+
+    esperado_summary = len(PILOT_ORIGENS) * len(LEADS)
+    if len(r['summary_df']) != esperado_summary:
+        motivos.append(f"E) {len(r['summary_df'])} summaries, esperado {esperado_summary}")
+
+    if len(r['chirps_df']) != 432:
+        motivos.append(f"F) CHIRPS com {len(r['chirps_df'])} meses, esperado 432")
+
+    if r['avaliacao_n'] != PILOT_FORECASTS_AVALIACAO_ESPERADOS:
+        motivos.append(f"G) n_forecasts_avaliacao_principal={r['avaliacao_n']}, "
+                        f"esperado {PILOT_FORECASTS_AVALIACAO_ESPERADOS} — pilot não pode terminar "
+                        f"aprovado com a avaliação principal vazia ou incompleta (run 35260471652).")
+
+    avaliacao_df = r.get('avaliacao_df')
+    if avaliacao_df is None or avaliacao_df.empty:
+        motivos.append("H) nenhum forecast avaliável — impossível checar clim_n/bias_training_n/"
+                        "bias_mm/ens_mean_bc (bias correction nunca foi exercitada)")
+        motivos.append("I) nenhum forecast avaliável — impossível checar soma das probabilidades RAW")
+        motivos.append("J) nenhum forecast avaliável — impossível checar soma das probabilidades BC")
+        motivos.append("Seção 12) nenhum forecast avaliável — impossível checar desenvolvimento/confirmação")
+    else:
+        if (avaliacao_df['clim_n'] < MIN_ANOS_TREINO).any():
+            motivos.append("H) há forecast avaliável com clim_n < MIN_ANOS_TREINO")
+        if (avaliacao_df['bias_training_n'] < MIN_ANOS_TREINO).any():
+            motivos.append("H) há forecast avaliável com bias_training_n < MIN_ANOS_TREINO — bias "
+                            "correction não teve histórico suficiente (reprodução do defeito do run "
+                            "35260471652)")
+        if not np.isfinite(avaliacao_df['bias_mm'].astype(float)).all():
+            motivos.append("H) há forecast avaliável com bias_mm não finito (NaN/inf)")
+        if not np.isfinite(avaliacao_df['ens_mean_bc'].astype(float)).all():
+            motivos.append("H) há forecast avaliável com ens_mean_bc não finito (NaN/inf)")
+
+        soma_raw = (avaliacao_df['prob_below_raw'].astype(float) +
+                    avaliacao_df['prob_normal_raw'].astype(float) +
+                    avaliacao_df['prob_above_raw'].astype(float))
+        if not np.allclose(soma_raw, 1.0, atol=1e-6):
+            motivos.append("I) probabilidades RAW não somam 1 em todos os forecasts avaliáveis")
+
+        soma_bc = (avaliacao_df['prob_below_bc'].astype(float) +
+                   avaliacao_df['prob_normal_bc'].astype(float) +
+                   avaliacao_df['prob_above_bc'].astype(float))
+        if not np.allclose(soma_bc, 1.0, atol=1e-6):
+            motivos.append("J) probabilidades BC não somam 1 em todos os forecasts avaliáveis")
+
+        periodos_presentes = set(avaliacao_df['evaluation_period'].unique())
+        if 'desenvolvimento' not in periodos_presentes or \
+                (avaliacao_df['evaluation_period'] == 'desenvolvimento').sum() == 0:
+            motivos.append("Seção 12) sem forecasts avaliáveis em desenvolvimento (1991-2007)")
+        if 'confirmacao' not in periodos_presentes or \
+                (avaliacao_df['evaluation_period'] == 'confirmacao').sum() == 0:
+            motivos.append("Seção 12) sem forecasts avaliáveis em confirmação (2008-2016)")
+
+    if not r['leakage_audit_aprovado']:
+        motivos.append("K) auditoria de leakage reprovada")
+
+    for nome in TABELAS_SKILL_OBRIGATORIAS:
+        tabela = r['tabelas_skill'].get(nome)
+        if tabela is None or tabela.empty:
+            motivos.append(f"L) tabela de skill obrigatória vazia: {nome}")
+
+    bootstrap_df = r['bootstrap_df']
+    if bootstrap_df is None or bootstrap_df.empty:
+        motivos.append("M) bootstrap_skill vazio")
+    elif 'estimativa' in bootstrap_df.columns and bootstrap_df['estimativa'].isna().all():
+        motivos.append("M) bootstrap_skill sem nenhuma estimativa calculada (todas NaN)")
+
+    return (len(motivos) == 0, motivos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # CLI
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -890,14 +1045,15 @@ def main():
     ap.add_argument('--dry-run-plan', action='store_true',
                      help='Não acessa o CDS — só lista o plano de execução e valida guardrails.')
     ap.add_argument('--pilot', action='store_true',
-                     help=f'Roda só as {len(PILOT_ORIGENS)} origens fixas do piloto (Seção 37/39).')
+                     help=f'Roda o pilot longitudinal ({len(PILOT_ORIGENS)} origens — todos jan/jul '
+                          f'de {ANO_INICIO_HINDCAST}-{ANO_FIM_HINDCAST}), nunca o hindcast completo.')
     args = ap.parse_args()
 
     meses = [int(x) for x in args.init_months.split(',')] if args.init_months else None
 
     if args.dry_run_plan:
         if args.pilot:
-            imprimir_plano(plano_piloto(), modo=f'PILOT ({len(PILOT_ORIGENS)} origens)')
+            imprimir_plano(plano_piloto(), modo=f'PILOT LONGITUDINAL ({len(PILOT_ORIGENS)} origens)')
         else:
             imprimir_plano(plano_execucao(args.start_year, args.end_year, meses))
         return
@@ -911,7 +1067,7 @@ def main():
 
     if args.pilot:
         origens = PILOT_ORIGENS
-        print(f"=== C3S Hindcast Completo — MODO PILOTO — {len(origens)} origens fixas ===")
+        print(f"=== C3S Hindcast Completo — MODO PILOTO LONGITUDINAL — {len(origens)} origens ===")
     else:
         origens = construir_origens(args.start_year, args.end_year, meses)
         print(f"=== C3S Hindcast Completo — {len(origens)} origens — leads {LEADS} ===")
@@ -921,6 +1077,22 @@ def main():
 
     resultado = rodar(origens, pilot=args.pilot)
     escrever_saidas(resultado)
+
+    if args.pilot:
+        aprovado, motivos = validar_pilot_aprovado(resultado)
+        if not aprovado:
+            print("\n❌ PILOT REPROVADO — artifacts gravados para diagnóstico; encerrando com erro "
+                  "(correção pós-run 35260471652: pilot só aprova se bias/skill/bootstrap tiverem "
+                  "sido genuinamente exercitados, não basta o pipeline rodar sem exceção):")
+            for motivo in motivos:
+                print(f"  - {motivo}")
+            sys.exit(1)
+        print("\n✅ PILOT APROVADO — todas as camadas científicas (bias, probabilidades, skill, "
+              "bootstrap) foram genuinamente exercitadas — ver artifacts/c3s_hindcast/RELATORIO.md")
+        print("⚠ PILOT — NÃO É CONCLUSÃO FINAL DE SKILL. É apenas um pilot metodológico "
+              "longitudinal (72 origens, 1/6 do hindcast completo); skill anual completo só é "
+              "conclusivo com 1981-2016, todos os 12 meses.")
+        return
 
     if not resultado['leakage_audit_aprovado']:
         print("\n❌ AUDITORIA DE LEAKAGE REPROVADA — artifacts gravados; encerrando com erro "

@@ -126,20 +126,54 @@ class DryRunPlanTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Piloto (Seção 37/39) — 6 origens fixas
+# Piloto (correção pós-run 35260471652) — pilot LONGITUDINAL, 72
+# origens (todos jan/jul de 1981-2016), não mais 6 origens isoladas.
 # ══════════════════════════════════════════════════════════════════════════
 
 class PilotoTestCase(unittest.TestCase):
 
-    def test_seis_origens_fixas(self):
-        self.assertEqual(h.PILOT_ORIGENS,
-                          [(1991, 1), (1991, 7), (2000, 1), (2000, 7), (2010, 1), (2010, 7)])
-        self.assertEqual(len(h.PILOT_ORIGENS), 6)
+    def test_setenta_e_duas_origens(self):
+        self.assertEqual(len(h.PILOT_ORIGENS), 72)
+
+    def test_origens_sao_exatamente_todos_jan_jul_1981_2016(self):
+        esperado = [(ano, mes) for ano in range(1981, 2017) for mes in (1, 7)]
+        self.assertEqual(h.PILOT_ORIGENS, esperado)
+
+    def test_somente_meses_1_e_7(self):
+        meses = {mes for _, mes in h.PILOT_ORIGENS}
+        self.assertEqual(meses, {1, 7})
+
+    def test_anos_vao_de_1981_a_2016(self):
+        anos = sorted({ano for ano, _ in h.PILOT_ORIGENS})
+        self.assertEqual(anos[0], 1981)
+        self.assertEqual(anos[-1], 2016)
+        self.assertEqual(len(anos), 36)
 
     def test_todas_dentro_do_periodo_hindcast(self):
         for ano, _ in h.PILOT_ORIGENS:
             self.assertLessEqual(h.ANO_INICIO_HINDCAST, ano)
             self.assertLessEqual(ano, h.ANO_FIM_HINDCAST)
+
+    def test_raw_esperado_10800(self):
+        self.assertEqual(len(h.PILOT_ORIGENS) * h.N_MEMBROS_ESPERADO * len(h.LEADS), 10800)
+
+    def test_summary_esperado_432(self):
+        self.assertEqual(len(h.PILOT_ORIGENS) * len(h.LEADS), 432)
+
+    def test_forecasts_avaliacao_esperados_312(self):
+        self.assertEqual(h.PILOT_FORECASTS_AVALIACAO_ESPERADOS, 312)
+
+    def test_primeiro_ano_avaliado_1991_tem_10_anos_anteriores_do_mesmo_mes(self):
+        """Para 1991-01 (jan) e 1991-07 (jul), os 10 anos de treino
+        (1981-1990) devem estar todos presentes no pilot — condição
+        necessária para bias_training_n>=MIN_ANOS_TREINO no primeiro
+        ano avaliado (defeito do run 35260471652: pilot antigo não
+        tinha NENHUM ano anterior carregado)."""
+        anos_jan_pilot = {ano for ano, mes in h.PILOT_ORIGENS if mes == 1}
+        anos_jul_pilot = {ano for ano, mes in h.PILOT_ORIGENS if mes == 7}
+        anos_treino_esperados = set(range(1981, 1991))
+        self.assertTrue(anos_treino_esperados.issubset(anos_jan_pilot))
+        self.assertTrue(anos_treino_esperados.issubset(anos_jul_pilot))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -639,6 +673,176 @@ class LeakageAuditTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Pilot longitudinal — correção pós-run 35260471652. O pilot antigo (6
+# origens isoladas) terminava com n_forecasts_avaliacao_principal=0
+# porque não tinha NENHUM histórico prévio de origens C3S para treinar
+# bias. Aqui rodamos o pipeline completo (construir_summary_e_calibrado
+# + filtrar_avaliacao) sobre dado sintético gerado com as 72 origens
+# reais do novo PILOT_ORIGENS (todos os 6 leads, 25 membros — o mesmo
+# volume que a execução real produziria) e confirmamos que a avaliação
+# principal (1991-2016) é genuinamente exercitada.
+# ══════════════════════════════════════════════════════════════════════════
+
+class PilotLongitudinalIntegradoTestCase(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        raw_str = _raw_sintetico(h.PILOT_ORIGENS, leads=h.LEADS, n_membros=h.N_MEMBROS_ESPERADO)
+        cls.raw = h._com_periods(raw_str)
+        cls.chirps = _chirps_sintetico(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST)
+        cls.summary, cls.calibrated = h.construir_summary_e_calibrado(cls.raw, cls.chirps)
+        cls.avaliacao = h.filtrar_avaliacao(cls.summary)
+
+    def test_raw_tem_10800_linhas(self):
+        self.assertEqual(len(self.raw), 10800)
+
+    def test_summary_tem_432_linhas(self):
+        self.assertEqual(len(self.summary), 432)
+
+    def test_avaliacao_principal_tem_312_forecasts(self):
+        self.assertEqual(len(self.avaliacao), h.PILOT_FORECASTS_AVALIACAO_ESPERADOS)
+        self.assertEqual(len(self.avaliacao), 312)
+
+    def test_origem_1991_01_tem_bias_training_n_maior_ou_igual_a_10(self):
+        linhas = self.summary[self.summary['init_date'] == pd.Period('1991-01', 'M')]
+        self.assertEqual(len(linhas), len(h.LEADS))
+        self.assertTrue((linhas['bias_training_n'] >= h.MIN_ANOS_TREINO).all(),
+                         f"bias_training_n por lead: {dict(zip(linhas['lead'], linhas['bias_training_n']))}")
+        self.assertTrue((linhas['clim_n'] >= h.MIN_ANOS_TREINO).all())
+
+    def test_origem_1991_07_tem_bias_training_n_maior_ou_igual_a_10(self):
+        linhas = self.summary[self.summary['init_date'] == pd.Period('1991-07', 'M')]
+        self.assertEqual(len(linhas), len(h.LEADS))
+        self.assertTrue((linhas['bias_training_n'] >= h.MIN_ANOS_TREINO).all(),
+                         f"bias_training_n por lead: {dict(zip(linhas['lead'], linhas['bias_training_n']))}")
+        self.assertTrue((linhas['clim_n'] >= h.MIN_ANOS_TREINO).all())
+
+    def test_confirmacao_contem_dado(self):
+        self.assertGreater((self.avaliacao['evaluation_period'] == 'confirmacao').sum(), 0)
+
+    def test_desenvolvimento_contem_dado(self):
+        self.assertGreater((self.avaliacao['evaluation_period'] == 'desenvolvimento').sum(), 0)
+
+    def test_avaliacao_nunca_inclui_warmup(self):
+        self.assertNotIn('warmup', set(self.avaliacao['evaluation_period'].unique()))
+
+    def test_bias_mm_e_ens_mean_bc_finitos_em_toda_avaliacao(self):
+        self.assertTrue(np.isfinite(self.avaliacao['bias_mm'].astype(float)).all())
+        self.assertTrue(np.isfinite(self.avaliacao['ens_mean_bc'].astype(float)).all())
+
+    def test_probabilidades_raw_e_bc_somam_1_em_toda_avaliacao(self):
+        soma_raw = (self.avaliacao['prob_below_raw'].astype(float) +
+                    self.avaliacao['prob_normal_raw'].astype(float) +
+                    self.avaliacao['prob_above_raw'].astype(float))
+        soma_bc = (self.avaliacao['prob_below_bc'].astype(float) +
+                   self.avaliacao['prob_normal_bc'].astype(float) +
+                   self.avaliacao['prob_above_bc'].astype(float))
+        self.assertTrue(np.allclose(soma_raw, 1.0, atol=1e-6))
+        self.assertTrue(np.allclose(soma_bc, 1.0, atol=1e-6))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# validar_pilot_aprovado — nunca repetir o falso-positivo do run
+# 35260471652 (workflow terminou "success" sem ter exercitado bias/
+# skill/bootstrap de verdade). Cada teste isola UM critério A-M
+# quebrado a partir de um resultado "bom" (o pipeline sintético da
+# classe acima) e confirma que o pilot é reprovado.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _resultado_pilot_bom():
+    """Resultado completo e aprovável do pilot, montado sobre o mesmo
+    dado sintético íntegro de PilotLongitudinalIntegradoTestCase — serve
+    de base para os testes de reprovação, que corrompem só UM campo."""
+    raw_str = _raw_sintetico(h.PILOT_ORIGENS, leads=h.LEADS, n_membros=h.N_MEMBROS_ESPERADO)
+    raw = h._com_periods(raw_str)
+    chirps = _chirps_sintetico(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST)
+    summary, calibrated = h.construir_summary_e_calibrado(raw, chirps)
+    avaliacao = h.filtrar_avaliacao(summary)
+    tabelas_skill = h.montar_tabelas_skill(avaliacao)
+    bootstrap_df = h.montar_bootstrap(avaliacao)
+    ens_df = h.construir_ens_df(raw)
+    leakage_df = h.construir_leakage_audit(summary, ens_df, chirps)
+    leakage_aprovado = leakage_df.empty or (leakage_df['leakage_status'] == 'OK').all()
+    return {
+        'raw_df': raw_str, 'summary_df': summary, 'calibrated_df': calibrated,
+        'chirps_df': chirps, 'leakage_df': leakage_df, 'temporal_df': h.construir_temporal_audit(raw),
+        'leakage_audit_aprovado': bool(leakage_aprovado), 'tabelas_skill': tabelas_skill,
+        'bootstrap_df': bootstrap_df, 'falhas': {}, 'metadados_origem': {},
+        'origens': list(h.PILOT_ORIGENS), 'pilot': True, 'avaliacao_n': len(avaliacao),
+        'avaliacao_df': avaliacao,
+    }
+
+
+class ValidarPilotAprovadoTestCase(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.resultado_bom = _resultado_pilot_bom()
+
+    def test_resultado_bom_e_aprovado(self):
+        aprovado, motivos = h.validar_pilot_aprovado(self.resultado_bom)
+        self.assertTrue(aprovado, motivos)
+        self.assertEqual(motivos, [])
+
+    def test_reprova_se_n_forecasts_avaliacao_principal_e_zero(self):
+        resultado = dict(self.resultado_bom)
+        resultado['avaliacao_n'] = 0
+        resultado['avaliacao_df'] = self.resultado_bom['avaliacao_df'].iloc[0:0]
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('G)' in m or 'n_forecasts_avaliacao_principal' in m for m in motivos))
+
+    def test_reprova_se_bc_inteiramente_nan(self):
+        resultado = dict(self.resultado_bom)
+        avaliacao = self.resultado_bom['avaliacao_df'].copy()
+        avaliacao['ens_mean_bc'] = np.nan
+        avaliacao['bias_mm'] = np.nan
+        resultado['avaliacao_df'] = avaliacao
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('bias_mm' in m or 'ens_mean_bc' in m for m in motivos))
+
+    def test_reprova_se_tabela_de_skill_obrigatoria_vazia(self):
+        resultado = dict(self.resultado_bom)
+        tabelas = dict(self.resultado_bom['tabelas_skill'])
+        tabelas['by_lead'] = pd.DataFrame()
+        resultado['tabelas_skill'] = tabelas
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('by_lead' in m for m in motivos))
+
+    def test_reprova_se_probabilidades_bc_nao_somam_1(self):
+        resultado = dict(self.resultado_bom)
+        avaliacao = self.resultado_bom['avaliacao_df'].copy()
+        avaliacao['prob_below_bc'] = avaliacao['prob_below_bc'] + 0.5
+        resultado['avaliacao_df'] = avaliacao
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('J)' in m for m in motivos))
+
+    def test_reprova_se_bootstrap_vazio(self):
+        resultado = dict(self.resultado_bom)
+        resultado['bootstrap_df'] = pd.DataFrame()
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('M)' in m for m in motivos))
+
+    def test_reprova_se_origens_incompletas(self):
+        resultado = dict(self.resultado_bom)
+        resultado['falhas'] = {'1981-01': 'simulado'}
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('A)' in m for m in motivos))
+
+    def test_reprova_se_leakage_reprovado(self):
+        resultado = dict(self.resultado_bom)
+        resultado['leakage_audit_aprovado'] = False
+        aprovado, motivos = h.validar_pilot_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('K)' in m for m in motivos))
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Credenciais / produção intocada
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -860,12 +1064,19 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
         r = self._rodar_guardrail_bash(pilot='true', dry_run_plan='false', confirm='')
         self.assertIsNone(r)
 
-    # F — plano exibido no modo piloto mostra 6 origens, nunca 432
-    def test_f_plano_piloto_tem_6_origens(self):
+    # F — plano exibido no modo piloto mostra 72 origens, nunca 432
+    def test_f_plano_piloto_tem_72_origens(self):
         plano = h.plano_piloto()
-        self.assertEqual(plano['n_origens'], 6)
-        self.assertEqual(len(plano['origens']), 6)
-        self.assertEqual(plano['modo'], 'PILOT')
+        self.assertEqual(plano['n_origens'], 72)
+        self.assertEqual(len(plano['origens']), 72)
+        self.assertEqual(plano['modo'], 'PILOT LONGITUDINAL')
+        self.assertEqual(plano['init_months'], [1, 7])
+        self.assertEqual(plano['periodo'], '1981-2016')
+        self.assertEqual(plano['raw_rows_esperadas'], 10800)
+        self.assertEqual(plano['summary_rows_esperadas'], 432)
+        self.assertEqual(plano['forecasts_avaliacao_esperados'], 312)
+        self.assertEqual(plano['periodo_warmup'], '1981-1990')
+        self.assertEqual(plano['periodo_avaliacao'], '1991-2016')
 
     def test_f_mostrar_plano_ramifica_por_pilot_no_yaml(self):
         step = self._step('mostrar plano de execução')
