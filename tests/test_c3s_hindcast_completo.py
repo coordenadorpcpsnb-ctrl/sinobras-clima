@@ -912,7 +912,8 @@ class WorkflowTestCase(unittest.TestCase):
     def test_inputs_esperados(self):
         gatilhos = self.spec.get('on', self.spec.get(True))
         inputs = gatilhos['workflow_dispatch']['inputs']
-        for nome in ('start_year', 'end_year', 'init_months', 'dry_run_plan', 'pilot'):
+        for nome in ('start_year', 'end_year', 'init_months', 'dry_run_plan', 'modo_execucao',
+                     'confirm_full_hindcast'):
             self.assertIn(nome, inputs)
 
     def test_defaults_sao_o_periodo_oficial_completo(self):
@@ -959,12 +960,12 @@ class WorkflowTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Guardrail de segurança operacional — pilot=true é o default; o
-# hindcast completo/parcial (pilot=false) exige confirm_full_hindcast
-# == EXECUTAR_1981_2016, verificado ANTES de qualquer instalação/
-# download. Correção pedida depois de revisar o diff da Fase 2A.3: sem
-# isso, clicar "Run workflow" sem mexer em nada disparava os 432 casos
-# reais direto.
+# Guardrail de segurança operacional — modo_execucao=PILOT é o default;
+# o hindcast completo OFICIAL (modo_execucao=HINDCAST_COMPLETO_1981_2016)
+# exige confirm_full_hindcast == EXECUTAR_1981_2016, verificado ANTES de
+# qualquer instalação/download. Preparação do disparo oficial pós-pilot
+# validado em execução real (run 35340386904): sem isso, clicar "Run
+# workflow" sem mexer em nada disparava os 432 casos reais direto.
 # ══════════════════════════════════════════════════════════════════════════
 
 class GuardrailWorkflowTestCase(unittest.TestCase):
@@ -987,23 +988,32 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
                 return i
         self.fail(f"nenhum step com nome contendo {nome_substring!r} encontrado")
 
-    # A — pilot default é true
-    def test_a_pilot_default_e_true(self):
-        self.assertEqual(self.inputs['pilot']['default'], 'true')
+    # A — modo_execucao existe
+    def test_a_modo_execucao_existe(self):
+        self.assertIn('modo_execucao', self.inputs)
+        self.assertEqual(self.inputs['modo_execucao']['type'], 'choice')
+        self.assertEqual(set(self.inputs['modo_execucao']['options']),
+                          {'PILOT', 'HINDCAST_COMPLETO_1981_2016'})
+
+    # B — default é PILOT
+    def test_b_modo_execucao_default_e_pilot(self):
+        self.assertEqual(self.inputs['modo_execucao']['default'], 'PILOT')
 
     def test_confirm_full_hindcast_default_vazio(self):
         self.assertEqual(self.inputs['confirm_full_hindcast']['default'], '')
 
-    # B — sem alterar inputs, o workflow nunca dispara o hindcast completo
-    def test_b_defaults_do_click_run_rodam_so_o_piloto(self):
+    # C — pilot continua seguro por default: sem alterar inputs, o
+    # workflow nunca dispara o hindcast completo
+    def test_c_defaults_do_click_run_rodam_so_o_pilot(self):
         defaults = {nome: cfg.get('default', '') for nome, cfg in self.inputs.items()}
-        self.assertEqual(defaults['pilot'], 'true')
+        self.assertEqual(defaults['modo_execucao'], 'PILOT')
         self.assertEqual(defaults['dry_run_plan'], 'false')
-        # com pilot=true (default), a condição do guardrail é falsa — nunca bloqueia nem libera
-        # o hindcast completo; o step de execução usa --pilot nesse caso.
+        # com modo_execucao=PILOT (default), a condição do guardrail é falsa —
+        # nunca bloqueia nem libera o hindcast completo; o step de execução
+        # usa --pilot nesse caso.
         step_exec = self._step('rodar hindcast completo')
         self.assertIn('--pilot', step_exec['run'])
-        self.assertIn("inputs.pilot", step_exec['run'])
+        self.assertIn("inputs.modo_execucao", step_exec['run'])
 
     def test_guardrail_vem_antes_do_setup_python_e_do_download(self):
         self.assertLess(self._indice('guardrail'), self._indice('set up python'))
@@ -1012,7 +1022,9 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
 
     def test_guardrail_condicao_e_a_esperada(self):
         step = self._step('guardrail')
-        self.assertEqual(step['if'], "inputs.dry_run_plan != 'true' && inputs.pilot != 'true'")
+        self.assertEqual(step['if'],
+                          "inputs.dry_run_plan != 'true' && inputs.modo_execucao == "
+                          "'HINDCAST_COMPLETO_1981_2016'")
 
     def test_g_guardrail_nao_referencia_script_python_nem_cdsapi(self):
         """O guardrail é bash puro — nenhum request CDS pode acontecer
@@ -1021,12 +1033,12 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
         self.assertNotIn('c3s_hindcast_completo.py', step['run'])
         self.assertNotIn('cdsapi', step['run'].lower())
 
-    def _rodar_guardrail_bash(self, pilot, dry_run_plan, confirm):
+    def _rodar_guardrail_bash(self, modo_execucao, dry_run_plan, confirm):
         """Executa o script bash REAL extraído do YAML (mesma lógica de
         avaliação de `if:` do GitHub Actions: só roda quando a condição
         é verdadeira) — devolve None se o step nem chegaria a rodar."""
         step = self._step('guardrail')
-        condicao_ativa = (dry_run_plan != 'true') and (pilot != 'true')
+        condicao_ativa = (dry_run_plan != 'true') and (modo_execucao == 'HINDCAST_COMPLETO_1981_2016')
         if not condicao_ativa:
             return None
         script = step['run'].replace("${{ inputs.confirm_full_hindcast }}", confirm)
@@ -1038,34 +1050,39 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
         finally:
             Path(summary_path).unlink(missing_ok=True)
 
-    # C — pilot=false sem confirmação explícita falha antes de chamar o script
-    def test_c_pilot_false_sem_confirmacao_falha(self):
-        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='false', confirm='')
+    # D — full sem confirmação explícita falha antes de chamar o script
+    def test_d_full_sem_confirmacao_falha(self):
+        r = self._rodar_guardrail_bash(modo_execucao='HINDCAST_COMPLETO_1981_2016',
+                                        dry_run_plan='false', confirm='')
         self.assertIsNotNone(r)
         self.assertNotEqual(r.returncode, 0)
 
-    def test_c_pilot_false_confirmacao_errada_tambem_falha(self):
-        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='false', confirm='sim, por favor')
+    def test_d_full_confirmacao_errada_tambem_falha(self):
+        r = self._rodar_guardrail_bash(modo_execucao='HINDCAST_COMPLETO_1981_2016',
+                                        dry_run_plan='false', confirm='sim, por favor')
         self.assertIsNotNone(r)
         self.assertNotEqual(r.returncode, 0)
 
-    # D — pilot=false + confirm_full_hindcast correto libera a execução
-    def test_d_pilot_false_com_confirmacao_correta_libera(self):
-        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='false', confirm='EXECUTAR_1981_2016')
+    # D — full + confirm_full_hindcast correto libera a execução
+    def test_d_full_com_confirmacao_correta_libera(self):
+        r = self._rodar_guardrail_bash(modo_execucao='HINDCAST_COMPLETO_1981_2016',
+                                        dry_run_plan='false', confirm='EXECUTAR_1981_2016')
         self.assertIsNotNone(r)
         self.assertEqual(r.returncode, 0)
 
-    # E — dry_run_plan=true nunca exige confirmação (guardrail nem roda)
-    def test_e_dry_run_true_nao_exige_confirmacao(self):
-        r = self._rodar_guardrail_bash(pilot='false', dry_run_plan='true', confirm='')
+    # dry_run_plan=true nunca exige confirmação (guardrail nem roda)
+    def test_dry_run_true_nao_exige_confirmacao(self):
+        r = self._rodar_guardrail_bash(modo_execucao='HINDCAST_COMPLETO_1981_2016',
+                                        dry_run_plan='true', confirm='')
         self.assertIsNone(r)
 
-    def test_pilot_true_nao_exige_confirmacao(self):
-        r = self._rodar_guardrail_bash(pilot='true', dry_run_plan='false', confirm='')
+    # G — pilot não exige confirmação
+    def test_g_pilot_nao_exige_confirmacao(self):
+        r = self._rodar_guardrail_bash(modo_execucao='PILOT', dry_run_plan='false', confirm='')
         self.assertIsNone(r)
 
-    # F — plano exibido no modo piloto mostra 72 origens, nunca 432
-    def test_f_plano_piloto_tem_72_origens(self):
+    # H — dry-run pilot mostra 72 origens (via plano_piloto())
+    def test_h_plano_piloto_tem_72_origens(self):
         plano = h.plano_piloto()
         self.assertEqual(plano['n_origens'], 72)
         self.assertEqual(len(plano['origens']), 72)
@@ -1078,12 +1095,36 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
         self.assertEqual(plano['periodo_warmup'], '1981-1990')
         self.assertEqual(plano['periodo_avaliacao'], '1991-2016')
 
-    def test_f_mostrar_plano_ramifica_por_pilot_no_yaml(self):
+    # I — dry-run full mostra 432 origens (via plano_execucao() default)
+    def test_i_plano_execucao_default_tem_432_origens(self):
+        plano = h.plano_execucao()
+        self.assertEqual(plano['n_origens'], 432)
+        self.assertEqual(plano['raw_rows_esperadas'], 64800)
+        self.assertEqual(plano['summary_rows_esperadas'], 2592)
+
+    def test_mostrar_plano_ramifica_por_modo_no_yaml(self):
         step = self._step('mostrar plano de execução')
         self.assertIn('--pilot --dry-run-plan', step['run'])
-        self.assertIn("inputs.pilot", step['run'])
+        self.assertIn('--start-year 1981 --end-year 2016 --dry-run-plan', step['run'])
+        self.assertIn("inputs.modo_execucao", step['run'])
 
-    def test_f_dry_run_plan_com_pilot_usa_plano_piloto_nao_o_completo(self):
+    # E/F/G — modo oficial sempre 1981-2016, sem --pilot, sem --init-months
+    def test_efg_step_execucao_full_forca_1981_2016_sem_pilot_sem_init_months(self):
+        step = self._step('rodar hindcast completo')
+        self.assertIn('--start-year 1981 --end-year 2016', step['run'])
+        self.assertNotIn('init_months', step['run'])
+        self.assertNotIn('inputs.start_year', step['run'])
+        self.assertNotIn('inputs.end_year', step['run'])
+
+    def test_resumo_do_modo_escreve_no_step_summary_antes_da_execucao(self):
+        self.assertLess(self._indice('resumo do modo de execução'), self._indice('criar ~/.cdsapirc'))
+        self.assertLess(self._indice('resumo do modo de execução'), self._indice('rodar hindcast completo'))
+        step = self._step('resumo do modo de execução')
+        self.assertIn('GITHUB_STEP_SUMMARY', step['run'])
+        self.assertIn('PILOT LONGITUDINAL', step['run'])
+        self.assertIn('HINDCAST COMPLETO OFICIAL', step['run'])
+
+    def test_dry_run_plan_com_pilot_usa_plano_piloto_nao_o_completo(self):
         with mock.patch.object(h, 'plano_execucao') as m_completo, \
              mock.patch.object(h, 'plano_piloto', wraps=h.plano_piloto) as m_piloto, \
              mock.patch.object(h, 'imprimir_plano') as m_imprimir, \
@@ -1094,6 +1135,197 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
         args, kwargs = m_imprimir.call_args
         modo = kwargs.get('modo', args[1] if len(args) > 1 else None)
         self.assertIn('PILOT', modo)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Preparação do hindcast OFICIAL 1981-2016 — validar_full_aprovado() e
+# execution_mode no metadata.json. Barreira de INTEGRIDADE DO
+# EXPERIMENTO, nunca de skill: MSESS/RPSS negativo é resultado
+# científico válido e nunca reprova esta barreira (Seção 14).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _resultado_full_bom():
+    """Resultado completo e aprovável da execução oficial (432 origens,
+    1981-2016, todos os meses), montado sobre o mesmo padrão sintético
+    de _resultado_pilot_bom — só troca as origens pedidas."""
+    origens = h.construir_origens(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, None)
+    raw_str = _raw_sintetico(origens, leads=h.LEADS, n_membros=h.N_MEMBROS_ESPERADO)
+    raw = h._com_periods(raw_str)
+    chirps = _chirps_sintetico(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST)
+    summary, calibrated = h.construir_summary_e_calibrado(raw, chirps)
+    avaliacao = h.filtrar_avaliacao(summary)
+    tabelas_skill = h.montar_tabelas_skill(avaliacao)
+    bootstrap_df = h.montar_bootstrap(avaliacao)
+    ens_df = h.construir_ens_df(raw)
+    leakage_df = h.construir_leakage_audit(summary, ens_df, chirps)
+    leakage_aprovado = leakage_df.empty or (leakage_df['leakage_status'] == 'OK').all()
+    return {
+        'raw_df': raw_str, 'summary_df': summary, 'calibrated_df': calibrated,
+        'chirps_df': chirps, 'leakage_df': leakage_df, 'temporal_df': h.construir_temporal_audit(raw),
+        'leakage_audit_aprovado': bool(leakage_aprovado), 'tabelas_skill': tabelas_skill,
+        'bootstrap_df': bootstrap_df, 'falhas': {}, 'metadados_origem': {},
+        'origens': origens, 'pilot': False, 'avaliacao_n': len(avaliacao),
+        'avaliacao_df': avaliacao,
+    }
+
+
+class ValidarFullAprovadoTestCase(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.resultado_bom = _resultado_full_bom()
+
+    def test_resultado_bom_e_aprovado(self):
+        aprovado, motivos = h.validar_full_aprovado(self.resultado_bom)
+        self.assertTrue(aprovado, motivos)
+        self.assertEqual(motivos, [])
+
+    # J — metadata recebe execution_mode
+    def test_j_execution_mode_full_1981_2016(self):
+        metadata = h.montar_metadata(self.resultado_bom)
+        self.assertEqual(metadata['execution_mode'], 'FULL_1981_2016')
+
+    def test_j_execution_mode_pilot_longitudinal(self):
+        resultado_pilot = dict(self.resultado_bom)
+        resultado_pilot['pilot'] = True
+        resultado_pilot['origens'] = list(h.PILOT_ORIGENS)
+        metadata = h.montar_metadata(resultado_pilot)
+        self.assertEqual(metadata['execution_mode'], 'PILOT_LONGITUDINAL')
+
+    def test_j_execution_mode_partial_quando_origens_nao_sao_as_432_oficiais(self):
+        resultado_parcial = dict(self.resultado_bom)
+        resultado_parcial['origens'] = h.construir_origens(1991, 1995, None)
+        metadata = h.montar_metadata(resultado_parcial)
+        self.assertEqual(metadata['execution_mode'], 'PARTIAL')
+
+    # K — full falha com raw != 64800
+    def test_k_falha_se_raw_diferente_de_64800(self):
+        resultado = dict(self.resultado_bom)
+        resultado['raw_df'] = self.resultado_bom['raw_df'].iloc[:-1]
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('raw' in m for m in motivos))
+
+    # L — full falha com summary != 2592
+    def test_l_falha_se_summary_diferente_de_2592(self):
+        resultado = dict(self.resultado_bom)
+        resultado['summary_df'] = self.resultado_bom['summary_df'].iloc[:-1]
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('summary' in m for m in motivos))
+
+    # M — full falha com origem != 432
+    def test_m_falha_se_origens_incompletas(self):
+        resultado = dict(self.resultado_bom)
+        resultado['falhas'] = {'1981-01': 'simulado'}
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('origens' in m for m in motivos))
+
+    def test_falha_se_chirps_diferente_de_432(self):
+        resultado = dict(self.resultado_bom)
+        resultado['chirps_df'] = self.resultado_bom['chirps_df'].iloc[:-1]
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('CHIRPS' in m for m in motivos))
+
+    # N — full falha se leakage != OK
+    def test_n_falha_se_leakage_reprovado(self):
+        resultado = dict(self.resultado_bom)
+        resultado['leakage_audit_aprovado'] = False
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('leakage' in m for m in motivos))
+
+    def test_falha_se_tabela_de_skill_obrigatoria_vazia(self):
+        resultado = dict(self.resultado_bom)
+        tabelas = dict(self.resultado_bom['tabelas_skill'])
+        tabelas['prob_by_lead'] = pd.DataFrame()
+        resultado['tabelas_skill'] = tabelas
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('prob_by_lead' in m for m in motivos))
+
+    def test_falha_se_bootstrap_vazio(self):
+        resultado = dict(self.resultado_bom)
+        resultado['bootstrap_df'] = pd.DataFrame()
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('bootstrap' in m for m in motivos))
+
+    # O — skill negativo NÃO causa falha
+    def test_o_skill_negativo_nao_causa_falha(self):
+        resultado = dict(self.resultado_bom)
+        tabelas = {k: v.copy() for k, v in self.resultado_bom['tabelas_skill'].items()}
+        for coluna in ('msess_raw', 'msess_bc'):
+            if coluna in tabelas['overall'].columns:
+                tabelas['overall'][coluna] = -0.9
+        if 'rpss_raw' in tabelas['prob_overall'].columns:
+            tabelas['prob_overall']['rpss_raw'] = -0.5
+        resultado['tabelas_skill'] = tabelas
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertTrue(aprovado, motivos)
+
+
+class MainGatingExecucaoOficialTestCase(unittest.TestCase):
+    """main() só aplica validar_full_aprovado() quando os parâmetros
+    pedidos são EXATAMENTE os oficiais (1981-2016, todos os meses) —
+    uma execução parcial/depuração continua no gate de leakage já
+    existente, sem essa barreira extra (Seção 14 — não alterar o
+    comportamento de execuções parciais)."""
+
+    def _mockar_acesso_ok(self, m_dl):
+        m_dl.verificar_acesso.return_value = {'credenciais_configuradas': True,
+                                               'pacote_cdsapi_instalado': True}
+
+    def test_execucao_oficial_aplica_validar_full_aprovado(self):
+        resultado_fake = {'leakage_audit_aprovado': True}
+        with mock.patch.object(h, 'dl') as m_dl, \
+             mock.patch.object(h, 'rodar', return_value=resultado_fake), \
+             mock.patch.object(h, 'escrever_saidas'), \
+             mock.patch.object(h, 'validar_full_aprovado', return_value=(True, [])) as m_validar, \
+             mock.patch('sys.argv', ['c3s_hindcast_completo.py',
+                                      '--start-year', '1981', '--end-year', '2016']):
+            self._mockar_acesso_ok(m_dl)
+            h.main()
+        m_validar.assert_called_once_with(resultado_fake)
+
+    def test_execucao_parcial_nao_aplica_validar_full_aprovado(self):
+        resultado_fake = {'leakage_audit_aprovado': True}
+        with mock.patch.object(h, 'dl') as m_dl, \
+             mock.patch.object(h, 'rodar', return_value=resultado_fake), \
+             mock.patch.object(h, 'escrever_saidas'), \
+             mock.patch.object(h, 'validar_full_aprovado') as m_validar, \
+             mock.patch('sys.argv', ['c3s_hindcast_completo.py',
+                                      '--start-year', '1991', '--end-year', '1995']):
+            self._mockar_acesso_ok(m_dl)
+            h.main()
+        m_validar.assert_not_called()
+
+    def test_execucao_oficial_reprovada_sai_com_erro(self):
+        resultado_fake = {'leakage_audit_aprovado': True}
+        with mock.patch.object(h, 'dl') as m_dl, \
+             mock.patch.object(h, 'rodar', return_value=resultado_fake), \
+             mock.patch.object(h, 'escrever_saidas'), \
+             mock.patch.object(h, 'validar_full_aprovado', return_value=(False, ['motivo x'])), \
+             mock.patch('sys.argv', ['c3s_hindcast_completo.py',
+                                      '--start-year', '1981', '--end-year', '2016']):
+            self._mockar_acesso_ok(m_dl)
+            with self.assertRaises(SystemExit) as e:
+                h.main()
+        self.assertNotEqual(e.exception.code, 0)
+
+    def test_pilot_nao_aplica_validar_full_aprovado(self):
+        resultado_fake = {'leakage_audit_aprovado': True}
+        with mock.patch.object(h, 'dl') as m_dl, \
+             mock.patch.object(h, 'rodar', return_value=resultado_fake), \
+             mock.patch.object(h, 'escrever_saidas'), \
+             mock.patch.object(h, 'validar_full_aprovado') as m_validar_full, \
+             mock.patch.object(h, 'validar_pilot_aprovado', return_value=(True, [])), \
+             mock.patch('sys.argv', ['c3s_hindcast_completo.py', '--pilot']):
+            self._mockar_acesso_ok(m_dl)
+            h.main()
+        m_validar_full.assert_not_called()
 
 
 if __name__ == '__main__':
