@@ -30,17 +30,30 @@ skill. As versões "atuais" ficam registradas em NAO_INCLUIDOS_VERSAO
 para reavaliação futura, quando a infraestrutura multi-modelo permitir
 confirmar suas specs (ex.: request mínimo real ao CDS, Seção 13).
 
-PERÍODO DE HINDCAST — os quatro candidatos usam aqui o período de
-REFERÊNCIA COMUM do produto multi-sistema C3S, 1993-2016 (confirmado por
-2 fontes independentes: a descrição geral do C3S — "for products issued
-from November 2018, the reference (hindcast) period for all providers
-is 1993-2016" — e a tabela de sistemas do NOAA PSL, que lista esse
-mesmo intervalo para todos os provedores). Isso é DISTINTO do hindcast
-NATIVO de cada sistema, que pode ser mais longo (e no caso do SEAS5, o
-hindcast nativo 1981-2016 é o mesmo já usado e validado na Fase 2A/2A.3
-— ver `notas` de cada entrada). `periodo_comum_hindcast()` calcula a
-interseção A PARTIR desses campos, nunca hardcoded — para esta
-configuração ela deve bater com 1993-2016, mas a função sempre recalcula.
+PERÍODO DE HINDCAST — dois conceitos DISTINTOS, nunca confundidos
+(correção de auditabilidade pós-revisão externa):
+
+  - `native_hindcast_start`/`native_hindcast_end` — o período de
+    reforecast documentado pela FONTE OFICIAL do próprio centro (pode
+    ser mais longo que o período usado na comparação — ex.: SEAS5 tem
+    hindcast nativo 1981-2016, o mesmo já usado e validado na Fase
+    2A/2A.3). `None` quando a fonte disponível não permite atribuir um
+    período nativo único com confiança (nunca inventado — ver `notas`
+    de cada entrada, ex.: DWD GCFS2.1 tem cobertura nativa ASSIMÉTRICA
+    por mês de inicialização, então um único par de anos seria enganoso).
+  - `evaluation_hindcast_start`/`evaluation_hindcast_end` — o período
+    RETROSPECTIVO COMUM servido/usado pelo produto C3S multi-sistema
+    para comparação homogênea entre os 4 candidatos desta fase. Para
+    os 4, esse período é 1993-2016 (confirmado por 2 fontes
+    independentes: a descrição geral do C3S — "for products issued
+    from November 2018, the reference (hindcast) period for all
+    providers is 1993-2016" — e a tabela de sistemas do NOAA PSL, que
+    lista esse mesmo intervalo para todos os provedores).
+
+`periodo_comum_hindcast()` calcula a interseção a partir dos campos
+`evaluation_hindcast_start/end` (nunca dos nativos, e nunca hardcoded)
+— para esta configuração ela deve bater com 1993-2016, mas a função
+sempre recalcula.
 """
 
 from dataclasses import dataclass, field
@@ -54,8 +67,10 @@ class SistemaMultiModelo:
     system_name: str
     system_code: str                   # valor do campo 'system' da API CDS
     model_id: Optional[str]
-    hindcast_start: Optional[int]
-    hindcast_end: Optional[int]
+    native_hindcast_start: Optional[int]      # período de reforecast NATIVO documentado pela fonte oficial
+    native_hindcast_end: Optional[int]
+    evaluation_hindcast_start: Optional[int]  # período retrospectivo COMUM usado na comparação multi-sistema
+    evaluation_hindcast_end: Optional[int]
     hindcast_members: Optional[int]
     forecast_members: Optional[int]
     leads_disponiveis: tuple
@@ -70,7 +85,8 @@ CATALOGO = [
     SistemaMultiModelo(
         centro='ECMWF', originating_centre_cds='ecmwf', system_name='SEAS5', system_code='51',
         model_id=None,
-        hindcast_start=1993, hindcast_end=2016,
+        native_hindcast_start=1981, native_hindcast_end=2016,
+        evaluation_hindcast_start=1993, evaluation_hindcast_end=2016,
         hindcast_members=25, forecast_members=51,
         leads_disponiveis=(1, 2, 3, 4, 5, 6),
         resolucao='1°x1° (grade CDS; nativo TCo319 ~36km)',
@@ -83,15 +99,16 @@ CATALOGO = [
             'hindcast period 1993-2016 "for products issued from November 2018... for all providers")',
         ),
         notas='Mesmo sistema já validado ponta a ponta na Fase 2A.3 (432 origens oficiais, run '
-              '35353196015). O hindcast NATIVO usado lá foi 1981-2016 (25 membros) — mais longo que o '
-              'período comum 1993-2016 usado aqui para a comparação multi-modelo. Para a Fase 2B.1, '
-              'restringir ECMWF ao período comum é uma escolha de protocolo (comparabilidade entre '
-              'sistemas), não uma limitação do sistema em si.',
+              '35353196015), que usou o hindcast NATIVO completo, 1981-2016 (25 membros). Para a '
+              'comparação multi-modelo desta fase, ECMWF é restrito ao período de avaliação comum '
+              '1993-2016 — escolha de protocolo (comparabilidade entre sistemas), não uma limitação '
+              'do sistema em si.',
     ),
     SistemaMultiModelo(
         centro='METEO_FRANCE', originating_centre_cds='meteo_france', system_name='System8', system_code='8',
         model_id='CNRM-CM6',
-        hindcast_start=1993, hindcast_end=2016,
+        native_hindcast_start=1993, native_hindcast_end=2018,
+        evaluation_hindcast_start=1993, evaluation_hindcast_end=2016,
         hindcast_members=25, forecast_members=51,
         leads_disponiveis=(1, 2, 3, 4, 5, 6),
         resolucao='1°x1° (grade CDS; 360x180 pontos)',
@@ -104,19 +121,35 @@ CATALOGO = [
             'iridl.ldeo.columbia.edu/SOURCES/.EU/.Copernicus/.CDS/.C3S/.Meteo_France/.System8 (via '
             'WebFetch: lead 0.5-5.5 meses por 1.0 mês = 6 leads, grade 1° 360x180, forecast 51 '
             'membros, hindcast 25 membros)',
+            'ECMWF Confluence Knowledge Base — "Description of the C3S seasonal multi-system" '
+            '(confluence.ecmwf.int/spaces/CKB/pages/77213502/Description+of+the+C3S+seasonal+multi-'
+            'system, ou a página atual equivalente) — fonte oficial apontada pela revisão externa '
+            'desta tarefa como confirmando `system=8` para o Météo-France System 8 no CDS. '
+            'WebFetch direto a essa URL nesta sessão continua bloqueado ("EGRESS_BLOCKED", testado de '
+            'novo agora); WebSearch confirma que a página existe com esse título exato e que '
+            '"Description of System8-v20210101 C3S contribution" é uma página irmã dedicada — mas não '
+            'reproduziu o texto literal da tabela de códigos. Registrada como fonte oficial informada, '
+            'com essa ressalva de verificação explícita — não tratada como confirmação de primeira mão '
+            'desta sessão.',
         ),
-        notas='`system_code` = "8" inferido pela convenção de versionamento inteiro da Météo-France '
-              '(System 7/8/9, sem subversão decimal como ECMWF/CMCC/DWD) — não confirmado como valor '
-              'literal do parâmetro `system` da API por uma request real (Seção 13, fora do escopo '
-              'desta tarefa). `originating_centre_cds`="meteo_france" (snake_case) inferido do caminho '
-              'do mirror IRI/LDEO (".Meteo_France."). Hindcast nativo documentado 1993-2018 (mais longo '
-              'que o período comum 1993-2016 usado aqui). System9 (atual) tem reforecast 1993-2024 mas '
-              'não foi incluído nesta fase — ver NAO_INCLUIDOS_VERSAO.',
+        notas='`system_code`="8" — a revisão externa desta tarefa confirmou, na documentação oficial '
+              'C3S "Description of the C3S seasonal multi-system" (ver terceira fonte acima), que esse '
+              'é o código oficial do Météo-France System 8 no CDS; deixou de ser tratado como inferência '
+              'pela convenção de versionamento da Météo-France (ver ressalva de verificação na fonte '
+              'acima — WebFetch direto à página segue bloqueado nesta sessão). '
+              '`originating_centre_cds`="meteo_france" (snake_case) segue o caminho do mirror IRI/LDEO '
+              '(".Meteo_France."). Hindcast NATIVO documentado 1993-2018 — mais longo que o período de '
+              'avaliação comum 1993-2016 usado na comparação multi-modelo desta fase. Nº de membros do '
+              'hindcast (25) mantido sem alteração: segue suportado pelas duas fontes já coletadas '
+              '(CNRM/umr-cnrm.fr e IRI/LDEO), não por uma tabela genérica de outro sistema/versionamento. '
+              'System9 (atual) tem reforecast 1993-2024 mas não foi incluído nesta fase — ver '
+              'NAO_INCLUIDOS_VERSAO.',
     ),
     SistemaMultiModelo(
         centro='DWD', originating_centre_cds='dwd', system_name='GCFS2.1', system_code='21',
         model_id='MPI-ESM-HR',
-        hindcast_start=1993, hindcast_end=2016,
+        native_hindcast_start=None, native_hindcast_end=None,
+        evaluation_hindcast_start=1993, evaluation_hindcast_end=2016,
         hindcast_members=30, forecast_members=50,
         leads_disponiveis=(1, 2, 3, 4, 5, 6),
         resolucao=None,
@@ -131,18 +164,25 @@ CATALOGO = [
             'psl.noaa.gov/forecasts/s2s_C3S_monthly_to_seasonal/description/ (hindcast period '
             '1993-2016 "for all providers")',
         ),
-        notas='RISCO EXPLÍCITO (relevante para a Seção 16/27-D): o hindcast NATIVO documentado pela '
-              'própria DWD tem cobertura DIFERENTE por mês de inicialização (1982-2019 para fev/mai/'
-              'ago/nov; 1990-2019 para os demais) — não confirmado se essa assimetria também se aplica '
-              'ao subconjunto 1993-2016 servido via CDS (o período comum usado aqui, 1993-2016, está '
-              'contido nos dois casos, então a interseção continua segura). Resolução não confirmada '
-              'nesta sessão — campo None em vez de inventado. GCFS2.2 (system=22, atual) não foi '
-              'incluído nesta fase — ver NAO_INCLUIDOS_VERSAO.',
+        notas='`native_hindcast_start/end` deixados EXPLICITAMENTE None (nunca inventado, Seção 2 da '
+              'correção de auditabilidade): a própria DWD documenta cobertura nativa DIFERENTE por mês '
+              'de inicialização (1982-2019 para fev/mai/ago/nov; 1990-2019 para os demais) — um único '
+              'par de anos resumiria mal essa assimetria. Os dois intervalos nativos contêm o período '
+              'de avaliação comum 1993-2016 usado aqui, então a interseção da comparação multi-modelo '
+              'continua segura independente da assimetria. Não confirmado se essa assimetria também se '
+              'aplica ao subconjunto 1993-2016 servido via CDS para o produto multi-sistema (relevante '
+              'para a Seção 16/27-D de validações futuras). Resolução não confirmada nesta sessão — '
+              'campo None em vez de inventado. GCFS2.2 (system=22, atual) não foi incluído nesta fase '
+              '— ver NAO_INCLUIDOS_VERSAO.',
     ),
     SistemaMultiModelo(
         centro='CMCC', originating_centre_cds='cmcc', system_name='SPS3.5', system_code='35',
         model_id=None,
-        hindcast_start=1993, hindcast_end=2016,
+        # Fonte oficial CMCC (TN0288) documenta o hindcast NATIVO como o próprio intervalo
+        # 1/1993-12/2016 — aqui, ao contrário do SEAS5/System8, native == evaluation porque
+        # a CMCC nunca publicou um reforecast mais longo que esse para o SPS3.5.
+        native_hindcast_start=1993, native_hindcast_end=2016,
+        evaluation_hindcast_start=1993, evaluation_hindcast_end=2016,
         hindcast_members=40, forecast_members=50,
         leads_disponiveis=(1, 2, 3, 4, 5, 6),
         resolucao=None,
@@ -150,15 +190,19 @@ CATALOGO = [
         verificado_cruzado=True,
         fontes=(
             'cmcc.it TN0288 "The new CMCC Operational Seasonal Prediction System" (via WebSearch: '
-            '"hindcast ensemble size of 40 members... 1/1993-12/2016", forecast 50 membros)',
+            '"hindcast ensemble size of 40 members... 1/1993-12/2016", forecast 50 membros) — fonte '
+            'oficial CMCC, registra explicitamente hindcast 1993-2016, 40 membros de hindcast, 50 '
+            'membros de forecast, leads 1-6 meses (Seção 3 da correção de auditabilidade).',
             'psl.noaa.gov/forecasts/s2s_C3S_monthly_to_seasonal/description/ (via WebSearch: "CMCC '
             'SPSv3.5 is referenced as System 35... lead time months 1 to 6")',
         ),
-        notas='SPS4 (atual no catálogo CDS, adicionado ago/2026 segundo a busca) está explicitamente '
-              'documentado como "decisions... still pending, details to be communicated" — não incluído '
-              'nesta fase por falta de specs confirmáveis, não por rejeição científica. Ver '
-              'NAO_INCLUIDOS_VERSAO. model_id e resolução não confirmados nesta sessão — None em vez '
-              'de inventados.',
+        notas='Fonte oficial CMCC (TN0288) confirma explicitamente: hindcast 1993-2016, 40 membros de '
+              'hindcast, 50 membros de forecast, 6 meses de lead — todos os quatro registrados aqui sem '
+              'alteração. SPS4 (atual no catálogo CDS, adicionado ago/2026 segundo a busca) está '
+              'explicitamente documentado como "decisions... still pending, details to be communicated" '
+              '— não incluído nesta fase por falta de specs confirmáveis, não por rejeição científica. '
+              'Ver NAO_INCLUIDOS_VERSAO. model_id e resolução não confirmados nesta sessão — None em '
+              'vez de inventados.',
     ),
 ]
 
@@ -205,26 +249,30 @@ def sistema_por_nome(centro, system_name):
 
 
 def periodo_comum_hindcast(sistemas):
-    """Deriva o período comum de hindcast entre os sistemas dados —
-    NUNCA hardcoded (Seção 4). Devolve dict com common_start/common_end
-    (None se não houver interseção viável) e anos_disponiveis_por_modelo
-    (para auditoria). Qualquer sistema com hindcast_start/end ausente
-    (None) é reportado em `incompatibilidade`, nunca silenciosamente
-    ignorado no cálculo."""
+    """Deriva o período comum de AVALIAÇÃO entre os sistemas dados —
+    NUNCA hardcoded (Seção 4), e sempre a partir dos campos
+    `evaluation_hindcast_start/end` (nunca dos `native_hindcast_*` —
+    Seção 5 da correção de auditabilidade: o período nativo, quando mais
+    longo, não entra nesse cálculo). Devolve dict com common_start/
+    common_end (None se não houver interseção viável) e
+    anos_disponiveis_por_modelo (para auditoria). Qualquer sistema com
+    evaluation_hindcast_start/end ausente (None) é reportado em
+    `incompatibilidade`, nunca silenciosamente ignorado no cálculo."""
     anos_por_modelo = {}
     incompatibilidade = {}
     inicios, fins = [], []
     for s in sistemas:
         chave = f'{s.centro}/{s.system_name}'
-        if s.hindcast_start is None or s.hindcast_end is None:
-            incompatibilidade[chave] = 'hindcast_start/hindcast_end ausente no catálogo'
+        if s.evaluation_hindcast_start is None or s.evaluation_hindcast_end is None:
+            incompatibilidade[chave] = 'evaluation_hindcast_start/evaluation_hindcast_end ausente no catálogo'
             continue
-        if s.hindcast_start > s.hindcast_end:
-            incompatibilidade[chave] = f'hindcast_start ({s.hindcast_start}) > hindcast_end ({s.hindcast_end})'
+        if s.evaluation_hindcast_start > s.evaluation_hindcast_end:
+            incompatibilidade[chave] = (f'evaluation_hindcast_start ({s.evaluation_hindcast_start}) > '
+                                         f'evaluation_hindcast_end ({s.evaluation_hindcast_end})')
             continue
-        anos_por_modelo[chave] = [s.hindcast_start, s.hindcast_end]
-        inicios.append(s.hindcast_start)
-        fins.append(s.hindcast_end)
+        anos_por_modelo[chave] = [s.evaluation_hindcast_start, s.evaluation_hindcast_end]
+        inicios.append(s.evaluation_hindcast_start)
+        fins.append(s.evaluation_hindcast_end)
 
     if not inicios:
         return {'common_start': None, 'common_end': None, 'anos_disponiveis_por_modelo': anos_por_modelo,
@@ -243,9 +291,14 @@ def periodo_comum_hindcast(sistemas):
 
 def tabela_catalogo(sistemas=None, incluidos=None):
     """DataFrame com as colunas mínimas pedidas (Seção 12) para
-    `c3s_multimodel_catalog.csv`. `incluidos`: coleção de (centro,
-    system_name) considerados incluídos no POC — default: todo
-    CATALOGO."""
+    `c3s_multimodel_catalog.csv`. Inclui os campos `native_hindcast_*`
+    (período de reforecast documentado pela fonte oficial do centro,
+    pode ser mais longo — `None` quando não atribuível com confiança) e
+    `evaluation_hindcast_*` (período retrospectivo comum usado na
+    comparação multi-modelo desta fase) separadamente — nunca misturados
+    numa única coluna ambígua (Seção 2 da correção de auditabilidade).
+    `incluidos`: coleção de (centro, system_name) considerados incluídos
+    no POC — default: todo CATALOGO."""
     import pandas as pd
     sistemas = sistemas if sistemas is not None else CATALOGO
     incluidos = set(incluidos) if incluidos is not None else set(SISTEMAS_CANDIDATOS_FASE2B1)
@@ -254,7 +307,10 @@ def tabela_catalogo(sistemas=None, incluidos=None):
         compatible_leads_1_6 = tuple(s.leads_disponiveis) == (1, 2, 3, 4, 5, 6)
         linhas.append({
             'centre': s.centro, 'system_name': s.system_name, 'system_code': s.system_code,
-            'model_id': s.model_id, 'hindcast_start': s.hindcast_start, 'hindcast_end': s.hindcast_end,
+            'model_id': s.model_id,
+            'native_hindcast_start': s.native_hindcast_start, 'native_hindcast_end': s.native_hindcast_end,
+            'evaluation_hindcast_start': s.evaluation_hindcast_start,
+            'evaluation_hindcast_end': s.evaluation_hindcast_end,
             'hindcast_members': s.hindcast_members, 'max_lead': max(s.leads_disponiveis) if s.leads_disponiveis
             else None,
             'forecast_type': 'ensemble', 'hindcast_production': s.hindcast_production,
@@ -279,11 +335,14 @@ def common_period_json(sistemas=None):
         'anos_disponiveis_por_modelo': resultado['anos_disponiveis_por_modelo'],
         'reasoning': (
             'Sistemas candidatos definidos por disponibilidade/documentação/cobertura de leads '
-            '1-6 (Seção 1), nunca por skill local. Período comum é a interseção de hindcast_start/'
-            'hindcast_end de cada sistema incluído — calculada, não fixada manualmente. UKMO excluído '
-            'por esquema de hindcast on-the-fly/lagged; NCEP/ECCC/BOM/JMA fora de escopo desta fase; '
-            'versões "atuais" de METFR/DWD/CMCC (System9/GCFS2.2/SPS4) substituídas por versões '
-            'anteriores com specs cross-confirmadas (ver NAO_INCLUIDOS_VERSAO).'
+            '1-6 (Seção 1), nunca por skill local. Período comum é a interseção de '
+            'evaluation_hindcast_start/evaluation_hindcast_end (o período retrospectivo COMUM usado na '
+            'comparação multi-modelo) de cada sistema incluído — calculada, não fixada manualmente, e '
+            'nunca a partir de native_hindcast_start/end (o período de reforecast nativo documentado '
+            'pela fonte oficial de cada centro, que pode ser mais longo — ex.: ECMWF SEAS5 nativo é '
+            '1981-2016). UKMO excluído por esquema de hindcast on-the-fly/lagged; NCEP/ECCC/BOM/JMA '
+            'fora de escopo desta fase; versões "atuais" de METFR/DWD/CMCC (System9/GCFS2.2/SPS4) '
+            'substituídas por versões anteriores com specs cross-confirmadas (ver NAO_INCLUIDOS_VERSAO).'
         ),
     }
 

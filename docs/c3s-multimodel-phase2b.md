@@ -19,17 +19,60 @@ artifacts de diagnóstico. Ver `scripts/c3s_multimodel_catalogo.py`,
 
 ## Sistemas
 
-| Centro | Sistema | `system` (CDS) | Hindcast (comum) | Membros hindcast | Membros forecast | Leads |
-|---|---|---|---|---|---|---|
-| ECMWF | SEAS5 | 51 | 1993–2016 | 25 | 51 | 1–6 |
-| Météo-France | System8 | 8 | 1993–2016 | 25 | 51 | 1–6 |
-| DWD | GCFS2.1 | 21 | 1993–2016 | 30 | 50 | 1–6 |
-| CMCC | SPS3.5 | 35 | 1993–2016 | 40 | 50 | 1–6 |
+| Centro | Sistema | `system` (CDS) | Hindcast nativo | Hindcast avaliação (comum) | Membros hindcast | Membros forecast | Leads |
+|---|---|---|---|---|---|---|---|
+| ECMWF | SEAS5 | 51 | 1981–2016 | 1993–2016 | 25 | 51 | 1–6 |
+| Météo-France | System8 | 8 | 1993–2018 | 1993–2016 | 25 | 51 | 1–6 |
+| DWD | GCFS2.1 | 21 | não atribuível (assimétrico por mês — ver abaixo) | 1993–2016 | 30 | 50 | 1–6 |
+| CMCC | SPS3.5 | 35 | 1993–2016 | 1993–2016 | 40 | 50 | 1–6 |
 
 Todos os quatro têm hindcast **fixed** (pré-computado, mesmo conjunto de
 anos para qualquer execução — nunca on-the-fly/lagged) e specs
 cross-confirmadas por 2+ fontes independentes nesta sessão (ver
 `fontes`/`notas` de cada entrada em `c3s_multimodel_catalogo.py`).
+
+Os quatro `system` codes acima (51/8/21/35) estão confirmados pela
+documentação oficial: SEAS5 (51) e GCFS2.1 (21) por fontes ECMWF/DWD
+diretas; SPS3.5 (35) pela documentação técnica oficial da CMCC (TN0288);
+System8 (8) pela documentação oficial C3S "Description of the C3S
+seasonal multi-system" (confluence.ecmwf.int/spaces/CKB/pages/77213502/
+Description+of+the+C3S+seasonal+multi-system, ou a página atual
+equivalente) — fonte apontada por revisão externa; WebFetch direto a
+essa URL segue bloqueado nesta sessão (mesma limitação de rede de todo o
+catálogo, ver `c3s_multimodel_catalogo.py`), então essa confirmação
+específica não foi refeita de primeira mão aqui, e o módulo registra
+essa ressalva explicitamente junto à fonte.
+
+### Hindcast NATIVO vs. hindcast de AVALIAÇÃO — dois conceitos distintos
+
+`c3s_multimodel_catalogo.py` separa os dois no dataclass
+`SistemaMultiModelo` (e nas colunas do CSV/JSON gerados):
+
+- **`native_hindcast_start`/`native_hindcast_end`** — o período de
+  reforecast documentado pela fonte OFICIAL do próprio centro, que pode
+  ser mais longo que o período usado na comparação. `None` quando não é
+  possível atribuir um único período com confiança (ex.: **DWD GCFS2.1**
+  — a própria DWD documenta cobertura DIFERENTE por mês de
+  inicialização, 1982–2019 para fev/mai/ago/nov e 1990–2019 para os
+  demais; um único par de anos resumiria mal essa assimetria, então o
+  campo fica `None` em vez de inventado, com a assimetria completa
+  explicada em `notas`).
+- **`evaluation_hindcast_start`/`evaluation_hindcast_end`** — o período
+  retrospectivo COMUM servido/usado pelo produto C3S multi-sistema para
+  comparação homogênea entre os 4 candidatos: **1993–2016** para todos.
+
+Para a maioria dos sistemas os dois períodos DIFEREM (ex.: SEAS5 nativo
+1981–2016 vs. avaliação 1993–2016). A exceção é a **CMCC SPS3.5**, cuja
+fonte oficial (TN0288) documenta o hindcast nativo como o próprio
+intervalo 1993–2016 — não há reforecast mais longo publicado para esse
+sistema, então `native_hindcast_*` == `evaluation_hindcast_*` nesse caso
+específico, não por coincidência de cálculo.
+
+`periodo_comum_hindcast()` **sempre** calcula a partir dos campos
+`evaluation_hindcast_*`, nunca dos `native_hindcast_*` — testado
+explicitamente (`tests/test_c3s_multimodel_catalogo.py`,
+`test_native_hindcast_start_nunca_influencia_o_periodo_comum` e
+`test_real_ecmwf_native_1981_evaluation_1993_confirma_a_distincao`).
 
 ### Por que essas versões, e não as "atuais" do catálogo CDS
 
@@ -60,16 +103,13 @@ request mínimo real ao CDS).
 ## Período comum de hindcast
 
 `c3s_multimodel_catalogo.py::periodo_comum_hindcast(sistemas)` calcula a
-interseção de `hindcast_start`/`hindcast_end` de cada sistema — **nunca
-fixado manualmente**. Para os 4 candidatos desta fase, a interseção
-calculada é **1993–2016** (confirmado por 2 fontes independentes: a
-descrição geral do produto C3S multi-sistema, e a tabela de sistemas do
-NOAA PSL — ambas dizem que esse é o período de referência comum "for all
-providers" desde novembro/2018). Isso é **distinto** do hindcast NATIVO
-de cada sistema, que pode ser mais longo — o caso mais relevante é o
-próprio ECMWF SEAS5: seu hindcast nativo usado e validado na Fase 2A.3
-foi 1981–2016, mais longo que o período comum 1993–2016 usado aqui só
-para viabilizar a comparação entre os 4 sistemas.
+interseção de `evaluation_hindcast_start`/`evaluation_hindcast_end` de
+cada sistema — **nunca fixado manualmente, e nunca a partir dos campos
+`native_hindcast_*`** (ver seção acima). Para os 4 candidatos desta
+fase, a interseção calculada é **1993–2016** (confirmado por 2 fontes
+independentes: a descrição geral do produto C3S multi-sistema, e a
+tabela de sistemas do NOAA PSL — ambas dizem que esse é o período de
+referência comum "for all providers" desde novembro/2018).
 
 ## Equal-model weighting
 
