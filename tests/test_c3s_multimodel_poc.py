@@ -235,6 +235,195 @@ class DryRunPlanTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Persistência de intermediários ANTES de CHIRPS/summary/MME (correção
+# pós-run real 35437819463, Seção 12) — uma falha nas etapas seguintes
+# não pode mais apagar o raw/temporal_audit já baixado com sucesso.
+# ══════════════════════════════════════════════════════════════════════════
+
+class PersistenciaIntermediariosTestCase(unittest.TestCase):
+
+    def _mock_processar_ok(self, sistema, ano, mes, sleep_fn=None):
+        origem = mp._origem_str(ano, mes)
+        tabela = _tabela_valida(sistema, origem)
+        init_date = pd.Period(origem, 'M')
+        temporal = pd.DataFrame([{
+            'centre': sistema.centro, 'system_name': sistema.system_name, 'init_date': str(init_date),
+            'lead': lead, 'esquema_temporal': 'leadtime_month', 'fcmonth': lead,
+            'target_month': str(cu.leadtime_para_mes_alvo(init_date, lead)),
+            'nominal_start_date': str(init_date), 'lead1_e_mes_nominal_da_inicializacao': True,
+        } for lead in mp.LEADS])
+        tabela = tabela.rename(columns={'forecast_prec_mm': 'c3s_prec_mm', 'system': 'system_name'})
+        tabela['system_code'] = sistema.system_code
+        tabela['init_date'] = str(init_date)
+        tabela['target_month'] = tabela['target_month'].astype(str)
+        meta = {'cache_hit': True, 'retries': 0, 'n_membros': sistema.hindcast_members,
+                'lat_grade': -6.5, 'lon_grade': -47.5, 'distancia_grade_km': 1.0,
+                'unidade': 'm s**-1', 'esquema_temporal': 'leadtime_month'}
+        return tabela, temporal, meta
+
+    def test_raw_e_temporal_audit_persistidos_antes_de_falha_no_chirps(self):
+        """Se buscar_chirps_consolidado quebrar DEPOIS do download ter
+        funcionado, o raw/temporal_audit já baixados não podem se
+        perder — devem estar no disco (Seção 12), mesmo que rodar_poc
+        propague a exceção do CHIRPS."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(mp, 'ARTIFACTS_DIR', Path(tmp)), \
+                 mock.patch.object(mp, 'processar_origem_modelo', side_effect=self._mock_processar_ok), \
+                 mock.patch.object(mp, 'buscar_chirps_consolidado',
+                                    side_effect=RuntimeError('CHIRPS indisponível (simulado)')):
+                with self.assertRaises(RuntimeError):
+                    mp.rodar_poc(sistemas=[ECMWF], origens=[(1995, 1)])
+
+            raw_path = Path(tmp) / 'c3s_multimodel_raw.csv'
+            audit_path = Path(tmp) / 'c3s_multimodel_temporal_audit.csv'
+            self.assertTrue(raw_path.exists(), "raw.csv deveria ter sido persistido antes do CHIRPS")
+            self.assertTrue(audit_path.exists(),
+                             "temporal_audit.csv deveria ter sido persistido antes do CHIRPS")
+            raw_salvo = pd.read_csv(raw_path)
+            self.assertEqual(len(raw_salvo), 25 * len(mp.LEADS))
+
+    def test_persistir_intermediarios_false_nao_escreve_nada(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(mp, 'ARTIFACTS_DIR', Path(tmp)), \
+                 mock.patch.object(mp, 'processar_origem_modelo', side_effect=self._mock_processar_ok), \
+                 mock.patch.object(mp, 'buscar_chirps_consolidado',
+                                    return_value=pd.DataFrame({'target_month': [], 'chirps_prec_mm': []})):
+                mp.rodar_poc(sistemas=[ECMWF], origens=[(1995, 1)], persistir_intermediarios=False)
+            self.assertFalse((Path(tmp) / 'c3s_multimodel_raw.csv').exists())
+
+    def test_nenhum_grib_e_persistido(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(mp, 'ARTIFACTS_DIR', Path(tmp)), \
+                 mock.patch.object(mp, 'processar_origem_modelo', side_effect=self._mock_processar_ok), \
+                 mock.patch.object(mp, 'buscar_chirps_consolidado',
+                                    return_value=pd.DataFrame({'target_month': [], 'chirps_prec_mm': []})):
+                mp.rodar_poc(sistemas=[ECMWF], origens=[(1995, 1)])
+            arquivos = {p.name for p in Path(tmp).iterdir()}
+            self.assertFalse(any(nome.endswith(('.grib', '.nc')) for nome in arquivos))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# validar_poc_aprovado — fail-fast final do POC (Seção 13, correção
+# pós-run real 35437819463). BC/probabilidades indisponíveis NUNCA
+# reprovam; RAW/model_set_status/membros/leads/temporal_audit sim.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _resultado_poc_aprovavel():
+    sistemas = mcat.CATALOGO
+    origens = mp.POC_ORIGENS
+    n_origens = len(origens)
+
+    metadados = {}
+    raw_linhas = []
+    temporal_linhas = []
+    for sistema in sistemas:
+        for ano, mes in origens:
+            chave = f'{sistema.centro}/{sistema.system_name}/{mp._origem_str(ano, mes)}'
+            metadados[chave] = {'n_membros': sistema.hindcast_members}
+            init_date = pd.Period(f'{ano}-{mes:02d}', 'M')
+            for lead in mp.LEADS:
+                raw_linhas.append({'centre': sistema.centro, 'lead': lead})
+                temporal_linhas.append({'centre': sistema.centro, 'init_date': str(init_date), 'lead': lead,
+                                         'lead1_e_mes_nominal_da_inicializacao': True})
+    raw_df = pd.DataFrame(raw_linhas)
+    temporal_audit_df = pd.DataFrame(temporal_linhas)
+
+    mme_linhas = []
+    for ano, mes in origens:
+        init_date = pd.Period(f'{ano}-{mes:02d}', 'M')
+        for lead in mp.LEADS:
+            mme_linhas.append({
+                'init_date': init_date, 'lead': lead, 'model_set_status': 'OK',
+                'raw_available': True, 'bc_available': False,
+                'raw_prob_available': False, 'bc_prob_available': False, 'raw_error': None,
+            })
+    mme_df = pd.DataFrame(mme_linhas)
+
+    return {
+        'raw_df': raw_df, 'summary_df': pd.DataFrame(), 'mme_df': mme_df,
+        'temporal_audit_df': temporal_audit_df, 'chirps_df': pd.DataFrame(),
+        'falhas': {}, 'metadados': metadados, 'sistemas': sistemas, 'origens': origens,
+    }
+
+
+class ValidarPocAprovadoTestCase(unittest.TestCase):
+
+    def test_aprova_quando_tudo_completo_mesmo_com_bc_indisponivel(self):
+        """BC/probabilidades indisponíveis (Seção 2/23) NÃO podem
+        reprovar o POC — só download/schema/membros/leads/RAW/
+        model_set_status importam (Seção 13)."""
+        aprovado, motivos = mp.validar_poc_aprovado(_resultado_poc_aprovavel())
+        self.assertTrue(aprovado, motivos)
+        self.assertEqual(motivos, [])
+
+    def test_reprova_com_falha_de_download(self):
+        r = _resultado_poc_aprovavel()
+        chave = f'{mcat.CATALOGO[0].centro}/{mcat.CATALOGO[0].system_name}/1995-01'
+        r['falhas'][chave] = 'erro simulado'
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('falha' in m for m in motivos))
+
+    def test_reprova_quando_membros_nao_batem(self):
+        r = _resultado_poc_aprovavel()
+        sistema = mcat.CATALOGO[0]
+        chave = f'{sistema.centro}/{sistema.system_name}/1995-01'
+        r['metadados'][chave]['n_membros'] = 999
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('n_membros' in m for m in motivos))
+
+    def test_reprova_quando_temporal_audit_incompleto(self):
+        r = _resultado_poc_aprovavel()
+        r['temporal_audit_df'] = r['temporal_audit_df'].iloc[:-1]
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('temporal_audit' in m for m in motivos))
+
+    def test_reprova_quando_lead1_nominal_false(self):
+        r = _resultado_poc_aprovavel()
+        r['temporal_audit_df'].loc[0, 'lead1_e_mes_nominal_da_inicializacao'] = False
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('lead1_e_mes_nominal_da_inicializacao' in m for m in motivos))
+
+    def test_reprova_quando_raw_indisponivel(self):
+        r = _resultado_poc_aprovavel()
+        r['mme_df'].loc[0, 'raw_available'] = False
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('RAW indisponível' in m for m in motivos))
+
+    def test_reprova_quando_raw_error_presente(self):
+        r = _resultado_poc_aprovavel()
+        r['mme_df'].loc[0, 'raw_error'] = 'inconsistência simulada'
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('raw_error' in m for m in motivos))
+
+    def test_reprova_quando_model_set_status_incompleto(self):
+        r = _resultado_poc_aprovavel()
+        r['mme_df'].loc[0, 'model_set_status'] = 'INCOMPLETE_MODEL_SET'
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('model_set_status' in m for m in motivos))
+
+    def test_reprova_quando_mme_com_linhas_faltando(self):
+        r = _resultado_poc_aprovavel()
+        r['mme_df'] = r['mme_df'].iloc[:-1]
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('mme_df' in m for m in motivos))
+
+    def test_reprova_quando_leads_incompletos_no_raw(self):
+        r = _resultado_poc_aprovavel()
+        r['raw_df'] = r['raw_df'][r['raw_df']['lead'] != 6]
+        aprovado, motivos = mp.validar_poc_aprovado(r)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('leads no raw' in m for m in motivos))
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Produção intocada (Seção 27-M / 33)
 # ══════════════════════════════════════════════════════════════════════════
 

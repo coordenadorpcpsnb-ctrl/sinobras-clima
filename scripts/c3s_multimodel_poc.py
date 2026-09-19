@@ -312,7 +312,16 @@ def imprimir_plano(plano):
 # Orquestração do POC real.
 # ══════════════════════════════════════════════════════════════════════════
 
-def rodar_poc(sistemas=None, origens=None, sleep_fn=time.sleep):
+def rodar_poc(sistemas=None, origens=None, sleep_fn=time.sleep, persistir_intermediarios=True):
+    """`persistir_intermediarios` (correção pós-run real 35437819463,
+    Seção 12): grava raw.csv e temporal_audit.csv assim que estão
+    prontos — ANTES de buscar CHIRPS e construir summary/MME. No run
+    real que motivou esta correção, o download dos 4 sistemas x 6
+    origens funcionou por completo, mas o crash em mme_probabilistico
+    (Seção 1) aconteceu depois disso, antes de qualquer escrever_saidas
+    — só os 2 artifacts de catálogo (que não dependem do CDS) foram
+    publicados, e os dados reais baixados foram perdidos. Nunca grava
+    GRIB aqui — só os CSVs já tabulares."""
     sistemas = sistemas if sistemas is not None else mcat.CATALOGO
     origens = origens if origens is not None else POC_ORIGENS
 
@@ -339,6 +348,20 @@ def rodar_poc(sistemas=None, origens=None, sleep_fn=time.sleep):
         raw_df['target_month'] = raw_df['target_month'].apply(lambda s: pd.Period(s, 'M'))
     temporal_audit_df = pd.concat(temporais, ignore_index=True) if temporais else pd.DataFrame()
 
+    if persistir_intermediarios:
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        raw_df_str.to_csv(ARTIFACTS_DIR / 'c3s_multimodel_raw.csv', index=False)
+        temporal_audit_df.to_csv(ARTIFACTS_DIR / 'c3s_multimodel_temporal_audit.csv', index=False)
+        print(f"\n  💾 intermediários persistidos ({len(raw_df_str)} linhas raw, "
+              f"{len(temporal_audit_df)} linhas temporal_audit) — antes de CHIRPS/summary/MME "
+              f"(Seção 12: sobrevive a uma falha nas etapas seguintes).")
+
+    # Seção 11 — revisado (não implementado): buscar_chirps_consolidado já
+    # busca em blocos ANUAIS (não mês a mês) e só o intervalo estritamente
+    # necessário (intervalo_targets_necessario, derivado das origens/leads
+    # pedidos) — para as 6 origens fixas do POC isso já é o mínimo de
+    # chamadas sem introduzir cache persistente entre execuções (fora de
+    # escopo desta correção; prioridade aqui foi a lógica NaN, Seção 3-5).
     target_ini, target_fim = intervalo_targets_necessario(origens, LEADS)
     print(f"\n=== buscando CHIRPS consolidado ({target_ini} a {target_fim}, em blocos anuais) ===")
     chirps_df = buscar_chirps_consolidado(target_ini, target_fim, sleep_fn=sleep_fn)
@@ -358,6 +381,17 @@ def rodar_poc(sistemas=None, origens=None, sleep_fn=time.sleep):
 
 def montar_metadata(resultado):
     r = resultado
+    mme_df = r['mme_df']
+    disponibilidade = None
+    if not mme_df.empty and 'raw_available' in mme_df.columns:
+        n = len(mme_df)
+        disponibilidade = {
+            'raw_available': f"{int(mme_df['raw_available'].sum())}/{n}",
+            'bc_available': f"{int(mme_df['bc_available'].sum())}/{n}",
+            'raw_prob_available': f"{int(mme_df['raw_prob_available'].sum())}/{n}",
+            'bc_prob_available': f"{int(mme_df['bc_prob_available'].sum())}/{n}",
+            'model_set_status_ok': f"{int((mme_df['model_set_status'] == mm.MODELO_COMPLETO_STATUS).sum())}/{n}",
+        }
     return {
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'fase': '2B.1 — POC multi-modelo (infraestrutura, não avaliação de skill)',
@@ -368,8 +402,15 @@ def montar_metadata(resultado):
         'n_linhas_raw': len(r['raw_df']), 'n_linhas_summary': len(r['summary_df']),
         'n_linhas_mme': len(r['mme_df']),
         'n_meses_chirps': len(r['chirps_df']),
+        # Disponibilidade por combinação origem×lead (Seção 7/9, correção pós-run real
+        # 35437819463) — BC/probabilidades indisponíveis por falta de histórico são
+        # ESPERADAS no POC e não bloqueiam a aprovação (Seção 13); RAW/model_set_status
+        # disponíveis em 36/36 é que é obrigatório.
+        'disponibilidade_mme': disponibilidade,
         'nota': 'Resultado NÃO é conclusão científica — POC de infraestrutura (Seção 15/34). Nenhum '
-                'resultado desta fase deve entrar no dashboard operacional (Seção 34).',
+                'resultado desta fase deve entrar no dashboard operacional (Seção 34). BC/probabilidades '
+                'indisponíveis por falta de histórico leakage-safe são esperadas neste POC (Seção 2/23) — '
+                'não indicam falha.',
     }
 
 
@@ -385,10 +426,114 @@ def gerar_relatorio_markdown(resultado):
     if r['falhas']:
         linhas += ["", "## Falhas", ""] + [f"- **{k}**: {v}" for k, v in r['falhas'].items()]
     if not r['mme_df'].empty and 'model_set_status' in r['mme_df'].columns:
-        incompletos = (r['mme_df']['model_set_status'] == mm.MODELO_AUSENTE_STATUS).sum()
-        linhas += ["", f"- Combinações origem×lead com INCOMPLETE_MODEL_SET: {incompletos}/{len(r['mme_df'])}"]
+        mme_df = r['mme_df']
+        n = len(mme_df)
+        incompletos = (mme_df['model_set_status'] == mm.MODELO_AUSENTE_STATUS).sum()
+        linhas += ["", f"- Combinações origem×lead com INCOMPLETE_MODEL_SET: {incompletos}/{n}", "",
+                   "## Disponibilidade por combinação origem×lead", "",
+                   "BC e probabilidades indisponíveis por falta de histórico leakage-safe são "
+                   "ESPERADAS neste POC (Seção 2/23) — não são falha, e não bloqueiam a aprovação "
+                   "(Seção 13). `model_set_status=OK` é independente de BC estar disponível "
+                   "(Seção 6).", "",
+                   f"- RAW disponível: {int(mme_df['raw_available'].sum())}/{n}",
+                   f"- BC disponível: {int(mme_df['bc_available'].sum())}/{n}",
+                   f"- Probabilidades RAW disponíveis: {int(mme_df['raw_prob_available'].sum())}/{n}",
+                   f"- Probabilidades BC disponíveis: {int(mme_df['bc_prob_available'].sum())}/{n}",
+                   f"- model_set_status=OK: "
+                   f"{int((mme_df['model_set_status'] == mm.MODELO_COMPLETO_STATUS).sum())}/{n}"]
+        com_raw_error = mme_df[mme_df['raw_error'].notna()]
+        if not com_raw_error.empty:
+            linhas += ["", "### RAW com erro (inconsistência real do pipeline, nunca falta de "
+                            "histórico — Seção 5/8-H)", ""]
+            linhas += [f"- {row['init_date']} lead {row['lead']}: {row['raw_error']}"
+                       for _, row in com_raw_error.iterrows()]
     linhas += ["", "---", "", "Nenhum resultado desta fase deve entrar no dashboard operacional (Seção 34)."]
     return '\n'.join(linhas) + '\n'
+
+
+def validar_poc_aprovado(resultado, sistemas=None, origens=None):
+    """Seção 13 (correção pós-run real 35437819463) — fail-fast final do
+    POC, mesmo formato (aprovado: bool, motivos: list[str]) de
+    validar_pilot_aprovado/validar_full_aprovado em
+    c3s_hindcast_completo.py. Só aprova se:
+      - 4 sistemas configurados;
+      - 6/6 origens sem falha de download, por sistema;
+      - nº de membros bate com o esperado por sistema (nunca 25 fixo);
+      - leads 1-6 presentes no raw;
+      - zero falhas de download;
+      - temporal_audit com a contagem esperada e
+        lead1_e_mes_nominal_da_inicializacao=True em 100% das linhas;
+      - RAW disponível (raw_available=True, sem raw_error) em 100% das
+        combinações origem×lead;
+      - MME RAW presente (mme_df com a contagem esperada) em 36/36
+        combinações;
+      - model_set_status=OK em 36/36 combinações.
+
+    NÃO exige (Seção 13): BC disponível, probabilidades RAW/BC
+    disponíveis — indisponíveis por falta de histórico é esperado neste
+    POC (Seção 2/23) — nem calcula skill (este POC nunca avalia skill,
+    Seção 15)."""
+    r = resultado
+    sistemas = sistemas if sistemas is not None else r['sistemas']
+    origens = origens if origens is not None else r['origens']
+    motivos = []
+
+    if len(sistemas) != 4:
+        motivos.append(f"esperados 4 sistemas configurados, catálogo tem {len(sistemas)}")
+
+    if r['falhas']:
+        motivos.append(f"{len(r['falhas'])} falha(s) de download: {sorted(r['falhas'].keys())}")
+
+    n_origens = len(origens)
+    for sistema in sistemas:
+        prefixo = f'{sistema.centro}/{sistema.system_name}/'
+        chaves_sistema = [f'{prefixo}{_origem_str(a, m)}' for a, m in origens]
+        n_ok = sum(1 for c in chaves_sistema if c not in r['falhas'])
+        if n_ok != n_origens:
+            motivos.append(f"{sistema.centro}/{sistema.system_name}: {n_ok}/{n_origens} origens ok")
+
+        if sistema.hindcast_members is not None:
+            for chave in chaves_sistema:
+                meta = r['metadados'].get(chave)
+                if meta is not None and meta['n_membros'] != sistema.hindcast_members:
+                    motivos.append(f"{chave}: n_membros={meta['n_membros']}, "
+                                    f"esperado {sistema.hindcast_members}")
+
+    raw_df = r['raw_df']
+    if raw_df.empty and not r['falhas']:
+        motivos.append("raw_df vazio sem nenhuma falha registrada — inconsistência")
+    elif not raw_df.empty:
+        leads_encontrados = sorted(raw_df['lead'].unique())
+        if leads_encontrados != LEADS:
+            motivos.append(f"leads no raw {leads_encontrados} != esperados {LEADS}")
+
+    temporal_audit_df = r['temporal_audit_df']
+    n_temporal_esperado = len(sistemas) * n_origens * len(LEADS)
+    if len(temporal_audit_df) != n_temporal_esperado:
+        motivos.append(f"temporal_audit tem {len(temporal_audit_df)} linhas, "
+                        f"esperado {n_temporal_esperado} (sistemas x origens x leads)")
+    elif not temporal_audit_df.empty and \
+            not temporal_audit_df['lead1_e_mes_nominal_da_inicializacao'].all():
+        motivos.append("alguma linha do temporal_audit tem lead1_e_mes_nominal_da_inicializacao=False")
+
+    mme_df = r['mme_df']
+    n_mme_esperado = n_origens * len(LEADS)
+    if len(mme_df) != n_mme_esperado:
+        motivos.append(f"mme_df tem {len(mme_df)} linhas, esperado {n_mme_esperado} (origens x leads)")
+    elif not mme_df.empty:
+        if not mme_df['raw_available'].all():
+            faltando = (~mme_df['raw_available']).sum()
+            motivos.append(f"RAW indisponível em {faltando}/{n_mme_esperado} combinações "
+                            f"(esperado 100% — modelos já confirmados presentes no POC)")
+        com_erro = mme_df[mme_df['raw_error'].notna()]
+        if not com_erro.empty:
+            motivos.append(f"raw_error presente em {len(com_erro)}/{n_mme_esperado} combinações")
+        n_status_ok = (mme_df['model_set_status'] == mm.MODELO_COMPLETO_STATUS).sum()
+        if n_status_ok != n_mme_esperado:
+            motivos.append(f"model_set_status=OK em {n_status_ok}/{n_mme_esperado}, "
+                            f"esperado {n_mme_esperado}")
+
+    return not motivos, motivos
 
 
 def escrever_saidas(resultado, sistemas=None):
@@ -451,8 +596,21 @@ def main():
     print(f"=== C3S Multi-Modelo POC — {len(POC_ORIGENS)} origens x {len(mcat.CATALOGO)} modelos ===")
     resultado = rodar_poc()
     escrever_saidas(resultado)
-    print("\n✅ POC concluído — ver artifacts/c3s_multimodel_poc/RELATORIO.md "
-          "(NÃO é conclusão científica, Seção 15).")
+
+    aprovado, motivos = validar_poc_aprovado(resultado)
+    if not aprovado:
+        print("\n❌ POC REPROVADO — artifacts gravados para diagnóstico (raw/temporal_audit já "
+              "persistidos antes do MME, Seção 12); encerrando com erro (correção pós-run real "
+              "35437819463, Seção 13 — BC/probabilidades indisponíveis NÃO reprovam o POC, só "
+              "download/schema/membros/leads/RAW/model_set_status):")
+        for motivo in motivos:
+            print(f"  - {motivo}")
+        sys.exit(1)
+    print("\n✅ POC APROVADO — download/schema/membros/leads/mapeamento temporal/RAW/"
+          "model_set_status validados nas 36 combinações origem×lead (6 origens x 6 leads). "
+          "BC/probabilidades podem estar indisponíveis por falta de histórico — isso é esperado "
+          "e não bloqueia a aprovação (Seção 2/13/23).")
+    print("   ver artifacts/c3s_multimodel_poc/RELATORIO.md (NÃO é conclusão científica, Seção 15).")
 
 
 if __name__ == '__main__':

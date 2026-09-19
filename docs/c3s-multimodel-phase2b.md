@@ -165,6 +165,88 @@ suficiente para calibrar bias (o mesmo padrão já observado no primeiro
 pilot isolado da Fase 2A.3); BC/probabilidades podem ficar
 `SEM_HISTORICO_SUFICIENTE`/`NaN`, e isso é esperado, não um bug.
 
+## Primeira execução real (run `35437819463`) — evidência de primeira mão
+
+A primeira execução real do POC (workflow "C3S Multi-Modelo POC (Fase
+2B.1)", run `35437819463`) confirmou empiricamente, por evidência direta
+de primeira mão (não mais inferência de documentação), para os 4
+sistemas:
+
+| Centro | Sistema | `system` (CDS) | Membros observados | Leads | Variável | Unidade original | Mapeamento temporal |
+|---|---|---|---|---|---|---|---|
+| ECMWF | SEAS5 | 51 | 25 | 1–6 | `tprate` | `m s**-1` | lead 1 = mês nominal da inicialização |
+| Météo-France | System8 | 8 | 25 | 1–6 | `tprate` | `m s**-1` | lead 1 = mês nominal da inicialização |
+| DWD | GCFS2.1 | 21 | 30 | 1–6 | `tprate` | `m s**-1` | lead 1 = mês nominal da inicialização |
+| CMCC | SPS3.5 | 35 | 40 | 1–6 | `tprate` | `m s**-1` | lead 1 = mês nominal da inicialização |
+
+Os 6/6 downloads por sistema completaram com sucesso (24/24
+combinações origem×modelo, zero falhas de download). Essa evidência
+supera, onde aplicável, a incerteza que ainda existia no catálogo sobre
+membros/unidade/mapeamento temporal por sistema — **sem alterar o
+catálogo em si** (`c3s_multimodel_catalogo.py` continua com os mesmos
+valores, que já estavam corretos; o que muda é que agora há confirmação
+empírica além da documentação).
+
+### O que quebrou — e por que não era falha científica
+
+Depois de completar os 24 downloads, a execução quebrou dentro de
+`c3s_multimodel.py::mme_probabilistico()`:
+`ValueError: probabilidades de um modelo não somam 1 (soma=nan):
+below=nan, normal=nan, above=nan`.
+
+Causa raiz: o filtro de validade antigo (`t is not None and
+all(v is not None for v in t)`) não usava `np.isfinite` — uma tripla
+`(NaN, NaN, NaN)` passava como "válida" porque `np.nan is not None` é
+`True` em Python, e a soma de NaNs (`NaN`) falhava o teste
+`np.isclose(soma, 1.0)`, levantando um `ValueError` indevido. Isso
+**não é falha científica**: BC/probabilidades exigem histórico
+leakage-safe suficiente, e as 6 origens isoladas do POC raramente têm
+esse histórico — `NaN`/indisponível é o resultado ESPERADO, não um bug
+de dado. O bug real era tratar esse `NaN` esperado como se fosse uma
+tripla parcialmente corrompida.
+
+### Correção aplicada
+
+- `scripts/c3s_multimodel.py`: nova função `_classificar_tripla()`
+  classifica cada tripla de probabilidade em `ausente` (todos
+  None/NaN/inf — esperado, excluído da média sem erro), `valida` (todos
+  finitos — entra na média) ou `corrompida` (mistura dos dois — nunca
+  deveria acontecer, levanta `ValueError` explícito). `mme_probabilistico`
+  reescrita para usar essa classificação; devolve `(None, None, None)`
+  se nenhum modelo tiver tripla válida, em vez de quebrar.
+- `mme_deterministico` ganhou o parâmetro `allow_missing` — `True`
+  (permissivo) para BC, já que falta de histórico é esperada;
+  `False` (estrito) para RAW, já que todos os 4 modelos estavam
+  confirmados presentes neste POC e um RAW não-finito seria
+  inconsistência real do pipeline (a barreira F de
+  `processar_origem_modelo` já garante `c3s_prec_mm` finito) — nunca
+  mascarado, capturado explicitamente e registrado em `raw_error` por
+  linha do MME.
+- Novas colunas em `c3s_multimodel_mme.csv`: `raw_available`,
+  `bc_available`, `raw_prob_available`, `bc_prob_available`,
+  `raw_error`. `model_set_status=OK` continua independente de BC estar
+  disponível — presença de modelo (4/4 configurados) e disponibilidade
+  de BC/probabilidades são conceitos ortogonais, nunca confundidos.
+- `scripts/c3s_multimodel_poc.py::rodar_poc()` agora persiste
+  `c3s_multimodel_raw.csv` e `c3s_multimodel_temporal_audit.csv` no
+  disco assim que estão prontos, ANTES de buscar CHIRPS/construir
+  summary/MME — uma falha nas etapas seguintes não perde mais os dados
+  reais já baixados (no run `35437819463`, só os 2 artifacts de
+  catálogo, que não dependem do CDS, chegaram a ser publicados).
+- Nova função `validar_poc_aprovado()` — fail-fast final do POC (mesmo
+  padrão de `validar_pilot_aprovado`/`validar_full_aprovado` da Fase
+  2A.3): exige 4 sistemas, 6/6 origens por sistema, membros corretos por
+  modelo, leads 1–6, zero falhas de download, temporal_audit aprovado,
+  RAW disponível e sem `raw_error` em 100% das 36 combinações
+  origem×lead, e `model_set_status=OK` em 36/36. **Não exige** BC/
+  probabilidades disponíveis nem calcula skill — o POC continua sendo só
+  validação de infraestrutura (Seção 15).
+
+Nada relativo a códigos de sistema, período comum, tamanho de ensemble,
+conversão de unidade, mapeamento temporal ou arquitetura de equal-model-
+weighting foi alterado nesta correção — todos esses itens já estavam
+corretos e foram confirmados, não corrigidos, pelo run real.
+
 ## O que é reaproveitado da Fase 2A.3 (metodologia congelada)
 
 - CHIRPS como única fonte observacional, cobertura derivada de

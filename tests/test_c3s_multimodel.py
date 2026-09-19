@@ -175,6 +175,184 @@ def _linha_summary(centre, init_date, lead, target_month, ens_mean_raw, ens_mean
             'prob_normal_bc': prob_normal_bc, 'prob_above_bc': prob_above_bc}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Correção pós-run real 35437819463 — os 4 sistemas C3S funcionaram (6/6
+# origens, membros/leads/unidade/mapeamento temporal corretos), mas o
+# POC quebrou em mme_probabilistico() com
+# "ValueError: probabilidades de um modelo não somam 1 (soma=nan)"
+# porque uma tripla (NaN, NaN, NaN) passava como "válida" (o filtro
+# antigo só checava `is not None`, e `np.nan is not None` é True). Isso
+# não é falha científica — BC/probabilidades indisponíveis por falta de
+# histórico é o resultado ESPERADO no POC (6 origens isoladas) — o bug
+# era o crash em si. Seção 8 (itens A-L) da correção.
+# ══════════════════════════════════════════════════════════════════════════
+
+class ClassificarTriplaTestCase(unittest.TestCase):
+
+    # A — (NaN, NaN, NaN) é tratado como probabilidade indisponível
+    def test_a_tripla_toda_nan_e_ausente(self):
+        self.assertEqual(mm._classificar_tripla((float('nan'), float('nan'), float('nan'))), 'ausente')
+
+    # B — (None, None, None) é indisponível
+    def test_b_tripla_toda_none_e_ausente(self):
+        self.assertEqual(mm._classificar_tripla((None, None, None)), 'ausente')
+
+    def test_tripla_com_inf_e_ausente(self):
+        self.assertEqual(mm._classificar_tripla((float('inf'), float('-inf'), float('nan'))), 'ausente')
+
+    # C — (0.4, NaN, 0.6) é classificada como corrompida
+    def test_c_tripla_parcial_e_corrompida(self):
+        self.assertEqual(mm._classificar_tripla((0.4, float('nan'), 0.6)), 'corrompida')
+
+    # D — (0.4, 0.3, 0.3) é válida
+    def test_d_tripla_finita_e_valida(self):
+        self.assertEqual(mm._classificar_tripla((0.4, 0.3, 0.3)), 'valida')
+
+
+class MmeProbabilisticoNaNTestCase(unittest.TestCase):
+
+    # A — regressão direta do bug real: (NaN, NaN, NaN) não quebra mais,
+    # é excluída da média como indisponível.
+    def test_a_regressao_run_35437819463_nan_nan_nan_nao_quebra(self):
+        below, normal, above = mm.mme_probabilistico({
+            'ECMWF': (float('nan'), float('nan'), float('nan')),
+            'DWD': (0.4, 0.3, 0.3),
+        })
+        self.assertAlmostEqual(below, 0.4)
+        self.assertAlmostEqual(normal, 0.3)
+        self.assertAlmostEqual(above, 0.3)
+
+    # B — (None, None, None) como tripla explícita também é indisponível
+    def test_b_tripla_none_none_none_e_excluida(self):
+        below, normal, above = mm.mme_probabilistico({
+            'ECMWF': (None, None, None), 'DWD': (0.4, 0.3, 0.3),
+        })
+        self.assertAlmostEqual(below, 0.4)
+
+    # C — (0.4, NaN, 0.6) gera erro (inconsistência real, nunca ausência)
+    def test_c_tripla_parcialmente_preenchida_levanta_erro(self):
+        with self.assertRaises(ValueError):
+            mm.mme_probabilistico({'ECMWF': (0.4, float('nan'), 0.6), 'DWD': (0.4, 0.3, 0.3)})
+
+    # D — (0.4, 0.3, 0.3) é válida e entra na média normalmente
+    def test_d_tripla_valida_entra_na_media(self):
+        below, normal, above = mm.mme_probabilistico({'A': (0.4, 0.3, 0.3)})
+        self.assertAlmostEqual(below, 0.4)
+        self.assertAlmostEqual(normal, 0.3)
+        self.assertAlmostEqual(above, 0.3)
+
+    # E — (0.4, 0.3, 0.4) continua gerando erro porque soma != 1
+    def test_e_tripla_finita_com_soma_diferente_de_1_levanta_erro(self):
+        with self.assertRaises(ValueError):
+            mm.mme_probabilistico({'A': (0.4, 0.3, 0.4)})
+
+    def test_todos_os_modelos_nan_devolve_none_sem_erro(self):
+        resultado = mm.mme_probabilistico({
+            'ECMWF': (float('nan'),) * 3, 'DWD': (float('nan'),) * 3,
+        })
+        self.assertEqual(resultado, (None, None, None))
+
+    # L — probabilidades disponíveis continuam somando 1
+    def test_l_mme_de_probabilidades_disponiveis_soma_1(self):
+        below, normal, above = mm.mme_probabilistico({
+            'ECMWF': (float('nan'),) * 3, 'DWD': (0.5, 0.25, 0.25), 'CMCC': (0.3, 0.35, 0.35),
+        })
+        self.assertAlmostEqual(below + normal + above, 1.0)
+
+
+class MmeDeterministicoAllowMissingTestCase(unittest.TestCase):
+
+    # F — todos os modelos com BC NaN → mme_mean_bc = None
+    def test_f_todos_bc_nan_devolve_none(self):
+        resultado = mm.mme_deterministico({'ECMWF': float('nan'), 'DWD': float('nan')}, allow_missing=True)
+        self.assertIsNone(resultado)
+
+    # G — RAW finito dos quatro modelos → MME RAW calculado normalmente
+    def test_g_raw_finito_dos_quatro_modelos_calcula_normalmente(self):
+        resultado = mm.mme_deterministico(
+            {'ECMWF': 100.0, 'METEO_FRANCE': 110.0, 'DWD': 120.0, 'CMCC': 130.0}, allow_missing=False)
+        self.assertAlmostEqual(resultado, 115.0)
+
+    # H — RAW NaN de um modelo falha explicitamente com allow_missing=False,
+    # nunca calcula MME parcial silenciosamente
+    def test_h_raw_nan_com_allow_missing_false_levanta_erro(self):
+        with self.assertRaises(ValueError):
+            mm.mme_deterministico({'ECMWF': 100.0, 'DWD': float('nan')}, allow_missing=False)
+
+    def test_h_raw_none_com_allow_missing_false_levanta_erro(self):
+        with self.assertRaises(ValueError):
+            mm.mme_deterministico({'ECMWF': 100.0, 'DWD': None}, allow_missing=False)
+
+    def test_bc_com_allow_missing_true_nunca_levanta_erro_por_ausencia(self):
+        # mesmo com todos ausentes, allow_missing=True nunca levanta —
+        # só devolve None (comportamento correto para BC)
+        resultado = mm.mme_deterministico({'ECMWF': None, 'DWD': float('nan')}, allow_missing=True)
+        self.assertIsNone(resultado)
+
+
+class ModelSetStatusVsAvailabilityTestCase(unittest.TestCase):
+    """Seções 6/13 — model_set_status é sobre PRESENÇA de modelo, nunca
+    confundido com disponibilidade de BC/probabilidades."""
+
+    def _summary_quatro_modelos_bc_indisponivel(self):
+        centros = ['ECMWF', 'METEO_FRANCE', 'DWD', 'CMCC']
+        linhas = [_linha_summary(c, '1995-01', 1, '1995-01', 100.0 + i * 10, float('nan'),
+                                  prob_below_bc=float('nan'), prob_normal_bc=float('nan'),
+                                  prob_above_bc=float('nan'))
+                  for i, c in enumerate(centros)]
+        return pd.DataFrame(linhas), centros
+
+    # I — os 4 modelos presentes + BC indisponível → model_set_status = OK
+    def test_i_quatro_modelos_presentes_bc_indisponivel_status_ok(self):
+        summary, centros = self._summary_quatro_modelos_bc_indisponivel()
+        df = mm.construir_mme_por_origem_lead(summary, centros)
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertEqual(row['model_set_status'], mm.MODELO_COMPLETO_STATUS)
+
+    # J — bc_available=False não equivale a INCOMPLETE_MODEL_SET
+    def test_j_bc_available_false_nao_e_incomplete_model_set(self):
+        summary, centros = self._summary_quatro_modelos_bc_indisponivel()
+        df = mm.construir_mme_por_origem_lead(summary, centros)
+        row = df.iloc[0]
+        self.assertFalse(row['bc_available'])
+        self.assertFalse(row['bc_prob_available'])
+        self.assertNotEqual(row['model_set_status'], mm.MODELO_AUSENTE_STATUS)
+        self.assertTrue(row['raw_available'])
+
+    def test_raw_available_true_quando_raw_finito(self):
+        summary, centros = self._summary_quatro_modelos_bc_indisponivel()
+        df = mm.construir_mme_por_origem_lead(summary, centros)
+        row = df.iloc[0]
+        self.assertTrue(row['raw_available'])
+        self.assertIsNotNone(row['mme_mean_raw'])
+        self.assertIsNone(row['raw_error'])
+
+    # K — equal weighting permanece intacto (mesmo cenário do teste obrigatório)
+    def test_k_equal_weighting_intacto_apesar_de_bc_indisponivel(self):
+        summary, centros = self._summary_quatro_modelos_bc_indisponivel()
+        df = mm.construir_mme_por_origem_lead(summary, centros)
+        row = df.iloc[0]
+        # ens_mean_raw = 100,110,120,130 -> média simples = 115
+        self.assertAlmostEqual(row['mme_mean_raw'], 115.0)
+
+    # H (nível de orquestração) — RAW NaN de UM modelo (mesmo com os 4
+    # presentes) marca erro explícito em vez de calcular MME parcial
+    def test_h_raw_nan_de_um_modelo_marca_raw_error_sem_quebrar_o_poc(self):
+        centros = ['ECMWF', 'METEO_FRANCE', 'DWD', 'CMCC']
+        linhas = [_linha_summary(c, '1995-01', 1, '1995-01', 100.0, 90.0) for c in centros]
+        linhas[1]['ens_mean_raw'] = float('nan')   # inconsistência simulada, nunca deveria ocorrer
+        summary = pd.DataFrame(linhas)
+        df = mm.construir_mme_por_origem_lead(summary, centros)
+        row = df.iloc[0]
+        # model_set_status continua OK: os 4 modelos estão presentes,
+        # o problema é a qualidade do valor RAW, não a ausência do modelo
+        self.assertEqual(row['model_set_status'], mm.MODELO_COMPLETO_STATUS)
+        self.assertFalse(row['raw_available'])
+        self.assertIsNone(row['mme_mean_raw'])
+        self.assertIsNotNone(row['raw_error'])
+
+
 class ConstruirMmePorOrigemLeadTestCase(unittest.TestCase):
 
     def test_vazio_nao_quebra(self):
