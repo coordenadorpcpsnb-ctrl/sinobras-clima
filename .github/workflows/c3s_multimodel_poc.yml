@@ -1,0 +1,131 @@
+name: C3S Multi-Modelo POC (Fase 2B.1)
+
+# Fase 2B.1 — infraestrutura para comparar múltiplos sistemas sazonais
+# C3S (ECMWF SEAS5, Météo-France System8, DWD GCFS2.1, CMCC SPS3.5) sob
+# o MESMO protocolo científico já validado/congelado na Fase 2A.3
+# (CHIRPS, climatologia leakage-safe, bias additive, MIN_ANOS_TREINO=10,
+# métricas, bootstrap). Ver docs/c3s-multimodel-phase2b.md.
+#
+# Este workflow só roda o POC de infraestrutura (6 origens fixas x
+# modelos incluídos) — NÃO é avaliação de skill (Seção 15/34). Nenhum
+# resultado desta fase promove nenhum sistema para produção.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
+# executar_poc_real=false — clicar em "Run workflow" sem mexer em nada
+# NUNCA acessa o CDS: só valida código, roda a suíte de testes, mostra
+# catálogo/plano. O POC real (download de verdade) exige
+# dry_run_plan=false E executar_poc_real=true E o texto exato
+# EXECUTAR_POC_MULTIMODEL em confirm_poc_real — sem isso, falha ANTES
+# de instalar qualquer dependência ou criar qualquer request ao CDS
+# (mesmo padrão já usado em c3s_hindcast_completo.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run_plan:
+        description: 'true (default, seguro) = só valida código/testes e mostra catálogo/plano — nunca acessa o CDS'
+        required: true
+        default: 'true'
+      executar_poc_real:
+        description: 'true = roda o POC real (6 origens x modelos incluídos, download real) — exige dry_run_plan=false e confirm_poc_real'
+        required: true
+        default: 'false'
+      confirm_poc_real:
+        description: 'Só necessário com dry_run_plan=false e executar_poc_real=true: digite EXECUTAR_POC_MULTIMODEL para liberar'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c3s-multimodel-poc
+  cancel-in-progress: false
+
+jobs:
+  multimodel-poc:
+    name: C3S Multi-Modelo POC
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Bloqueia o POC real acidental sem confirmação explícita — roda
+      # ANTES de instalar dependências ou tocar no CDS. Pulado quando
+      # dry_run_plan=true (default seguro) ou executar_poc_real=false.
+      - name: Guardrail — POC real exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        run: |
+          if [ "${{ inputs.confirm_poc_real }}" != "EXECUTAR_POC_MULTIMODEL" ]; then
+            echo "::error::POC real multi-modelo bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ POC real bloqueado"
+              echo ""
+              echo "Rodar o POC real (download de verdade, 4 sistemas x 6 origens) exige"
+              echo "preencher o input **confirm_poc_real** com o texto exato"
+              echo "\`EXECUTAR_POC_MULTIMODEL\`."
+              echo ""
+              echo "O default deste workflow (dry_run_plan=true) nunca acessa o CDS — só valida"
+              echo "código, roda testes e mostra o catálogo/plano do POC."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_poc_real=EXECUTAR_POC_MULTIMODEL) — liberando execução."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      # Sempre roda (nunca acessa o CDS) — catálogo/período comum são
+      # dados estáticos do módulo, não dependem de download.
+      - name: Mostrar catálogo e plano do POC (dry-run, nunca acessa o CDS)
+        run: python scripts/c3s_multimodel_poc.py --dry-run-plan
+
+      - name: Criar ~/.cdsapirc (temporário, nunca commitado)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        env:
+          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' "$CDS_API_KEY" > "$HOME/.cdsapirc"
+          chmod 600 "$HOME/.cdsapirc"
+          echo "~/.cdsapirc criado (permissão 600, conteúdo nunca exibido)."
+
+      - name: Rodar POC real (4 sistemas x 6 origens fixas)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        run: python scripts/c3s_multimodel_poc.py --executar-poc-real
+
+      - name: Remover credencial
+        if: always()
+        run: rm -f "$HOME/.cdsapirc"
+
+      - name: Publicar artifacts (CSVs/JSON/relatório — nunca GRIB/NetCDF)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c3s-multimodel-poc
+          path: |
+            artifacts/c3s_multimodel_poc/c3s_multimodel_catalog.csv
+            artifacts/c3s_multimodel_poc/c3s_multimodel_common_period.json
+            artifacts/c3s_multimodel_poc/c3s_multimodel_raw.csv
+            artifacts/c3s_multimodel_poc/c3s_multimodel_summary.csv
+            artifacts/c3s_multimodel_poc/c3s_multimodel_mme.csv
+            artifacts/c3s_multimodel_poc/c3s_multimodel_temporal_audit.csv
+            artifacts/c3s_multimodel_poc/metadata.json
+            artifacts/c3s_multimodel_poc/RELATORIO.md
+          retention-days: 30
+          if-no-files-found: warn
