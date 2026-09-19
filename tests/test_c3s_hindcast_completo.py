@@ -390,6 +390,23 @@ def _chirps_sintetico(ano_ini, ano_fim, seed=1):
     return pd.DataFrame(linhas)
 
 
+def _chirps_sintetico_intervalo(target_ini, target_fim, seed=1):
+    """Como _chirps_sintetico, mas cobre exatamente o intervalo
+    [target_ini, target_fim] (pandas.Period) — pode incluir um ano
+    parcial no fim/início, do mesmo jeito que buscar_chirps_consolidado
+    cobre de verdade (correção pós-run oficial 35353196015)."""
+    target_ini = pd.Period(target_ini, 'M')
+    target_fim = pd.Period(target_fim, 'M')
+    rng = np.random.RandomState(seed)
+    linhas = []
+    for tm in pd.period_range(target_ini, target_fim, freq='M'):
+        base = 90 + 50 * np.sin(tm.month / 12 * 2 * np.pi)
+        val = max(0.0, base + rng.normal(0, 20))
+        linhas.append({'year': tm.year, 'month': tm.month, 'target_month': tm, 'chirps_prec_mm': round(val, 2),
+                        'source': 'CHIRPS'})
+    return pd.DataFrame(linhas)
+
+
 class ConfirmacaoNaoInfluenciaDesenvolvimentoTestCase(unittest.TestCase):
 
     def test_bias_e_clim_de_1995_iguais_com_ou_sem_dado_de_2010(self):
@@ -425,15 +442,41 @@ def _ano_de_ini(ini):
     return int(ini.split('/')[-1])
 
 
+def _mes_de_ini(ini):
+    return int(ini.split('/')[0])
+
+
+def _mes_de_fim(fim):
+    return int(fim.split('/')[0])
+
+
 def _fake_ano_completo(ano, valor_base=100.0):
     return pd.DataFrame({'ano': [ano] * 12, 'mes': list(range(1, 13)),
                           'prec': [valor_base + m for m in range(1, 13)], 'fonte': ['CHIRPS'] * 12})
 
 
+def _fake_bloco(ano, mes_ini=1, mes_fim=12, valor_base=100.0):
+    meses = list(range(mes_ini, mes_fim + 1))
+    return pd.DataFrame({'ano': [ano] * len(meses), 'mes': meses,
+                          'prec': [valor_base + m for m in meses], 'fonte': ['CHIRPS'] * len(meses)})
+
+
+def _espiao_generico(ini, fim, geom, rotulo=''):
+    """Devolve exatamente os meses pedidos (mes_ini-mes_fim do ano) —
+    ao contrário de _fake_ano_completo (sempre 12 meses), este espião
+    respeita blocos parciais (borda do intervalo derivado), como o
+    ClimateSERV real faria."""
+    return _fake_bloco(_ano_de_ini(ini), _mes_de_ini(ini), _mes_de_fim(fim))
+
+
 class ChirpsConsolidadoTestCase(unittest.TestCase):
     """Correção pós-pilot real (run 35257900850): buscar 1981-2016
     numa request só estourou o ClimateSERV. Agora em blocos anuais —
-    ver Seção 12 (itens A-M) e Seção 13 (regressão) da tarefa."""
+    ver Seção 12 (itens A-M) e Seção 13 (regressão) da tarefa.
+
+    Correção pós-run oficial 35353196015: target_ini/target_fim agora
+    são DERIVADOS (intervalo_targets_necessario), nunca fixados — o
+    primeiro/último ano do intervalo pode ser parcial (Seção 1-4)."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -464,7 +507,7 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
             return _fake_ano_completo(_ano_de_ini(ini))
 
         with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
-            h.buscar_chirps_consolidado(1981, 1981, sleep_fn=lambda s: None)
+            h.buscar_chirps_consolidado('1981-01', '1981-12', sleep_fn=lambda s: None)
         info = h.MUNICIPIOS[h.MUNICIPIO]
         geom_esperado = h._geometria_ponto(info['lat'], info['lon'])
         self.assertEqual(chamadas[0], geom_esperado)
@@ -474,10 +517,10 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
         with mock.patch.object(h, '_buscar_prec_chirps_geom',
                                 side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
                                     _ano_de_ini(ini))) as m:
-            h.buscar_chirps_consolidado(1981, 2016, sleep_fn=lambda s: None)
+            h.buscar_chirps_consolidado('1981-01', '2016-12', sleep_fn=lambda s: None)
         self.assertEqual(m.call_count, 36)
 
-    # B — cada bloco pede jan->dez do mesmo ano
+    # B — cada bloco cheio pede jan->dez do mesmo ano
     def test_b_bloco_pede_jan_a_dez_do_mesmo_ano(self):
         capturado = {}
 
@@ -486,7 +529,7 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
             return _fake_ano_completo(_ano_de_ini(ini))
 
         with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
-            h.buscar_chirps_consolidado(1995, 1995, sleep_fn=lambda s: None)
+            h.buscar_chirps_consolidado('1995-01', '1995-12', sleep_fn=lambda s: None)
         ini, fim = capturado[1995]
         self.assertEqual(ini, '01/01/1995')
         self.assertEqual(fim, '12/31/1995')
@@ -501,7 +544,7 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
             return _fake_ano_completo(_ano_de_ini(ini))
 
         with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
-            h.buscar_chirps_consolidado(2016, 2016, sleep_fn=lambda s: None)   # 2016 é bissexto
+            h.buscar_chirps_consolidado('2016-01', '2016-12', sleep_fn=lambda s: None)   # 2016 é bissexto
         ini, fim = capturado[2016]
         self.assertEqual(ini, '01/01/2016')
         self.assertEqual(fim, '12/31/2016')
@@ -573,18 +616,18 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
 
         with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
             with self.assertRaises(RuntimeError) as e:
-                h.buscar_chirps_consolidado(1981, 1985, sleep_fn=lambda s: None)
+                h.buscar_chirps_consolidado('1981-01', '1985-12', sleep_fn=lambda s: None)
         self.assertIn('1983', str(e.exception))
         estado = h._carregar_chirps_checkpoint()
         self.assertIn('1983', estado['anos_falhados'])
-        self.assertEqual(estado['anos_concluidos'], [1981, 1982])
+        self.assertEqual(estado['anos_concluidos'], ['1981', '1982'])
 
     # J — 36 blocos válidos geram 432 meses
     def test_j_36_blocos_geram_432_meses(self):
         with mock.patch.object(h, '_buscar_prec_chirps_geom',
                                 side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
                                     _ano_de_ini(ini))):
-            df = h.buscar_chirps_consolidado(1981, 2016, sleep_fn=lambda s: None)
+            df = h.buscar_chirps_consolidado('1981-01', '2016-12', sleep_fn=lambda s: None)
         self.assertEqual(len(df), 432)
 
     # K — sequência final é contínua de 1981-01 a 2016-12
@@ -592,7 +635,7 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
         with mock.patch.object(h, '_buscar_prec_chirps_geom',
                                 side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
                                     _ano_de_ini(ini))):
-            df = h.buscar_chirps_consolidado(1981, 2016, sleep_fn=lambda s: None)
+            df = h.buscar_chirps_consolidado('1981-01', '2016-12', sleep_fn=lambda s: None)
         esperado = list(pd.period_range('1981-01', '2016-12', freq='M'))
         self.assertEqual(list(df['target_month']), esperado)
 
@@ -601,7 +644,7 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
         df['target_month'] = pd.PeriodIndex(pd.to_datetime(dict(year=df.ano, month=df.mes, day=1)), freq='M')
         df = df.rename(columns={'prec': 'chirps_prec_mm'})
         with self.assertRaises(RuntimeError) as e:
-            h._validar_consolidado_final(df, 1981, 1982)   # só 1981 processado, falta 1982
+            h._validar_consolidado_final(df, '1981-01', '1982-12')   # só 1981 processado, falta 1982
         self.assertIn('esperado', str(e.exception).lower())
 
     # cache local dos blocos + checkpoint — dentro do mesmo processo
@@ -609,7 +652,7 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
         with mock.patch.object(h, '_buscar_prec_chirps_geom',
                                 side_effect=lambda ini, fim, geom, rotulo='': _fake_ano_completo(
                                     _ano_de_ini(ini))):
-            h.buscar_chirps_consolidado(1981, 1983, sleep_fn=lambda s: None)
+            h.buscar_chirps_consolidado('1981-01', '1983-12', sleep_fn=lambda s: None)
         salvos = sorted(p.name for p in h.CHIRPS_BLOCOS_DIR.glob('*.csv'))
         self.assertEqual(salvos, ['chirps_1981.csv', 'chirps_1982.csv', 'chirps_1983.csv'])
 
@@ -622,9 +665,9 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
             return _fake_ano_completo(ano)
 
         with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
-            h.buscar_chirps_consolidado(1981, 1983, sleep_fn=lambda s: None)   # 1ª vez: busca tudo
+            h.buscar_chirps_consolidado('1981-01', '1983-12', sleep_fn=lambda s: None)   # 1ª vez: busca tudo
             chamados.clear()
-            df2 = h.buscar_chirps_consolidado(1981, 1983, sleep_fn=lambda s: None)   # 2ª vez: tudo em cache
+            df2 = h.buscar_chirps_consolidado('1981-01', '1983-12', sleep_fn=lambda s: None)   # 2ª: em cache
         self.assertEqual(chamados, [])
         self.assertEqual(len(df2), 36)
 
@@ -646,9 +689,141 @@ class ChirpsConsolidadoTestCase(unittest.TestCase):
             self.assertTrue(resposta_request_unica.empty, "pré-condição: request de 36 anos deve falhar")
 
             # a implementação NOVA (blocos anuais) funciona sob a mesma condição
-            df = h.buscar_chirps_consolidado(1981, 1985, sleep_fn=lambda s: None)
+            df = h.buscar_chirps_consolidado('1981-01', '1985-12', sleep_fn=lambda s: None)
         self.assertEqual(len(df), 60)
         self.assertFalse(df['chirps_prec_mm'].isna().any())
+
+    # ══════════════════════════════════════════════════════════════════
+    # Correção pós-run oficial 35353196015 (Seção 1-4, 18: B/C/F) —
+    # borda parcial do intervalo (último ano com < 12 meses).
+    # ══════════════════════════════════════════════════════════════════
+
+    # Item 4 — para o último ano parcial (2017, jan-mai), busca só os
+    # meses necessários, nunca o ano inteiro.
+    def test_ultimo_ano_parcial_busca_so_os_meses_necessarios(self):
+        capturado = {}
+
+        def _espiao(ini, fim, geom, rotulo=''):
+            capturado[_ano_de_ini(ini)] = (ini, fim)
+            return _espiao_generico(ini, fim, geom, rotulo)
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            df = h.buscar_chirps_consolidado('2016-01', '2017-05', sleep_fn=lambda s: None)
+        ini, fim = capturado[2017]
+        self.assertEqual(ini, '01/01/2017')
+        self.assertEqual(fim, '05/31/2017')
+        self.assertEqual(len(df), 12 + 5)
+
+    # simetria: primeiro ano parcial também busca só os meses necessários
+    def test_primeiro_ano_parcial_busca_so_os_meses_necessarios(self):
+        capturado = {}
+
+        def _espiao(ini, fim, geom, rotulo=''):
+            capturado[_ano_de_ini(ini)] = (ini, fim)
+            return _espiao_generico(ini, fim, geom, rotulo)
+
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao):
+            df = h.buscar_chirps_consolidado('1981-07', '1982-12', sleep_fn=lambda s: None)
+        ini, fim = capturado[1981]
+        self.assertEqual(ini, '07/01/1981')
+        self.assertEqual(fim, '12/31/1981')
+        self.assertEqual(len(df), 6 + 12)
+
+    # Item B/C da correção — cobertura dinâmica: intervalo derivado do
+    # hindcast oficial (1981-2016, todos os meses) produz 437 meses,
+    # 1981-01 a 2017-05.
+    def test_b_intervalo_do_full_oficial_produz_437_meses_ate_2017_05(self):
+        origens = h.construir_origens(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, None)
+        target_ini, target_fim = h.intervalo_targets_necessario(origens, h.LEADS)
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao_generico):
+            df = h.buscar_chirps_consolidado(target_ini, target_fim, sleep_fn=lambda s: None)
+        self.assertEqual(len(df), 437)
+        self.assertEqual(df['target_month'].min(), pd.Period('1981-01', 'M'))
+        self.assertEqual(df['target_month'].max(), pd.Period('2017-05', 'M'))
+
+    # F — teste obrigatório de borda (Seção 7/18): 2016-12 lead 6 →
+    # 2017-05, e esse mês existe de verdade no CHIRPS consolidado.
+    def test_f_2016_12_lead6_target_2017_05_existe_no_consolidado(self):
+        target_ini, target_fim = h.intervalo_targets_necessario([(2016, 12)], h.LEADS)
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao_generico):
+            df = h.buscar_chirps_consolidado(target_ini, target_fim, sleep_fn=lambda s: None)
+        self.assertIn(pd.Period('2017-05', 'M'), set(df['target_month']))
+
+    def test_bloco_parcial_e_salvo_com_nome_distinto(self):
+        with mock.patch.object(h, '_buscar_prec_chirps_geom', side_effect=_espiao_generico):
+            h.buscar_chirps_consolidado('2016-01', '2017-05', sleep_fn=lambda s: None)
+        salvos = sorted(p.name for p in h.CHIRPS_BLOCOS_DIR.glob('*.csv'))
+        self.assertEqual(salvos, ['chirps_2016.csv', 'chirps_2017_01_05.csv'])
+
+    def test_bloco_parcial_incompleto_falha(self):
+        df = _fake_bloco(2017, 1, 4)   # falta maio
+        with self.assertRaises(RuntimeError) as e:
+            h._validar_bloco_chirps(df, 2017, mes_ini=1, mes_fim=5)
+        self.assertIn('incompleto', str(e.exception).lower())
+
+    def test_target_fim_menor_que_target_ini_falha(self):
+        with self.assertRaises(ValueError):
+            h.buscar_chirps_consolidado('2017-05', '2016-01', sleep_fn=lambda s: None)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# intervalo_targets_necessario — deriva a cobertura observacional
+# necessária a partir de origens×leads, nunca fixada manualmente
+# (correção pós-run oficial 35353196015, Seção 1/2/6/18).
+# ══════════════════════════════════════════════════════════════════════════
+
+class IntervaloTargetsNecessarioTestCase(unittest.TestCase):
+
+    # A — FULL gera target máximo 2017-05
+    def test_a_full_gera_target_maximo_2017_05(self):
+        origens = h.construir_origens(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, None)
+        _, target_fim = h.intervalo_targets_necessario(origens, h.LEADS)
+        self.assertEqual(target_fim, pd.Period('2017-05', 'M'))
+
+    def test_full_piso_e_1981_01(self):
+        origens = h.construir_origens(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, None)
+        target_ini, _ = h.intervalo_targets_necessario(origens, h.LEADS)
+        self.assertEqual(target_ini, pd.Period('1981-01', 'M'))
+
+    # C — cobertura contém 437 meses
+    def test_c_full_cobre_437_meses(self):
+        origens = h.construir_origens(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, None)
+        target_ini, target_fim = h.intervalo_targets_necessario(origens, h.LEADS)
+        self.assertEqual(len(pd.period_range(target_ini, target_fim, freq='M')), 437)
+
+    def test_pilot_continua_432_meses(self):
+        """O pilot longitudinal (jan/jul, até 2016-07) nunca alcançou a
+        virada de ano mesmo com lead 6 (2016-07+5=2016-12) — cobertura
+        inalterada, prova de que a correção não afeta o pilot já
+        validado em execução real (run 35340386904)."""
+        target_ini, target_fim = h.intervalo_targets_necessario(h.PILOT_ORIGENS, h.LEADS)
+        self.assertEqual(target_ini, pd.Period('1981-01', 'M'))
+        self.assertEqual(target_fim, pd.Period('2016-12', 'M'))
+        self.assertEqual(len(pd.period_range(target_ini, target_fim, freq='M')), 432)
+
+    def test_execucao_parcial_mantem_piso_em_1981(self):
+        """Mesmo pedindo só origens de 1991-1995, o piso nunca é
+        anterior a ANO_INICIO_HINDCAST — climatologia/bias de qualquer
+        origem avaliada pode precisar de histórico desde o início do
+        hindcast homogêneo, não só das origens desta execução."""
+        origens = h.construir_origens(1991, 1995, None)
+        target_ini, target_fim = h.intervalo_targets_necessario(origens, h.LEADS)
+        self.assertEqual(target_ini, pd.Period('1981-01', 'M'))
+        self.assertEqual(target_fim, pd.Period('1996-05', 'M'))   # 1995-12 + 5
+
+    # F — teste obrigatório de borda (Seção 7/18)
+    def test_f_2016_12_lead6_produz_target_2017_05(self):
+        _, target_fim = h.intervalo_targets_necessario([(2016, 12)], h.LEADS)
+        self.assertEqual(target_fim, pd.Period('2017-05', 'M'))
+
+    def test_2016_08_lead6_produz_target_2017_01(self):
+        _, target_fim = h.intervalo_targets_necessario([(2016, 8)], h.LEADS)
+        self.assertEqual(target_fim, pd.Period('2017-01', 'M'))
+
+    def test_lista_vazia_devolve_piso_nos_dois_extremos(self):
+        target_ini, target_fim = h.intervalo_targets_necessario([], h.LEADS)
+        self.assertEqual(target_ini, target_fim)
+        self.assertEqual(target_ini, pd.Period(f'{h.ANO_INICIO_HINDCAST}-01', 'M'))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -670,6 +845,38 @@ class LeakageAuditTestCase(unittest.TestCase):
     def test_vazio_nao_quebra(self):
         leakage = h.construir_leakage_audit(pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
         self.assertEqual(len(leakage), 0)
+
+    # J — auditoria expandida (Seção 10/18): verifica os DOIS máximos
+    # do bias (max_init_date_used_bias e max_target_month_used_bias),
+    # não só o de climatologia.
+    def test_j_audit_tem_as_colunas_dos_dois_maximos_de_bias(self):
+        origens = [(a, m) for a in range(1981, 1993) for m in [1, 6]]
+        raw = h._com_periods(_raw_sintetico(origens, leads=[1, 3]))
+        chirps = _chirps_sintetico(1981, 2016)
+        summary, _ = h.construir_summary_e_calibrado(raw, chirps)
+        ens_df = h.construir_ens_df(raw)
+        leakage = h.construir_leakage_audit(summary, ens_df, chirps)
+        for coluna in ('max_obs_date_used_climatology', 'max_init_date_used_bias',
+                       'max_target_month_used_bias', 'bias_leakage_ok'):
+            self.assertIn(coluna, leakage.columns)
+        # há linhas com histórico de bias (max_init/max_target não nulos)
+        com_bias = leakage[leakage['max_init_date_used_bias'].notna()]
+        self.assertGreater(len(com_bias), 0)
+        self.assertTrue(com_bias['max_target_month_used_bias'].notna().all())
+        self.assertTrue(leakage['bias_leakage_ok'].all())
+
+    def test_max_target_month_used_bias_nulo_quando_sem_historico(self):
+        """Seção 10: campos max podem ser nulos com segurança quando não
+        há histórico de bias (nunca um valor inventado)."""
+        origens = [(1981, 1)]   # primeira origem: não tem NENHUM histórico anterior
+        raw = h._com_periods(_raw_sintetico(origens, leads=[1]))
+        chirps = _chirps_sintetico(1981, 1981)
+        summary, _ = h.construir_summary_e_calibrado(raw, chirps)
+        ens_df = h.construir_ens_df(raw)
+        leakage = h.construir_leakage_audit(summary, ens_df, chirps)
+        self.assertTrue(leakage['max_init_date_used_bias'].isna().all())
+        self.assertTrue(leakage['max_target_month_used_bias'].isna().all())
+        self.assertTrue(leakage['bias_leakage_ok'].all())   # sem histórico não é violação
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1147,11 +1354,15 @@ class GuardrailWorkflowTestCase(unittest.TestCase):
 def _resultado_full_bom():
     """Resultado completo e aprovável da execução oficial (432 origens,
     1981-2016, todos os meses), montado sobre o mesmo padrão sintético
-    de _resultado_pilot_bom — só troca as origens pedidas."""
+    de _resultado_pilot_bom — só troca as origens pedidas. CHIRPS
+    sintético cobre o intervalo REAL derivado (1981-01 a 2017-05, 437
+    meses — correção pós-run oficial 35353196015), não mais um range
+    fixo de 432 meses que deixaria os targets de 2017 sem observação."""
     origens = h.construir_origens(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, None)
     raw_str = _raw_sintetico(origens, leads=h.LEADS, n_membros=h.N_MEMBROS_ESPERADO)
     raw = h._com_periods(raw_str)
-    chirps = _chirps_sintetico(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST)
+    target_ini, target_fim = h.intervalo_targets_necessario(origens, h.LEADS)
+    chirps = _chirps_sintetico_intervalo(target_ini, target_fim)
     summary, calibrated = h.construir_summary_e_calibrado(raw, chirps)
     avaliacao = h.filtrar_avaliacao(summary)
     tabelas_skill = h.montar_tabelas_skill(avaliacao)
@@ -1222,12 +1433,41 @@ class ValidarFullAprovadoTestCase(unittest.TestCase):
         self.assertFalse(aprovado)
         self.assertTrue(any('origens' in m for m in motivos))
 
-    def test_falha_se_chirps_diferente_de_432(self):
+    def test_falha_se_chirps_diferente_do_esperado(self):
+        """Esperado dinâmico agora é 437 (1981-01 a 2017-05), não mais
+        432 (correção pós-run oficial 35353196015)."""
         resultado = dict(self.resultado_bom)
         resultado['chirps_df'] = self.resultado_bom['chirps_df'].iloc[:-1]
         aprovado, motivos = h.validar_full_aprovado(resultado)
         self.assertFalse(aprovado)
-        self.assertTrue(any('CHIRPS' in m for m in motivos))
+        self.assertTrue(any('CHIRPS' in m and '437' in m for m in motivos), motivos)
+
+    def test_falha_se_forecasts_avaliacao_diferente_de_1872(self):
+        resultado = dict(self.resultado_bom)
+        resultado['avaliacao_n'] = self.resultado_bom['avaliacao_n'] - 1
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('1872' in m for m in motivos), motivos)
+
+    def test_avaliacao_n_esperado_e_1872(self):
+        self.assertEqual(self.resultado_bom['avaliacao_n'], 1872)
+
+    def test_falha_se_cobertura_observacional_incompleta(self):
+        """Item D/E da Seção 18 — reproduz o defeito real (run
+        35353196015): 15 forecasts avaliáveis sem chirps_prec_mm
+        finito."""
+        resultado = dict(self.resultado_bom)
+        avaliacao = self.resultado_bom['avaliacao_df'].copy()
+        avaliacao.loc[avaliacao.index[:15], 'chirps_prec_mm'] = np.nan
+        resultado['avaliacao_df'] = avaliacao
+        aprovado, motivos = h.validar_full_aprovado(resultado)
+        self.assertFalse(aprovado)
+        self.assertTrue(any('cobertura observacional' in m for m in motivos), motivos)
+
+    def test_todos_os_1872_forecasts_de_avaliacao_tem_observacao(self):
+        avaliacao = self.resultado_bom['avaliacao_df']
+        self.assertEqual(len(avaliacao), 1872)
+        self.assertTrue(np.isfinite(avaliacao['chirps_prec_mm'].astype(float)).all())
 
     # N — full falha se leakage != OK
     def test_n_falha_se_leakage_reprovado(self):
