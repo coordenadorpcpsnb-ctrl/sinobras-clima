@@ -149,7 +149,7 @@ CHIRPS_MAX_TENTATIVAS = 3
 CHIRPS_ESPERAS_RETRY_SEGUNDOS = [5, 15, 30]
 
 ARTIFACT_FILENAMES = [
-    'c3s_hindcast_raw.csv', 'c3s_hindcast_summary.csv', 'chirps_sao_bento_1981_2016.csv',
+    'c3s_hindcast_raw.csv', 'c3s_hindcast_summary.csv', 'chirps_sao_bento_hindcast_targets.csv',
     'c3s_hindcast_calibrated.csv', 'skill_deterministic_overall.csv', 'skill_deterministic_by_lead.csv',
     'skill_deterministic_by_month.csv', 'skill_deterministic_by_month_lead.csv', 'skill_operational_seasons.csv',
     'skill_probabilistic_overall.csv', 'skill_probabilistic_by_lead.csv', 'bootstrap_skill.csv',
@@ -287,24 +287,59 @@ def _com_periods(df, colunas=('init_date', 'target_month')):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# CHIRPS consolidado 1981-2016 — em BLOCOS ANUAIS (correção pós-pilot
-# real: uma única chamada de 36 anos estourou o ClimateSERV — run
-# 35257900850, "Error occurred while processing data request" seguido
-# de resposta vazia). Mesmo núcleo de _chirps.py
-# (_geometria_ponto/_buscar_prec_chirps_geom) e o mesmo intervalo
-# mensal corrigido de _c3s_utils.py (intervalo_mensal_chirps). Nunca
-# cai para ERA5/CHC-Preliminar/Open-Meteo — falha explícita, com
-# retry, se um ano não estiver disponível.
+# CHIRPS consolidado — em BLOCOS ANUAIS (correção pós-pilot real: uma
+# única chamada de 36 anos estourou o ClimateSERV — run 35257900850,
+# "Error occurred while processing data request" seguido de resposta
+# vazia). Mesmo núcleo de _chirps.py (_geometria_ponto/
+# _buscar_prec_chirps_geom) e o mesmo intervalo mensal corrigido de
+# _c3s_utils.py (intervalo_mensal_chirps). Nunca cai para ERA5/CHC-
+# Preliminar/Open-Meteo — falha explícita, com retry, se um bloco não
+# estiver disponível.
+#
+# Correção pós-run oficial 35353196015: a cobertura observacional
+# parava em ANO_FIM_HINDCAST-12 (2016-12), mas origem=2016-12 com
+# lead=6 alcança target_month=2017-05 (lead 1 = mês da inicialização,
+# convenção validada) — 15 forecasts da avaliação principal ficavam com
+# chirps_prec_mm=NaN (1.872 candidatos / só 1.857 com observação real).
+# O intervalo observacional necessário (target_ini, target_fim) passa a
+# ser DERIVADO de intervalo_targets_necessario(origens, leads), nunca
+# fixado manualmente — o piso continua ANO_INICIO_HINDCAST-01 (mesmo
+# numa execução parcial, climatologia/bias de qualquer origem avaliada
+# pode precisar de histórico desde o início do hindcast homogêneo), o
+# teto é o maior target_month realmente alcançado pelas origens×leads
+# pedidas. O primeiro/último ano do intervalo, se parciais, buscam só
+# os meses necessários (nunca o ano inteiro) — blocos anuais completos
+# continuam reaproveitando exatamente o cache/checkpoint já validados
+# (mesmo nome de arquivo `chirps_{ano}.csv`).
 # ══════════════════════════════════════════════════════════════════════════
 
-def _buscar_chirps_ano(ano, sleep_fn=time.sleep):
-    """Busca CHIRPS municipal de UM ano (jan->dez), com retry
-    controlado (máx. CHIRPS_MAX_TENTATIVAS, backoff progressivo).
-    Levanta RuntimeError explícito se esgotar as tentativas — nunca
-    continua silenciosamente com NaN nem troca de fonte."""
+def intervalo_targets_necessario(origens, leads=LEADS):
+    """Deriva (target_ini, target_fim) — os meses observacionais (CHIRPS)
+    realmente necessários — a partir de TODAS as combinações origem×lead
+    pedidas: nunca fixar manualmente (Seção 2 da correção). O piso nunca
+    é anterior a ANO_INICIO_HINDCAST-01, mesmo que as origens pedidas
+    comecem depois (execução parcial/depuração) — climatologia/bias de
+    qualquer origem avaliada pode precisar de histórico desde o início
+    do hindcast homogêneo. O teto é o maior target_month alcançado
+    (origem + lead - 1, convenção validada: lead 1 = mês da
+    inicialização)."""
+    piso = pd.Period(f'{ANO_INICIO_HINDCAST}-01', 'M')
+    if not origens:
+        return piso, piso
+    targets = [pd.Period(f'{ano}-{mes:02d}', 'M') + (lead - 1) for ano, mes in origens for lead in leads]
+    return min(piso, min(targets)), max(targets)
+
+def _buscar_chirps_ano(ano, mes_ini=1, mes_fim=12, sleep_fn=time.sleep):
+    """Busca CHIRPS municipal de um bloco anual — jan->dez por padrão,
+    ou só mes_ini->mes_fim quando o ano for a borda (primeira/última)
+    de um intervalo parcial derivado — com retry controlado (máx.
+    CHIRPS_MAX_TENTATIVAS, backoff progressivo). Levanta RuntimeError
+    explícito se esgotar as tentativas — nunca continua silenciosamente
+    com NaN nem troca de fonte."""
     info = MUNICIPIOS[MUNICIPIO]
     geom = _geometria_ponto(info['lat'], info['lon'])
-    ini, fim = intervalo_mensal_chirps(ano, 1, ano, 12)
+    ini, fim = intervalo_mensal_chirps(ano, mes_ini, ano, mes_fim)
+    rotulo_erro = str(ano) if (mes_ini, mes_fim) == (1, 12) else f'{ano} ({mes_ini:02d}-{mes_fim:02d})'
 
     df = pd.DataFrame()
     ultimo_erro = None
@@ -320,36 +355,38 @@ def _buscar_chirps_ano(ano, sleep_fn=time.sleep):
             ultimo_erro = RuntimeError('resposta vazia ou sem dados')
         if tentativa < CHIRPS_MAX_TENTATIVAS:
             espera = CHIRPS_ESPERAS_RETRY_SEGUNDOS[min(tentativa - 1, len(CHIRPS_ESPERAS_RETRY_SEGUNDOS) - 1)]
-            print(f"    ⚠ CHIRPS {ano}: tentativa {tentativa}/{CHIRPS_MAX_TENTATIVAS} falhou "
+            print(f"    ⚠ CHIRPS {rotulo_erro}: tentativa {tentativa}/{CHIRPS_MAX_TENTATIVAS} falhou "
                   f"({ultimo_erro}); aguardando {espera}s…")
             sleep_fn(espera)
 
     if df.empty:
-        raise RuntimeError(f"CHIRPS falhou para o ano {ano} após {CHIRPS_MAX_TENTATIVAS} tentativas "
+        raise RuntimeError(f"CHIRPS falhou para {rotulo_erro} após {CHIRPS_MAX_TENTATIVAS} tentativas "
                             f"— último erro: {ultimo_erro} — FALHANDO (nunca ERA5/CHC-Preliminar/"
                             f"Open-Meteo como fallback).")
     return df
 
 
-def _validar_bloco_chirps(df, ano):
-    """Valida um bloco anual: 12 meses (jan-dez), 1 valor cada, sem
-    duplicado/NaN/negativo. Ano incompleto ou inconsistente falha
-    explicitamente — nunca completa com fallback."""
+def _validar_bloco_chirps(df, ano, mes_ini=1, mes_fim=12):
+    """Valida um bloco anual (ou parcial, na borda do intervalo): meses
+    mes_ini-mes_fim do ano, 1 valor cada, sem duplicado/NaN/negativo.
+    Bloco incompleto ou inconsistente falha explicitamente — nunca
+    completa com fallback."""
     d = df.copy()
     d['target_month'] = pd.PeriodIndex(pd.to_datetime(dict(year=d.ano, month=d.mes, day=1)), freq='M')
     d = d.rename(columns={'prec': 'chirps_prec_mm'})
 
-    esperado = pd.period_range(f'{ano}-01', f'{ano}-12', freq='M')
+    rotulo = str(ano) if (mes_ini, mes_fim) == (1, 12) else f'{ano} ({mes_ini:02d}-{mes_fim:02d})'
+    esperado = pd.period_range(f'{ano}-{mes_ini:02d}', f'{ano}-{mes_fim:02d}', freq='M')
     faltando = [str(m) for m in esperado if m not in set(d['target_month'])]
     if faltando:
-        raise RuntimeError(f"CHIRPS do ano {ano} incompleto — faltando {faltando} — FALHANDO.")
+        raise RuntimeError(f"CHIRPS de {rotulo} incompleto — faltando {faltando} — FALHANDO.")
     if d['target_month'].duplicated().any():
         dups = [str(v) for v in d.loc[d['target_month'].duplicated(), 'target_month']]
-        raise RuntimeError(f"CHIRPS do ano {ano} tem mês(es) duplicado(s): {dups} — FALHANDO.")
+        raise RuntimeError(f"CHIRPS de {rotulo} tem mês(es) duplicado(s): {dups} — FALHANDO.")
     if d['chirps_prec_mm'].isna().any():
-        raise RuntimeError(f"CHIRPS do ano {ano} tem valor(es) NaN — FALHANDO.")
+        raise RuntimeError(f"CHIRPS de {rotulo} tem valor(es) NaN — FALHANDO.")
     if (d['chirps_prec_mm'] < 0).any():
-        raise RuntimeError(f"CHIRPS do ano {ano} tem precipitação negativa — FALHANDO.")
+        raise RuntimeError(f"CHIRPS de {rotulo} tem precipitação negativa — FALHANDO.")
 
     d['source'] = 'CHIRPS'
     d['year'] = d['target_month'].apply(lambda p: p.year)
@@ -358,14 +395,17 @@ def _validar_bloco_chirps(df, ano):
         .sort_values('target_month').reset_index(drop=True)
 
 
-def _validar_consolidado_final(df, ano_ini, ano_fim):
-    """Validação final (Seção 7): 36x12=432 meses, sem duplicado/lacuna/
-    NaN/negativo, sequência exatamente contínua de {ano_ini}-01 a
-    {ano_fim}-12."""
-    esperado = list(pd.period_range(f'{ano_ini}-01', f'{ano_fim}-12', freq='M'))
+def _validar_consolidado_final(df, target_ini, target_fim):
+    """Validação final: sem duplicado/lacuna/NaN/negativo, sequência
+    exatamente contínua de target_ini a target_fim (ambos
+    pandas.Period, freq='M') — o intervalo esperado é sempre o mesmo
+    que foi pedido a buscar_chirps_consolidado, nunca um valor fixo."""
+    target_ini = pd.Period(target_ini, 'M')
+    target_fim = pd.Period(target_fim, 'M')
+    esperado = list(pd.period_range(target_ini, target_fim, freq='M'))
     if len(df) != len(esperado):
         raise RuntimeError(f"CHIRPS consolidado tem {len(df)} meses, esperado {len(esperado)} "
-                            f"({ano_ini}-{ano_fim}) — FALHANDO.")
+                            f"({target_ini} a {target_fim}) — FALHANDO.")
     faltando = [str(m) for m in esperado if m not in set(df['target_month'])]
     if faltando:
         raise RuntimeError(f"CHIRPS consolidado não cobre {len(faltando)} mês(es): "
@@ -378,8 +418,8 @@ def _validar_consolidado_final(df, ano_ini, ano_fim):
     if (df['chirps_prec_mm'] < 0).any():
         raise RuntimeError("CHIRPS consolidado tem precipitação negativa — FALHANDO.")
     if sorted(df['target_month']) != esperado:
-        raise RuntimeError(f"CHIRPS consolidado não é uma sequência contínua de {ano_ini}-01 a "
-                            f"{ano_fim}-12 — FALHANDO.")
+        raise RuntimeError(f"CHIRPS consolidado não é uma sequência contínua de {target_ini} a "
+                            f"{target_fim} — FALHANDO.")
 
 
 def _chirps_checkpoint_vazio():
@@ -399,50 +439,80 @@ def _salvar_chirps_checkpoint(estado, caminho=None):
     caminho.write_text(json.dumps(estado, indent=2, ensure_ascii=False))
 
 
-def _salvar_bloco_chirps(df_ano, ano, diretorio=None):
+def _chave_bloco_chirps(ano, mes_ini, mes_fim):
+    """Identifica um bloco de forma única — anos cheios (a maioria)
+    continuam com a chave simples `{ano}`, reaproveitando exatamente o
+    nome de arquivo/checkpoint já validado; só a borda parcial do
+    intervalo (primeiro/último ano, quando não é jan-dez) ganha uma
+    chave distinta, para nunca reaproveitar por engano um bloco parcial
+    de execução anterior como se fosse o ano inteiro (ou vice-versa)."""
+    if (mes_ini, mes_fim) == (1, 12):
+        return str(ano)
+    return f'{ano}_{mes_ini:02d}_{mes_fim:02d}'
+
+
+def _salvar_bloco_chirps(df_bloco, chave, diretorio=None):
     diretorio = diretorio or CHIRPS_BLOCOS_DIR
     diretorio.mkdir(parents=True, exist_ok=True)
-    df_ano.to_csv(diretorio / f'chirps_{ano}.csv', index=False)
+    df_bloco.to_csv(diretorio / f'chirps_{chave}.csv', index=False)
 
 
-def buscar_chirps_consolidado(ano_ini=ANO_INICIO_HINDCAST, ano_fim=ANO_FIM_HINDCAST, sleep_fn=time.sleep):
-    """Busca CHIRPS municipal (São Bento) ANO A ANO — nunca o período
-    inteiro numa request só (Seção 4 da correção). Cada ano: retry
-    controlado, validação individual, cache local em
-    artifacts/c3s_hindcast/_chirps_blocos/ e checkpoint local (Seção
-    9/10 — só protege dentro do MESMO processo/filesystem, não há
-    resume automático entre execuções independentes do workflow).
-    Concatena os blocos e valida o consolidado (36x12=432 meses,
-    contínuo, sem NaN/negativo/duplicado) antes de devolver."""
+def buscar_chirps_consolidado(target_ini, target_fim, sleep_fn=time.sleep):
+    """Busca CHIRPS municipal (São Bento) em blocos ANUAIS — nunca o
+    período inteiro numa request só (Seção 4 da correção original).
+    target_ini/target_fim: qualquer valor aceito por pd.Period(x, 'M')
+    (string 'YYYY-MM' ou pandas.Period) — o intervalo observacional
+    necessário, normalmente vindo de intervalo_targets_necessario(),
+    nunca fixado manualmente aqui. Anos totalmente dentro do intervalo
+    pedem o ano inteiro (valida exatamente 12 meses); o primeiro/último
+    ano, se parciais, pedem só os meses necessários — preferência
+    explícita por não buscar mês nenhum além do necessário. Cada bloco:
+    retry controlado, validação individual, cache local em
+    artifacts/c3s_hindcast/_chirps_blocos/ e checkpoint local (só
+    protege dentro do MESMO processo/filesystem, não há resume
+    automático entre execuções independentes do workflow). Concatena os
+    blocos e valida o consolidado (contínuo, sem NaN/negativo/
+    duplicado, cobrindo exatamente target_ini a target_fim) antes de
+    devolver."""
+    target_ini = pd.Period(target_ini, 'M')
+    target_fim = pd.Period(target_fim, 'M')
+    if target_fim < target_ini:
+        raise ValueError(f"intervalo CHIRPS inválido: target_fim ({target_fim}) < target_ini "
+                          f"({target_ini}).")
+
     estado = _carregar_chirps_checkpoint()
     blocos = []
-    for ano in range(ano_ini, ano_fim + 1):
-        caminho_bloco = CHIRPS_BLOCOS_DIR / f'chirps_{ano}.csv'
-        if ano in estado['anos_concluidos'] and caminho_bloco.exists():
-            print(f"  [{ano}] CHIRPS já concluído (checkpoint) — reaproveitando")
+    for ano in range(target_ini.year, target_fim.year + 1):
+        mes_ini = target_ini.month if ano == target_ini.year else 1
+        mes_fim = target_fim.month if ano == target_fim.year else 12
+        chave = _chave_bloco_chirps(ano, mes_ini, mes_fim)
+        rotulo = str(ano) if (mes_ini, mes_fim) == (1, 12) else f'{ano} ({mes_ini:02d}-{mes_fim:02d})'
+        caminho_bloco = CHIRPS_BLOCOS_DIR / f'chirps_{chave}.csv'
+        if chave in estado['anos_concluidos'] and caminho_bloco.exists():
+            print(f"  [{rotulo}] CHIRPS já concluído (checkpoint) — reaproveitando")
             blocos.append(pd.read_csv(caminho_bloco))
             continue
 
-        print(f"  buscando CHIRPS {ano}…")
+        print(f"  buscando CHIRPS {rotulo}…")
         try:
-            df_bruto = _buscar_chirps_ano(ano, sleep_fn=sleep_fn)
-            df_validado = _validar_bloco_chirps(df_bruto, ano)
+            df_bruto = _buscar_chirps_ano(ano, mes_ini, mes_fim, sleep_fn=sleep_fn)
+            df_validado = _validar_bloco_chirps(df_bruto, ano, mes_ini, mes_fim)
         except Exception as e:
-            estado['anos_falhados'][str(ano)] = str(e)
+            estado['anos_falhados'][chave] = str(e)
             _salvar_chirps_checkpoint(estado)
             raise
 
-        _salvar_bloco_chirps(df_validado, ano)
-        estado['anos_concluidos'].append(ano)
-        estado['anos_falhados'].pop(str(ano), None)
+        _salvar_bloco_chirps(df_validado, chave)
+        estado['anos_concluidos'].append(chave)
+        estado['anos_falhados'].pop(chave, None)
         _salvar_chirps_checkpoint(estado)
         blocos.append(df_validado)
-        print(f"  ✅ CHIRPS {ano}: 12 meses válidos")
+        print(f"  ✅ CHIRPS {rotulo}: {mes_fim - mes_ini + 1} meses válidos")
 
     consolidado = pd.concat(blocos, ignore_index=True)
     consolidado['target_month'] = consolidado['target_month'].apply(
         lambda s: s if isinstance(s, pd.Period) else pd.Period(s, 'M'))
-    _validar_consolidado_final(consolidado, ano_ini, ano_fim)
+    _validar_consolidado_final(consolidado, target_ini, target_fim)
     return consolidado.sort_values('target_month').reset_index(drop=True)
 
 
@@ -561,16 +631,28 @@ def filtrar_avaliacao(summary_df, periodos=('desenvolvimento', 'confirmacao')):
 # nada usado em climatologia/bias é >= à origem.
 # ══════════════════════════════════════════════════════════════════════════
 
-def _max_init_usado_bias(ens_df, origem, mes_cal, lead):
-    f = ens_df[(ens_df['lead'] == lead) & (ens_df['init_date'] < origem) &
+def _max_usado_bias(ens_df, origem, mes_cal, lead):
+    """Reamostragem INDEPENDENTE para a auditoria — reflete o mesmo
+    predicado estrito de calib.bias_leakage_safe (init_date < origem E
+    target_month < origem, correção pós-run 35353196015/Seção 8), mas
+    não reaproveita o resultado do pipeline, para auditar de verdade.
+    Devolve (max_init_date_used_bias, max_target_month_used_bias) — os
+    dois podem ser None com segurança quando não há histórico (Seção
+    10: "campos max podem ser nulos de forma segura")."""
+    f = ens_df[(ens_df['lead'] == lead) &
+               (ens_df['init_date'] < origem) &
+               (ens_df['target_month'] < origem) &
                (ens_df['target_month'].apply(lambda p: p.month) == mes_cal)]
-    return f['init_date'].max() if not f.empty else None
+    if f.empty:
+        return None, None
+    return f['init_date'].max(), f['target_month'].max()
 
 
 def construir_leakage_audit(summary_df, ens_df, chirps_df):
     if summary_df.empty:
         return pd.DataFrame(columns=['init_date', 'target_month', 'max_obs_date_used_climatology',
-                                      'max_init_date_used_bias', 'clim_n', 'bias_training_n', 'leakage_status'])
+                                      'max_init_date_used_bias', 'max_target_month_used_bias',
+                                      'clim_n', 'bias_training_n', 'bias_leakage_ok', 'leakage_status'])
     chirps_por_target = chirps_df[['target_month', 'chirps_prec_mm']].drop_duplicates('target_month')
     linhas = []
     for _, row in summary_df.iterrows():
@@ -578,19 +660,26 @@ def construir_leakage_audit(summary_df, ens_df, chirps_df):
         sub_clim = chirps_por_target[(chirps_por_target['target_month'] < origem) &
                                       (chirps_por_target['target_month'].apply(lambda p: p.month) == mes_cal)]
         max_obs = sub_clim['target_month'].max() if not sub_clim.empty else None
-        max_init_bias = _max_init_usado_bias(ens_df, origem, mes_cal, lead)
+        max_init_bias, max_target_bias = _max_usado_bias(ens_df, origem, mes_cal, lead)
 
         violou = False
+        bias_leakage_ok = True
         if max_obs is not None and not (max_obs < origem):
             violou = True
         if max_init_bias is not None and not (max_init_bias < origem):
             violou = True
+            bias_leakage_ok = False
+        if max_target_bias is not None and not (max_target_bias < origem):
+            violou = True
+            bias_leakage_ok = False
 
         linhas.append({
             'init_date': str(origem), 'target_month': str(row['target_month']),
             'max_obs_date_used_climatology': str(max_obs) if max_obs is not None else None,
             'max_init_date_used_bias': str(max_init_bias) if max_init_bias is not None else None,
+            'max_target_month_used_bias': str(max_target_bias) if max_target_bias is not None else None,
             'clim_n': row['clim_n'], 'bias_training_n': row['bias_training_n'],
+            'bias_leakage_ok': bias_leakage_ok,
             'leakage_status': 'VIOLACAO' if violou else 'OK',
         })
     return pd.DataFrame(linhas)
@@ -754,8 +843,9 @@ def rodar(origens, pilot=False, sleep_fn=time.sleep):
     raw_df_str = pd.concat(raws, ignore_index=True) if raws else pd.DataFrame()
     raw_df = _com_periods(raw_df_str) if not raw_df_str.empty else raw_df_str
 
-    print("\n=== buscando CHIRPS consolidado 1981-2016 (em blocos anuais) ===")
-    chirps_df = buscar_chirps_consolidado(ANO_INICIO_HINDCAST, ANO_FIM_HINDCAST, sleep_fn=sleep_fn)
+    target_ini, target_fim = intervalo_targets_necessario(origens, LEADS)
+    print(f"\n=== buscando CHIRPS consolidado ({target_ini} a {target_fim}, em blocos anuais) ===")
+    chirps_df = buscar_chirps_consolidado(target_ini, target_fim, sleep_fn=sleep_fn)
     print(f"  ✅ CHIRPS: {len(chirps_df)} meses válidos")
 
     if raw_df.empty:
@@ -795,12 +885,25 @@ def gerar_relatorio_markdown(resultado):
     r = resultado
     modo = 'PILOTO' if r['pilot'] else 'COMPLETO'
     n_ok = len(r['origens']) - len(r['falhas'])
+    cobertura = _cobertura_observacional(r)
     linhas = ["# Hindcast Completo SEAS5 — São Bento do Tocantins — Fase 2A.3", "",
               f"- Modo: {modo}", f"- Origens processadas com sucesso: {n_ok}/{len(r['origens'])}",
               f"- Linhas raw: {len(r['raw_df'])}", f"- Linhas summary: {len(r['summary_df'])}",
               f"- Forecasts na avaliação principal (1991-{AVALIACAO_ANO_FIM}, histórico suficiente): "
               f"{r['avaliacao_n']}",
+              f"- Cobertura observacional (CHIRPS): {cobertura['observation_target_start']} → "
+              f"{cobertura['observation_target_end']} ({cobertura['n_observation_months']} meses)",
+              f"- Forecasts avaliação com observação válida: "
+              f"{cobertura['n_forecasts_evaluation_with_obs']}/{cobertura['n_forecasts_evaluation_expected']}",
               f"- Auditoria de leakage: {'✅ APROVADA' if r['leakage_audit_aprovado'] else '❌ REPROVADA'}"]
+
+    if cobertura['n_forecasts_evaluation_with_obs'] != cobertura['n_forecasts_evaluation_expected']:
+        linhas += ["", "## ⚠ COBERTURA OBSERVACIONAL INCOMPLETA", "",
+                   "Há forecast(s) na avaliação principal sem observação CHIRPS correspondente "
+                   f"({cobertura['n_forecasts_evaluation_with_obs']}/"
+                   f"{cobertura['n_forecasts_evaluation_expected']}) — **nenhuma conclusão científica "
+                   "deste resultado deve ser interpretada como válida** até a cobertura ser corrigida "
+                   "(correção pós-run 35353196015)."]
 
     if r['falhas']:
         linhas += ["", "## Falhas", ""] + [f"- **{o}**: {m}" for o, m in r['falhas'].items()]
@@ -858,6 +961,38 @@ def _versoes_pacotes():
     return versoes
 
 
+def _cobertura_observacional(resultado):
+    """Correção pós-run oficial 35353196015 (Seção 16): cobertura
+    observacional real do CHIRPS consolidado e quantos forecasts da
+    avaliação principal têm chirps_prec_mm finito — os dois números
+    devem bater (n_forecasts_evaluation_expected ==
+    n_forecasts_evaluation_with_obs); se não baterem, nenhuma conclusão
+    científica deste resultado é válida (ver gerar_relatorio_markdown e
+    validar_full_aprovado)."""
+    r = resultado
+    chirps_df = r.get('chirps_df')
+    if chirps_df is None or chirps_df.empty:
+        obs_start, obs_end, n_obs_months = None, None, 0
+    else:
+        obs_start = str(chirps_df['target_month'].min())
+        obs_end = str(chirps_df['target_month'].max())
+        n_obs_months = len(chirps_df)
+
+    avaliacao_df = r.get('avaliacao_df')
+    if avaliacao_df is None or avaliacao_df.empty:
+        n_expected, n_with_obs = 0, 0
+    else:
+        n_expected = len(avaliacao_df)
+        n_with_obs = int(np.isfinite(avaliacao_df['chirps_prec_mm'].astype(float)).sum())
+
+    return {
+        'observation_target_start': obs_start, 'observation_target_end': obs_end,
+        'n_observation_months': n_obs_months,
+        'n_forecasts_evaluation_expected': n_expected,
+        'n_forecasts_evaluation_with_obs': n_with_obs,
+    }
+
+
 def _execution_mode(resultado):
     """Seção 12 (preparação do hindcast oficial): rótulo de auditoria
     gravado no metadata.json — PILOT_LONGITUDINAL, FULL_1981_2016 (só
@@ -876,7 +1011,7 @@ def _execution_mode(resultado):
 def montar_metadata(resultado):
     centro, sistema = cat.SISTEMA_ESCOLHIDO_FASE_2A
     r = resultado
-    return {
+    metadata = {
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'modo': 'piloto' if r['pilot'] else 'completo',
         'execution_mode': _execution_mode(r),
@@ -897,6 +1032,8 @@ def montar_metadata(resultado):
         'bootstrap': {'n_replicacoes': N_BOOTSTRAP, 'seed': SEED_BOOTSTRAP, 'unidade_reamostragem': 'init_year'},
         'versoes_pacotes': _versoes_pacotes(),
     }
+    metadata.update(_cobertura_observacional(r))
+    return metadata
 
 
 def escrever_saidas(resultado):
@@ -905,7 +1042,7 @@ def escrever_saidas(resultado):
 
     r['raw_df'].to_csv(ARTIFACTS_DIR / 'c3s_hindcast_raw.csv', index=False)
     r['summary_df'].to_csv(ARTIFACTS_DIR / 'c3s_hindcast_summary.csv', index=False)
-    r['chirps_df'].to_csv(ARTIFACTS_DIR / 'chirps_sao_bento_1981_2016.csv', index=False)
+    r['chirps_df'].to_csv(ARTIFACTS_DIR / 'chirps_sao_bento_hindcast_targets.csv', index=False)
     r['calibrated_df'].to_csv(ARTIFACTS_DIR / 'c3s_hindcast_calibrated.csv', index=False)
 
     ts = r['tabelas_skill']
@@ -985,8 +1122,11 @@ def validar_pilot_aprovado(resultado):
     if len(r['summary_df']) != esperado_summary:
         motivos.append(f"E) {len(r['summary_df'])} summaries, esperado {esperado_summary}")
 
-    if len(r['chirps_df']) != 432:
-        motivos.append(f"F) CHIRPS com {len(r['chirps_df'])} meses, esperado 432")
+    target_ini, target_fim = intervalo_targets_necessario(r['origens'], LEADS)
+    n_meses_chirps_esperado = len(pd.period_range(target_ini, target_fim, freq='M'))
+    if len(r['chirps_df']) != n_meses_chirps_esperado:
+        motivos.append(f"F) CHIRPS com {len(r['chirps_df'])} meses, esperado {n_meses_chirps_esperado} "
+                        f"({target_ini} a {target_fim}, derivado das origens×leads pedidas)")
 
     if r['avaliacao_n'] != PILOT_FORECASTS_AVALIACAO_ESPERADOS:
         motivos.append(f"G) n_forecasts_avaliacao_principal={r['avaliacao_n']}, "
@@ -1011,6 +1151,11 @@ def validar_pilot_aprovado(resultado):
             motivos.append("H) há forecast avaliável com bias_mm não finito (NaN/inf)")
         if not np.isfinite(avaliacao_df['ens_mean_bc'].astype(float)).all():
             motivos.append("H) há forecast avaliável com ens_mean_bc não finito (NaN/inf)")
+        n_com_obs = int(np.isfinite(avaliacao_df['chirps_prec_mm'].astype(float)).sum())
+        if n_com_obs != len(avaliacao_df):
+            motivos.append(f"H) cobertura observacional incompleta: {n_com_obs}/{len(avaliacao_df)} "
+                            "forecasts avaliáveis têm chirps_prec_mm finito (correção pós-run "
+                            "35353196015 — nunca aceitar candidatos sem observação real)")
 
         soma_raw = (avaliacao_df['prob_below_raw'].astype(float) +
                     avaliacao_df['prob_normal_raw'].astype(float) +
@@ -1082,8 +1227,40 @@ def validar_full_aprovado(resultado):
     if len(r['summary_df']) != summary_esperado:
         motivos.append(f"summary: {len(r['summary_df'])} linhas, esperado {summary_esperado}")
 
-    if len(r['chirps_df']) != 432:
-        motivos.append(f"CHIRPS: {len(r['chirps_df'])} meses, esperado 432")
+    # Seção 15 — nº de forecasts avaliáveis também derivado das origens
+    # pedidas (não hardcoded): origens com ano >= AVALIACAO_ANO_INICIO
+    # × leads. Para o FULL oficial: 26 anos (1991-2016) × 12 meses ×
+    # 6 leads = 1.872.
+    n_origens_avaliacao = len([1 for ano, _ in r['origens'] if ano >= AVALIACAO_ANO_INICIO])
+    n_forecasts_avaliacao_esperado = n_origens_avaliacao * len(LEADS)
+    if r['avaliacao_n'] != n_forecasts_avaliacao_esperado:
+        motivos.append(f"n_forecasts_avaliacao_principal={r['avaliacao_n']}, esperado "
+                        f"{n_forecasts_avaliacao_esperado}")
+
+    # Seção 6 — nunca fixar o número de meses do CHIRPS: derivar
+    # dinamicamente de min/max target_month das origens×leads pedidas
+    # (correção pós-run 35353196015: origem=2016-12/lead=6 alcança
+    # 2017-05, então o CHIRPS oficial cobre 437 meses, não 432).
+    target_ini, target_fim = intervalo_targets_necessario(r['origens'], LEADS)
+    n_meses_chirps_esperado = len(pd.period_range(target_ini, target_fim, freq='M'))
+    if len(r['chirps_df']) != n_meses_chirps_esperado:
+        motivos.append(f"CHIRPS: {len(r['chirps_df'])} meses, esperado {n_meses_chirps_esperado} "
+                        f"({target_ini} a {target_fim}, derivado das origens×leads pedidas)")
+
+    # Seção 5/15 — não aceitar novamente candidatos na avaliação
+    # principal sem observação real (run 35353196015: 1.872 candidatos
+    # / só 1.857 com chirps_prec_mm finito).
+    avaliacao_df = r.get('avaliacao_df')
+    if avaliacao_df is None or avaliacao_df.empty:
+        if r.get('avaliacao_n', 0) > 0:
+            motivos.append("cobertura observacional: avaliacao_df ausente/vazio mas avaliacao_n>0 — "
+                            "impossível checar chirps_prec_mm")
+    else:
+        n_com_obs = int(np.isfinite(avaliacao_df['chirps_prec_mm'].astype(float)).sum())
+        if n_com_obs != len(avaliacao_df):
+            motivos.append(f"cobertura observacional: {n_com_obs}/{len(avaliacao_df)} forecasts da "
+                            f"avaliação principal têm chirps_prec_mm finito, esperado "
+                            f"{len(avaliacao_df)}/{len(avaliacao_df)}")
 
     if not r['leakage_audit_aprovado']:
         motivos.append("auditoria de leakage reprovada")
@@ -1171,8 +1348,11 @@ def main():
             for motivo in motivos:
                 print(f"  - {motivo}")
             sys.exit(1)
+        target_ini, target_fim = intervalo_targets_necessario(origens, LEADS)
+        n_meses_chirps = len(pd.period_range(target_ini, target_fim, freq='M'))
         print("\n✅ HINDCAST COMPLETO OFICIAL 1981-2016 APROVADO — integridade do experimento "
-              "confirmada (432 origens, 64.800 raw, 2.592 summaries, CHIRPS 432 meses, leakage OK, "
+              f"confirmada (432 origens, 64.800 raw, 2.592 summaries, CHIRPS {n_meses_chirps} meses "
+              f"[{target_ini} a {target_fim}], cobertura observacional completa, leakage OK, "
               "tabelas de skill e bootstrap preenchidos) — ver artifacts/c3s_hindcast/RELATORIO.md")
         return
 

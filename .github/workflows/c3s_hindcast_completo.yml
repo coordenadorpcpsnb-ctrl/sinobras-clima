@@ -239,7 +239,7 @@ jobs:
           path: |
             artifacts/c3s_hindcast/c3s_hindcast_raw.csv
             artifacts/c3s_hindcast/c3s_hindcast_summary.csv
-            artifacts/c3s_hindcast/chirps_sao_bento_1981_2016.csv
+            artifacts/c3s_hindcast/chirps_sao_bento_hindcast_targets.csv
             artifacts/c3s_hindcast/c3s_hindcast_calibrated.csv
             artifacts/c3s_hindcast/skill_deterministic_overall.csv
             artifacts/c3s_hindcast/skill_deterministic_by_lead.csv

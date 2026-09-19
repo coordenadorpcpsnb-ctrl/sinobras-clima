@@ -62,11 +62,31 @@ def bias_leakage_safe(ens_df, chirps_df, origem, mes_alvo_calendario, lead, min_
     ens_mean_raw] — 1 linha por (origem, lead) já agregada (média dos 25
     membros). chirps_df: colunas [target_month, chirps_prec_mm].
 
-    Mesma regra de c3s_hindcast.py::bias_medio_ate_origem — só pares com
-    `init_date < origem` (a própria origem NUNCA entra — Seção 13) e
-    mesmo lead/mês-calendário-alvo — mas também devolve `n` (nº de
-    pares usados, exposto aqui como bias_training_n para a auditoria de
-    leakage), que a função original não tinha.
+    Predicado ESTRITO (correção pós-run oficial 35353196015 — Seção 8):
+    um candidato só entra no treino do bias se TODAS as condições
+    valerem:
+      1. mesmo lead;
+      2. mesmo mês-calendário-alvo;
+      3. candidate.init_date < origem corrente;
+      4. candidate.target_month < origem corrente;
+      5. observação CHIRPS correspondente disponível e finita.
+
+    Não basta a previsão ter sido inicializada antes da origem (item 3)
+    — a OBSERVAÇÃO usada para medir o erro do candidato também precisa
+    ter ocorrido antes da origem corrente (item 4). Sem o item 4, um
+    candidato com lead alto e init_date recente (mas ainda < origem)
+    pode ter target_month >= origem — ou seja, a "observação" que o
+    erro do candidato usaria ainda nem existia no momento da origem
+    corrente. Exposto aqui como `n` (bias_training_n para a auditoria
+    de leakage), que a função original não tinha.
+
+    Nota de impacto: como o desenho de origens do pilot/hindcast usa
+    sempre o MESMO conjunto de meses de inicialização todo ano, todo
+    candidato que satisfaz 1+2+3 automaticamente satisfaz 4 também
+    (candidatos com mesmo lead/mês-alvo diferem por múltiplos de 12
+    meses, sempre >= lead-1) — o item 4 é redundante para os desenhos
+    já validados, mas precisa existir explicitamente por contrato
+    metodológico, robustez a desenhos futuros e auditoria (Seção 9).
 
     bias_mm = mean(ens_mean_raw_passado - chirps_observado_passado).
     corrected_member = max(0, raw_member - bias_mm) é aplicado depois,
@@ -74,11 +94,14 @@ def bias_leakage_safe(ens_df, chirps_df, origem, mes_alvo_calendario, lead, min_
     cada vez, sempre o MESMO bias para todos os membros da origem
     naquele lead/mês (Seção 12)."""
     origem = pd.Period(origem, 'M')
-    f = ens_df[(ens_df['lead'] == lead) & (ens_df['init_date'] < origem) &
+    f = ens_df[(ens_df['lead'] == lead) &
+               (ens_df['init_date'] < origem) &
+               (ens_df['target_month'] < origem) &
                (ens_df['target_month'].apply(lambda p: p.month) == mes_alvo_calendario)]
     if f.empty:
         return {'bias_mm': None, 'n': 0, 'status': STATUS_SEM_HISTORICO}
     m = f.merge(chirps_df[['target_month', 'chirps_prec_mm']], on='target_month', how='inner')
+    m = m[np.isfinite(m['chirps_prec_mm'].astype(float))]
     n = len(m)
     if n == 0:
         return {'bias_mm': None, 'n': 0, 'status': STATUS_SEM_HISTORICO}

@@ -191,6 +191,62 @@ class BiasLeakageSafeTestCase(unittest.TestCase):
         self.assertAlmostEqual(r['bias_mm'], 10.0)   # calculado mesmo com n<10
         self.assertEqual(r['status'], calib.STATUS_SEM_HISTORICO)
 
+    # G/H/I — correção pós-run oficial 35353196015 (Seção 8): predicado
+    # ESTRITO, init_date < origem sozinho não é suficiente.
+
+    def test_g_exige_init_date_menor_que_origem(self):
+        """Item G da correção — candidato com init_date >= origem nunca
+        entra, reafirmando o já coberto por test_c/test_origem_posterior
+        com uma origem intermediária real (não a própria nem futura)."""
+        ens = _ens_df([('1991-01', '1991-01', 1, 999.0)])   # init_date == origem
+        chirps = _chirps_df([('1991-01', 100.0)])
+        r = calib.bias_leakage_safe(ens, chirps, pd.Period('1991-01', 'M'), mes_alvo_calendario=1, lead=1)
+        self.assertEqual(r['n'], 0)
+
+    def test_h_exige_target_month_menor_que_origem(self):
+        """Item H — candidato com init_date < origem MAS target_month >=
+        origem precisa ser excluído. Cenário real: origem=2016-07,
+        lead=6, candidato init_date=2016-06 (< origem) cujo
+        target_month=2016-11 (>= origem) — a "observação" que mediria o
+        erro desse candidato ainda nem tinha ocorrido na origem
+        corrente."""
+        ens = _ens_df([('2016-06', '2016-11', 6, 999.0)])
+        chirps = _chirps_df([('2016-11', 100.0)])
+        r = calib.bias_leakage_safe(ens, chirps, pd.Period('2016-07', 'M'), mes_alvo_calendario=11, lead=6)
+        self.assertEqual(r['n'], 0)
+        self.assertIsNone(r['bias_mm'])
+
+    def test_i_contraexemplo_init_anterior_mas_target_futuro_e_excluido(self):
+        """Item I — teste de contraexemplo explícito: mistura um
+        candidato VÁLIDO (init_date e target_month ambos < origem) com
+        um candidato que só satisfaz init_date < origem (mas não
+        target_month < origem) — demonstra que só checar init_date NÃO
+        é suficiente por contrato metodológico: o bias_mm final deve
+        refletir SOMENTE o candidato válido, e n deve contar só 1, não
+        2, provando que o candidato com target futuro foi excluído."""
+        candidato_valido = ('2005-06', '2005-11', 6, 150.0)     # target_month < origem: entra
+        candidato_invalido = ('2016-06', '2016-11', 6, 999999.0)   # target_month >= origem: excluído
+        ens = _ens_df([candidato_valido, candidato_invalido])
+        chirps = _chirps_df([('2005-11', 100.0), ('2016-11', 100.0)])
+        origem = pd.Period('2016-07', 'M')
+        r = calib.bias_leakage_safe(ens, chirps, origem, mes_alvo_calendario=11, lead=6, min_anos_treino=1)
+        self.assertEqual(r['n'], 1)
+        self.assertAlmostEqual(r['bias_mm'], 50.0)   # só o candidato válido: 150-100=50
+
+    def test_h_observacao_nao_finita_e_excluida(self):
+        """Item 5 do predicado (Seção 8): mesmo com init_date e
+        target_month < origem, uma observação NaN/ausente não pode
+        entrar no treino do bias."""
+        ens = _ens_df([('1981-01', '1981-01', 1, 110.0), ('1982-01', '1982-01', 1, 120.0)])
+        chirps = pd.DataFrame([
+            {'target_month': pd.Period('1981-01', 'M'), 'chirps_prec_mm': 100.0},
+            {'target_month': pd.Period('1982-01', 'M'), 'chirps_prec_mm': float('nan')},
+        ])
+        r = calib.bias_leakage_safe(ens, chirps, pd.Period('1990-01', 'M'), mes_alvo_calendario=1, lead=1,
+                                     min_anos_treino=1)
+        self.assertEqual(r['n'], 1)
+        self.assertAlmostEqual(r['bias_mm'], 10.0)
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Correção por membro (Seção 12)
