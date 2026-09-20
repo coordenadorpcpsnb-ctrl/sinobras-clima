@@ -1,0 +1,280 @@
+name: C3S Multi-Modelo Hindcast Completo (Fase 2B.2)
+
+# Fase 2B.2 — hindcast multi-modelo COMPLETO (1993-2016) para os 4
+# sistemas C3S congelados na Fase 2B.1 (ECMWF SEAS5, Météo-France
+# System8, DWD GCFS2.1, CMCC SPS3.5), avaliação de SKILL homogênea
+# entre CLIM/individual RAW+BC/MME RAW+BC. Ver docs/c3s-multimodel-
+# phase2b.md e scripts/c3s_multimodel_hindcast.py.
+#
+# ARQUITETURA — NÃO monolítica (Seção 21): a aquisição roda em até 16
+# jobs paralelos (4 modelos x 4 blocos de 6 anos no modo oficial —
+# menos no modo PILOT), cada um baixando só 1 modelo x 1 bloco de anos
+# (72 origens no oficial). A matriz é DERIVADA do catálogo em tempo de
+# execução (job `montar-plano-e-matriz`, nunca hardcoded aqui) —
+# reflete exatamente scripts/c3s_multimodel_hindcast.py::
+# construir_matriz_chunks(). `max-parallel: 2` (Seção 23) para não
+# sobrecarregar o CDS — não aumentar sem decisão explícita.
+#
+# Cada job de aquisição publica um artifact INDEPENDENTE (Seção 24,
+# só CSV/JSON, nunca GRIB/NetCDF). O job `consolidate-and-evaluate`
+# (Seção 26) só roda depois que TODOS os jobs de aquisição terminarem
+# (`needs`) — baixa os artifacts, concatena, valida integridade GLOBAL
+# (Seção 27) antes de qualquer métrica, busca CHIRPS, calibra cada
+# modelo (bias separado, Seção 10), constrói o MME, calcula skill/
+# bootstrap/comparação pareada, publica os artifacts finais.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: default é modo_execucao=PILOT,
+# dry_run_plan=true — clicar em "Run workflow" sem mexer em nada NUNCA
+# acessa o CDS: só valida código, roda a suíte de testes, mostra o
+# plano/matriz. O hindcast oficial completo (modo_execucao=
+# HINDCAST_COMPLETO_1993_2016) exige dry_run_plan=false E o texto
+# exato EXECUTAR_MULTIMODEL_1993_2016 em confirm_full_hindcast — sem
+# isso, falha ANTES de instalar qualquer dependência ou criar qualquer
+# request ao CDS (mesmo padrão de c3s_hindcast_completo.yml/
+# c3s_multimodel_poc.yml).
+#
+# `modo_execucao=PILOT` roda a MESMA arquitetura chunked, só que numa
+# escala muito menor (Seção 45 — 2 anos, 1 chunk por modelo) para
+# validar matrix/artifact upload/download/consolidação sem repetir a
+# Fase 2B.1 inteira nem produzir conclusão de skill.
+#
+# NÃO PROMOVE nenhum resultado desta fase para o dashboard operacional
+# (Seção 43) — isso exige revisão científica humana em separado.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo_execucao:
+        description: 'PILOT (default, seguro) = pilot de infraestrutura (poucos chunks pequenos, nunca skill). HINDCAST_COMPLETO_1993_2016 = execução OFICIAL (16 chunks, 1993-2016 fixo) — exige confirm_full_hindcast.'
+        type: choice
+        required: true
+        default: 'PILOT'
+        options:
+          - PILOT
+          - HINDCAST_COMPLETO_1993_2016
+      dry_run_plan:
+        description: 'true (default, seguro) = só roda testes/dashboard e mostra o plano/matriz de chunks — nunca acessa o CDS'
+        required: true
+        default: 'true'
+      confirm_full_hindcast:
+        description: 'Só necessário com modo_execucao=HINDCAST_COMPLETO_1993_2016 e dry_run_plan=false: digite EXECUTAR_MULTIMODEL_1993_2016 para liberar'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c3s-multimodel-hindcast
+  cancel-in-progress: false
+
+jobs:
+  montar-plano-e-matriz:
+    name: Guardrail + testes + plano/matriz (nunca acessa o CDS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      matriz: ${{ steps.matriz.outputs.matriz }}
+      modo_py: ${{ steps.modo.outputs.modo_py }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Bloqueia o hindcast oficial acidental sem confirmação explícita
+      # — roda ANTES de instalar dependências ou tocar no CDS. Pulado
+      # quando dry_run_plan=true (default seguro) ou modo_execucao=PILOT.
+      - name: Guardrail — hindcast oficial exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.modo_execucao == 'HINDCAST_COMPLETO_1993_2016'
+        run: |
+          if [ "${{ inputs.confirm_full_hindcast }}" != "EXECUTAR_MULTIMODEL_1993_2016" ]; then
+            echo "::error::Hindcast multi-modelo completo oficial bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ Hindcast multi-modelo completo bloqueado"
+              echo ""
+              echo "Rodar com **modo_execucao=HINDCAST_COMPLETO_1993_2016** (execução oficial, 16"
+              echo "chunks reais, 1993-2016, 207.360 linhas raw esperadas) exige preencher o input"
+              echo "**confirm_full_hindcast** com o texto exato \`EXECUTAR_MULTIMODEL_1993_2016\`."
+              echo ""
+              echo "A regra da Fase 2B.2 é: primeiro validar com **modo_execucao=PILOT** (default"
+              echo "deste workflow) — infraestrutura de chunk/artifact/consolidação numa escala"
+              echo "pequena, sem skill. Só depois de revisar o pilot é que o hindcast oficial deve"
+              echo "ser liberado."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_full_hindcast=EXECUTAR_MULTIMODEL_1993_2016) — liberando execução."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      - name: Determinar modo Python (FULL/PILOT)
+        id: modo
+        run: |
+          if [ "${{ inputs.modo_execucao }}" = "HINDCAST_COMPLETO_1993_2016" ]; then
+            echo "modo_py=FULL" >> "$GITHUB_OUTPUT"
+          else
+            echo "modo_py=PILOT" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Sempre roda (nunca acessa o CDS) — o plano/matriz vêm só do
+      # catálogo/período comum, dados estáticos do módulo.
+      - name: Mostrar plano de execução (dry-run, nunca acessa o CDS)
+        run: python scripts/c3s_multimodel_hindcast.py --dry-run-plan --modo ${{ steps.modo.outputs.modo_py }}
+
+      # Matriz da aquisição SEMPRE derivada de
+      # construir_matriz_chunks() — nunca uma lista hardcoded aqui, para
+      # nunca ficar fora de sincronia com o catálogo/período comum.
+      - name: Montar matriz de chunks (JSON, derivada do catálogo)
+        id: matriz
+        run: |
+          python -c "
+          import json, sys
+          sys.path.insert(0, 'scripts')
+          import c3s_multimodel_hindcast as h
+          if '${{ steps.modo.outputs.modo_py }}' == 'FULL':
+              matriz = h.construir_matriz_chunks(h.SISTEMAS, h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST, h.TAMANHO_BLOCO_CHUNK_ANOS)
+          else:
+              matriz = h.construir_matriz_chunks(h.SISTEMAS, h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM, h.PILOT_TAMANHO_BLOCO_ANOS)
+          print('matriz=' + json.dumps({'include': matriz}))
+          " >> "$GITHUB_OUTPUT"
+
+  aquisicao:
+    name: Aquisição — ${{ matrix.centro }} ${{ matrix.ano_ini }}-${{ matrix.ano_fim }}
+    needs: montar-plano-e-matriz
+    if: inputs.dry_run_plan != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      max-parallel: 2
+      fail-fast: false
+      matrix: ${{ fromJson(needs.montar-plano-e-matriz.outputs.matriz) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verificar secret CDS_API_KEY presente
+        env:
+          CDS_KEY_PRESENTE: ${{ secrets.CDS_API_KEY != '' }}
+        run: |
+          if [ "$CDS_KEY_PRESENTE" != "true" ]; then
+            echo "::error::O secret CDS_API_KEY não está configurado neste repositório."
+            exit 1
+          fi
+          echo "Secret CDS_API_KEY está definido (conteúdo nunca exibido neste log)."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Criar ~/.cdsapirc (temporário, nunca commitado)
+        env:
+          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' "$CDS_API_KEY" > "$HOME/.cdsapirc"
+          chmod 600 "$HOME/.cdsapirc"
+          echo "~/.cdsapirc criado (permissão 600, conteúdo nunca exibido)."
+
+      - name: Rodar chunk (1 modelo x 1 bloco de anos)
+        run: |
+          python scripts/c3s_multimodel_hindcast.py --rodar-chunk \
+            --centro "${{ matrix.centro }}" --system-name "${{ matrix.system_name }}" \
+            --ano-ini "${{ matrix.ano_ini }}" --ano-fim "${{ matrix.ano_fim }}"
+
+      - name: Remover credencial
+        if: always()
+        run: rm -f "$HOME/.cdsapirc"
+
+      - name: Publicar artifact do chunk (CSV/JSON — nunca GRIB/NetCDF)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts/c3s_multimodel_hindcast_chunks/${{ matrix.centro }}_${{ matrix.ano_ini }}_${{ matrix.ano_fim }}
+          retention-days: 30
+          if-no-files-found: error
+
+  consolidate-and-evaluate:
+    name: Consolidação e avaliação (Seção 26)
+    needs: [montar-plano-e-matriz, aquisicao]
+    if: inputs.dry_run_plan != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      # Cada artifact de chunk baixa na sua própria subpasta (nome do
+      # artifact) dentro de artifacts/c3s_multimodel_hindcast_chunks/ —
+      # exatamente o layout que consolidar_chunks()/--consolidar espera
+      # (1 diretório por chunk, cada um com raw.csv/temporal_audit.csv).
+      - name: Baixar todos os artifacts de chunk
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/c3s_multimodel_hindcast_chunks
+          pattern: 'c3s-mm-*'
+
+      - name: Rodar consolidação e avaliação
+        run: |
+          python scripts/c3s_multimodel_hindcast.py --consolidar --modo ${{ needs.montar-plano-e-matriz.outputs.modo_py }}
+
+      - name: Publicar artifacts finais (CSVs/JSON/relatório — nunca GRIB/NetCDF)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c3s-multimodel-hindcast-resultado
+          path: |
+            artifacts/c3s_multimodel_hindcast/c3s_multimodel_raw.csv
+            artifacts/c3s_multimodel_hindcast/c3s_multimodel_summary.csv
+            artifacts/c3s_multimodel_hindcast/c3s_multimodel_mme.csv
+            artifacts/c3s_multimodel_hindcast/c3s_multimodel_temporal_audit.csv
+            artifacts/c3s_multimodel_hindcast/c3s_multimodel_leakage_audit.csv
+            artifacts/c3s_multimodel_hindcast/chirps_sao_bento_multimodel_targets.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_overall.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_by_lead.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_by_month.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_by_month_lead.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_operational_seasons.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_probabilistic_overall.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_probabilistic_by_lead.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_probabilistic_by_month.csv
+            artifacts/c3s_multimodel_hindcast/skill_multimodel_temporal_validation.csv
+            artifacts/c3s_multimodel_hindcast/bootstrap_multimodel_skill.csv
+            artifacts/c3s_multimodel_hindcast/paired_mme_vs_ecmwf.csv
+            artifacts/c3s_multimodel_hindcast/paired_mme_vs_models.csv
+            artifacts/c3s_multimodel_hindcast/metadata.json
+            artifacts/c3s_multimodel_hindcast/RELATORIO.md
+          retention-days: 30
+          if-no-files-found: warn
