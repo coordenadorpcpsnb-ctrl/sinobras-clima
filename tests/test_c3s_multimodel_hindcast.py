@@ -596,6 +596,149 @@ class ValidarAprovacaoTestCase(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Correção de auditabilidade (pré-PR) — montar_metadata() deve refletir
+# o período REAL da execução (resultado['ano_ini']/['ano_fim']), nunca
+# as constantes FULL fixas, mesmo quando modo='PILOT'. Itens 1-8 do
+# pedido de correção.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _resultado_fake_para_metadata(ano_ini, ano_fim, sistemas=SISTEMAS4):
+    """resultado mínimo (não passa por rodar_consolidacao) só para
+    exercitar montar_metadata()/gerar_relatorio_markdown() isoladas,
+    sem pagar o custo de um pipeline completo."""
+    return {
+        'raw_df': pd.DataFrame({'x': [1, 2, 3]}),
+        'summary_df': pd.DataFrame({'x': [1, 2]}),
+        'mme_df': pd.DataFrame({'x': [1]}),
+        'temporal_audit_df': pd.DataFrame({'x': [1, 2, 3, 4]}),
+        'chirps_df': pd.DataFrame({'x': [1, 2, 3, 4, 5]}),
+        'avaliacao_comum': pd.DataFrame(),
+        'leakage_aprovado': True,
+        'bootstrap_paired_ecmwf': {'estimativa': None, 'ic95_inferior': None, 'ic95_superior': None},
+        'bootstrap_paired_models': pd.DataFrame(),
+        'sistemas': sistemas,
+        'ano_ini': ano_ini, 'ano_fim': ano_fim,
+        'tabelas_skill': {'overall': pd.DataFrame()},
+    }
+
+
+class MontarMetadataTestCase(unittest.TestCase):
+
+    def test_1_full_run_start_1993_run_end_2016(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST),
+                                  modo='FULL')
+        self.assertEqual(meta['run_start'], 1993)
+        self.assertEqual(meta['run_end'], 2016)
+        self.assertEqual(meta['execution_mode'], 'FULL_MULTIMODEL_1993_2016')
+
+    def test_2_pilot_run_start_1993_run_end_1994(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM),
+                                  modo='PILOT')
+        self.assertEqual(meta['run_start'], 1993)
+        self.assertEqual(meta['run_end'], 1994)
+        self.assertEqual(meta['execution_mode'], 'PILOT_MULTIMODEL_1993_1994')
+
+    def test_3_full_raw_esperado_207360(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST),
+                                  modo='FULL')
+        self.assertEqual(meta['n_raw_expected'], 207360)
+
+    def test_4_pilot_raw_esperado_derivado_do_periodo_de_2_anos(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM),
+                                  modo='PILOT')
+        esperado = sum(s.hindcast_members * 24 * len(h.LEADS) for s in SISTEMAS4)   # 24 origens/modelo (2 anos)
+        self.assertEqual(meta['n_raw_expected'], esperado)
+        self.assertEqual(meta['n_raw_expected'], 17280)
+        # nunca o valor FULL (207.360) — prova de que não usa mais a constante fixa.
+        self.assertNotEqual(meta['n_raw_expected'], h.N_RAW_ESPERADO_TOTAL_FULL)
+
+    def test_5_pilot_summary_esperado_576(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM),
+                                  modo='PILOT')
+        self.assertEqual(meta['n_summary_expected'], 576)
+
+    def test_6_pilot_mme_esperado_144(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM),
+                                  modo='PILOT')
+        self.assertEqual(meta['n_mme_expected'], 144)
+
+    def test_7_pilot_scientific_evaluation_applicable_false(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM),
+                                  modo='PILOT')
+        self.assertFalse(meta['scientific_evaluation_applicable'])
+        self.assertEqual(meta['pilot_purpose'], 'infraestrutura matrix/artifact/consolidation')
+        self.assertIn('nota_pilot', meta)
+
+    def test_8_full_mantem_avaliacao_cientifica_aplicavel(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST),
+                                  modo='FULL')
+        self.assertTrue(meta['scientific_evaluation_applicable'])
+        self.assertNotIn('pilot_purpose', meta)
+        self.assertNotIn('nota_pilot', meta)
+
+    def test_campos_novos_presentes_em_ambos_os_modos(self):
+        campos_obrigatorios = ('execution_mode', 'run_start', 'run_end', 'n_origins_per_model_expected',
+                                'n_model_origin_expected', 'n_raw_expected', 'n_raw_actual',
+                                'n_summary_expected', 'n_summary_actual', 'n_mme_expected', 'n_mme_actual',
+                                'n_temporal_audit_expected', 'n_temporal_audit_actual')
+        for modo, (ano_ini, ano_fim) in (('FULL', (h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST)),
+                                          ('PILOT', (h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM))):
+            meta = h.montar_metadata(_resultado_fake_para_metadata(ano_ini, ano_fim), modo=modo)
+            for campo in campos_obrigatorios:
+                self.assertIn(campo, meta, f"{campo} ausente no metadata modo={modo}")
+
+    def test_full_mantem_campos_de_avaliacao_cientifica(self):
+        meta = h.montar_metadata(_resultado_fake_para_metadata(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST),
+                                  modo='FULL')
+        for campo in ('evaluation_start', 'evaluation_end', 'development', 'temporal_validation'):
+            self.assertIn(campo, meta)
+
+    def test_n_temporal_audit_actual_bate_com_o_resultado(self):
+        resultado = _resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM)
+        meta = h.montar_metadata(resultado, modo='PILOT')
+        self.assertEqual(meta['n_temporal_audit_actual'], len(resultado['temporal_audit_df']))
+
+    def test_relatorio_pilot_explicita_que_nao_e_avaliacao_cientifica(self):
+        resultado = _resultado_fake_para_metadata(h.PILOT_ANO_INICIO, h.PILOT_ANO_FIM)
+        relatorio = h.gerar_relatorio_markdown(resultado, modo='PILOT')
+        self.assertIn('NÃO É AVALIAÇÃO CIENTÍFICA', relatorio)
+
+    def test_relatorio_full_nao_tem_aviso_de_pilot(self):
+        resultado = _resultado_fake_para_metadata(h.ANO_INICIO_HINDCAST, h.ANO_FIM_HINDCAST)
+        relatorio = h.gerar_relatorio_markdown(resultado, modo='FULL')
+        self.assertNotIn('NÃO É AVALIAÇÃO CIENTÍFICA', relatorio)
+
+    def test_9a_matriz_de_chunks_inalterada(self):
+        """Nenhum comportamento de workflow/matrix/chunk foi alterado
+        por esta correção — mesmas contagens/blocos de antes."""
+        self.assertEqual(h.N_CHUNKS, 16)
+        self.assertEqual(h.MAX_PARALLEL_CHUNKS, 2)
+        self.assertEqual(h.construir_blocos_chunk(),
+                          [(1993, 1998), (1999, 2004), (2005, 2010), (2011, 2016)])
+        self.assertEqual(len(h.construir_matriz_chunks()), 16)
+
+    def test_9b_tabela_skill_vazia_no_pilot_nao_bloqueia_aprovacao(self):
+        """validar_pilot_multimodel_aprovado() nunca lê tabelas_skill/
+        bootstrap_df — reafirmado explicitamente após a correção."""
+        raw_df, chirps_df = _construir_cenario_sintetico(
+            SISTEMAS4, 1993, 1993, leads=tuple(h.LEADS),
+            n_membros_por_modelo={s.centro: s.hindcast_members for s in SISTEMAS4})
+        temporal_audit_df = _temporal_audit_sintetico(raw_df)
+        from unittest import mock
+        with mock.patch.object(h, 'buscar_chirps_consolidado', return_value=chirps_df):
+            resultado = h.rodar_consolidacao(raw_df, temporal_audit_df, SISTEMAS4, 1993, 1993, n_bootstrap=50)
+        # só 1 ano de histórico (< MIN_ANOS_TREINO) — avaliação principal vazia,
+        # então a tabela 'overall' só tem linhas-placeholder com n=0 (nunca
+        # dado real) e várias tabelas agrupadas (by_lead/by_month/...) ficam
+        # genuinamente vazias — os dois casos são esperados, nenhum é erro.
+        self.assertTrue(resultado['avaliacao_comum'].empty)
+        self.assertTrue((resultado['tabelas_skill']['overall']['n'] == 0).all())
+        self.assertTrue(resultado['tabelas_skill']['by_lead'].empty)
+        aprovado, motivos = h.validar_pilot_multimodel_aprovado(resultado, SISTEMAS4, 1993, 1993)
+        self.assertTrue(aprovado, motivos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Dry-run / plano — nunca acessa o CDS.
 # ══════════════════════════════════════════════════════════════════════════
 

@@ -1131,25 +1131,60 @@ def rodar_consolidacao(raw_df, temporal_audit_df, sistemas=SISTEMAS, ano_ini=ANO
         'bootstrap_paired_ecmwf': bootstrap_paired_ecmwf, 'bootstrap_paired_models': bootstrap_paired_models,
         'sistemas': sistemas, 'integridade_aprovada': aprovado_integridade,
         'motivos_integridade': motivos_integridade,
+        # Correção de auditabilidade: o período REAL desta execução (nunca as
+        # constantes FULL) — montar_metadata() deriva execution_mode/run_start/
+        # run_end/contagens esperadas a partir destes dois campos, nunca de
+        # ANO_INICIO_HINDCAST/ANO_FIM_HINDCAST fixos.
+        'ano_ini': ano_ini, 'ano_fim': ano_fim,
     }
 
 
 def montar_metadata(resultado, modo='FULL'):
+    """Correção de auditabilidade (pré-PR): todo campo de contagem/
+    período aqui reflete o período REAL desta execução
+    (resultado['ano_ini']/['ano_fim'], nunca as constantes FULL
+    ANO_INICIO_HINDCAST/ANO_FIM_HINDCAST/N_*_FULL fixas) — derivado de
+    modo/ano_ini/ano_fim/sistemas/membros/leads, nunca hardcoded. Antes
+    desta correção, `execution_mode`/`n_raw_expected` usavam as
+    constantes FULL mesmo com modo='PILOT', tornando o metadata do
+    PILOT auditavelmente incorreto (não afetava a aprovação, já que
+    validar_pilot_multimodel_aprovado() nunca lia esses campos)."""
     r = resultado
-    n_raw_esperado = sum(s.hindcast_members * N_ORIGENS_POR_MODELO_FULL * len(LEADS) for s in r['sistemas'])
-    return {
-        'execution_mode': f'{"FULL_MULTIMODEL" if modo == "FULL" else "PILOT_MULTIMODEL"}_'
-                           f'{ANO_INICIO_HINDCAST}_{ANO_FIM_HINDCAST}',
-        'modelos': [f'{s.centro}/{s.system_name}' for s in r['sistemas']],
-        'system_codes': {s.centro: s.system_code for s in r['sistemas']},
-        'membros': {s.centro: s.hindcast_members for s in r['sistemas']},
+    sistemas = r['sistemas']
+    ano_ini = r.get('ano_ini', ANO_INICIO_HINDCAST if modo == 'FULL' else PILOT_ANO_INICIO)
+    ano_fim = r.get('ano_fim', ANO_FIM_HINDCAST if modo == 'FULL' else PILOT_ANO_FIM)
+
+    n_origens_por_modelo_esperado = (ano_fim - ano_ini + 1) * 12
+    n_modelo_origem_esperado = len(sistemas) * n_origens_por_modelo_esperado
+    n_raw_esperado = sum(s.hindcast_members * n_origens_por_modelo_esperado * len(LEADS) for s in sistemas)
+    n_summary_esperado = len(sistemas) * n_origens_por_modelo_esperado * len(LEADS)
+    n_mme_esperado = n_origens_por_modelo_esperado * len(LEADS)
+    n_temporal_esperado = n_summary_esperado
+
+    scientific_evaluation_applicable = (modo == 'FULL')
+
+    metadata = {
+        'execution_mode': f'{"FULL_MULTIMODEL" if modo == "FULL" else "PILOT_MULTIMODEL"}_{ano_ini}_{ano_fim}',
+        'run_start': ano_ini, 'run_end': ano_fim,
+        'modelos': [f'{s.centro}/{s.system_name}' for s in sistemas],
+        'system_codes': {s.centro: s.system_code for s in sistemas},
+        'membros': {s.centro: s.hindcast_members for s in sistemas},
+        # common_start/common_end são o período comum de AVALIAÇÃO do catálogo
+        # (Seção 4) — um fato do catálogo, não do período desta execução em
+        # si, por isso permanecem 1993-2016 em ambos os modos (diferente de
+        # execution_mode/run_start/run_end/n_*_expected, que são do RUN real).
         'common_start': ANO_INICIO_HINDCAST, 'common_end': ANO_FIM_HINDCAST,
         'warmup': [WARMUP_ANO_INICIO, WARMUP_ANO_FIM],
         'evaluation_start': AVALIACAO_ANO_INICIO, 'evaluation_end': AVALIACAO_ANO_FIM,
         'development': [DEVELOPMENT_ANO_INICIO, DEVELOPMENT_ANO_FIM],
         'temporal_validation': [TEMPORAL_VALIDATION_ANO_INICIO, TEMPORAL_VALIDATION_ANO_FIM],
+        'scientific_evaluation_applicable': scientific_evaluation_applicable,
+        'n_origins_per_model_expected': n_origens_por_modelo_esperado,
+        'n_model_origin_expected': n_modelo_origem_esperado,
         'n_raw_expected': n_raw_esperado, 'n_raw_actual': len(r['raw_df']),
-        'n_summary': len(r['summary_df']), 'n_mme': len(r['mme_df']),
+        'n_summary_expected': n_summary_esperado, 'n_summary_actual': len(r['summary_df']),
+        'n_mme_expected': n_mme_esperado, 'n_mme_actual': len(r['mme_df']),
+        'n_temporal_audit_expected': n_temporal_esperado, 'n_temporal_audit_actual': len(r['temporal_audit_df']),
         'n_evaluation': len(r['avaliacao_comum']), 'n_chirps_months': len(r['chirps_df']),
         'leakage_status': 'OK' if r['leakage_aprovado'] else 'VIOLACAO',
         'bootstrap': {'n_replicacoes': N_BOOTSTRAP, 'seed': SEED_BOOTSTRAP, 'unidade_reamostragem': 'init_year'},
@@ -1161,23 +1196,50 @@ def montar_metadata(resultado, modo='FULL'):
         'nota': 'Nenhum resultado desta fase promove nenhum sistema/MME para o dashboard operacional sem '
                 'revisão científica humana (Seção 43).',
     }
+    if not scientific_evaluation_applicable:
+        metadata['pilot_purpose'] = 'infraestrutura matrix/artifact/consolidation'
+        metadata['nota_pilot'] = (
+            'evaluation_start/evaluation_end/development/temporal_validation acima são a definição '
+            'METODOLÓGICA GLOBAL da Fase 2B.2 (mesma para qualquer execução) — não uma afirmação de que '
+            'este PILOT produziu avaliação científica. O PILOT roda numa escala pequena só para validar '
+            'infraestrutura (matrix/artifact upload/download/consolidação); tabelas de skill/bootstrap '
+            'vazias ou com poucas linhas aqui são esperadas (histórico insuficiente para bias/'
+            'climatologia), nunca erro.'
+        )
+    return metadata
 
 
 def gerar_relatorio_markdown(resultado, modo='FULL'):
     r = resultado
+    ano_ini = r.get('ano_ini', ANO_INICIO_HINDCAST if modo == 'FULL' else PILOT_ANO_INICIO)
+    ano_fim = r.get('ano_fim', ANO_FIM_HINDCAST if modo == 'FULL' else PILOT_ANO_FIM)
     linhas = ["# Hindcast Multi-Modelo C3S — São Bento do Tocantins — Fase 2B.2", "",
-              f"- Modo: {modo}", f"- Período comum de hindcast: {ANO_INICIO_HINDCAST}-{ANO_FIM_HINDCAST}",
-              f"- Avaliação principal: {AVALIACAO_ANO_INICIO}-{AVALIACAO_ANO_FIM}",
+              f"- Modo: {modo}", f"- Período desta execução: {ano_ini}-{ano_fim}",
+              f"- Período comum de hindcast (catálogo): {ANO_INICIO_HINDCAST}-{ANO_FIM_HINDCAST}",
+              f"- Avaliação principal (definição metodológica global): "
+              f"{AVALIACAO_ANO_INICIO}-{AVALIACAO_ANO_FIM}",
               f"- Development: {DEVELOPMENT_ANO_INICIO}-{DEVELOPMENT_ANO_FIM} / "
               f"Temporal validation: {TEMPORAL_VALIDATION_ANO_INICIO}-{TEMPORAL_VALIDATION_ANO_FIM}",
               f"- Linhas raw: {len(r['raw_df'])}", f"- Linhas summary: {len(r['summary_df'])}",
               f"- Linhas MME: {len(r['mme_df'])}",
               f"- Forecasts na avaliação principal (amostra comum a todas as variantes): "
               f"{len(r['avaliacao_comum'])}",
-              f"- Auditoria de leakage: {'✅ APROVADA' if r['leakage_aprovado'] else '❌ REPROVADA'}",
-              "", "## Skill overall (vs. climatologia)", "",
-              r['tabelas_skill']['overall'].to_string(index=False)
-              if not r['tabelas_skill']['overall'].empty else "(vazio)"]
+              f"- Auditoria de leakage: {'✅ APROVADA' if r['leakage_aprovado'] else '❌ REPROVADA'}"]
+
+    if modo != 'FULL':
+        linhas += ["", "## ⚠ PILOT — NÃO É AVALIAÇÃO CIENTÍFICA (Seção 45)", "",
+                   "Este PILOT roda numa escala pequena (poucos anos, 1 chunk por modelo) só para "
+                   "validar a INFRAESTRUTURA do workflow chunked — matrix/artifact upload/download/"
+                   "consolidação. As tabelas de skill/bootstrap abaixo podem estar vazias ou com poucas "
+                   "linhas (histórico insuficiente para bias/climatologia leakage-safe, que exige "
+                   f"{MIN_ANOS_TREINO} anos anteriores) — isso é ESPERADO, não erro, e nunca reprova o "
+                   "PILOT. Skill/bootstrap só são conclusão científica na execução OFICIAL "
+                   f"({ANO_INICIO_HINDCAST}-{ANO_FIM_HINDCAST} completo, todos os 16 chunks)."]
+
+    linhas += ["", "## Skill overall (vs. climatologia)", "",
+               r['tabelas_skill']['overall'].to_string(index=False)
+               if not r['tabelas_skill']['overall'].empty else
+               "(vazio — esperado no PILOT, ver aviso acima)" if modo != 'FULL' else "(vazio)"]
 
     bpe = r.get('bootstrap_paired_ecmwf') or {}
     if bpe.get('estimativa') is not None:
@@ -1246,7 +1308,10 @@ def validar_pilot_multimodel_aprovado(resultado, sistemas=SISTEMAS, ano_ini=PILO
     """O pilot pode legitimamente não ter os 10 anos de histórico de
     bias — avaliação principal pode ficar vazia, e isso NÃO reprova o
     pilot de infraestrutura (Seção 45: matrix/artifact upload/download/
-    consolidação, nunca skill)."""
+    consolidação, nunca skill). Deliberadamente NÃO checa
+    tabelas_skill/bootstrap_df (vazias ou não) — só integridade global,
+    leakage e MME construído; nenhuma tabela de skill/bootstrap vazia
+    bloqueia esta aprovação (correção de auditabilidade pré-PR)."""
     r = resultado
     motivos = []
     aprovado_integ, motivos_integ = validar_integridade_global(r['raw_df'], r['temporal_audit_df'], sistemas,
