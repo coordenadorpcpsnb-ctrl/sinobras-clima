@@ -14,11 +14,19 @@ name: NMME Catálogo + POC (Fase 2C.1)
 # executar_poc_real=false — clicar em "Run workflow" sem mexer em nada
 # NUNCA acessa a rede NMME: só valida código, roda a suíte de testes,
 # mostra catálogo/plano. NMME não exige credencial conhecida (Seção 29
-# — fontes públicas oficiais); `executar_poc_real` está mantido aqui só
-# por paridade de guardrail com os workflows C3S — nesta entrega,
-# scripts/nmme_poc.py::main() FALHA explicitamente se chamado com
-# --executar-poc-real (não implementado, Seção 38/50), então mesmo com
-# a confirmação certa o job não baixaria nada de verdade.
+# — fontes públicas oficiais).
+#
+# Rodada 4 (correção pós-revisão, Seção 13): `--executar-poc-real` agora
+# passa pelo guardrail (scripts/nmme_poc.py::validar_execucao_poc_possivel)
+# quando pelo menos 1 sistema tem data_access_status em {CONFIRMED,
+# POC_READY_DOCUMENTED} — hoje é o caso de 1 sistema (CFSv2, Rota B/IRI
+# member-level). Isso NÃO significa que este workflow baixa dado real
+# nesta entrega: scripts/nmme_poc.py::main() ainda FALHA explicitamente
+# com SystemExit("não implementado") logo depois do guardrail passar —
+# o download real em si segue fora do escopo desta fase (Seção 38/50).
+# `executar_poc_real`/`confirm_poc_real` ficam mantidos como guardrail
+# de paridade com os workflows C3S, prontos para quando a implementação
+# real do download existir.
 
 on:
   workflow_dispatch:

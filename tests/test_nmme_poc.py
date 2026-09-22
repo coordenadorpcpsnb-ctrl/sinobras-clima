@@ -326,9 +326,12 @@ class DryRunPlanTestCase(unittest.TestCase):
         self.assertEqual(plano['n_modelos_candidatos_documentados'], 7)
         self.assertEqual(len(plano['modelos']), 7)
 
-    def test_plano_origem_2015_01(self):
+    def test_plano_origem_2005_01(self):
+        """Seção 7, Rodada 4 — origem trocada de 2015-01 para 2005-01:
+        dentro do S grid nativo EMPIRICALLY_CONFIRMED da Rota B do
+        CFSv2 (dez/1981-mar/2011)."""
         plano = npoc.plano_poc()
-        self.assertEqual(plano['origem_poc'], '2015-01')
+        self.assertEqual(plano['origem_poc'], '2005-01')
 
     # 8 — dry-run lista candidatos vs executáveis (Seção 13).
     def test_8_plano_lista_executaveis_vs_nao_executaveis(self):
@@ -339,7 +342,21 @@ class DryRunPlanTestCase(unittest.TestCase):
         self.assertEqual(len(plano['modelos_poc_nao_executaveis']),
                           plano['n_modelos_candidatos_documentados'] - plano['n_modelos_poc_executaveis'])
         for item in plano['modelos_poc_nao_executaveis']:
-            self.assertIn(item['motivo'], (ncat.DATA_ACCESS_UNCONFIRMED, ncat.DATA_ACCESS_PARTIAL))
+            self.assertIn(item['motivo'], (ncat.DATA_ACCESS_UNCONFIRMED, ncat.DATA_ACCESS_PARTIAL,
+                                            ncat.DATA_ACCESS_POC_READY_DOCUMENTED))
+
+    # G/H (Seção 15, Rodada 4) — dry-run seleciona CFSv2 como pronto
+    # para teste real; os outros 6 permanecem não prontos.
+    def test_g_dry_run_seleciona_cfsv2_como_pronto_para_teste_real(self):
+        plano = npoc.plano_poc()
+        self.assertEqual(plano['n_modelos_poc_prontos_para_teste_real'], 1)
+        self.assertEqual(plano['modelos_poc_prontos_para_teste_real'], ['NOAA_NCEP/CFSv2'])
+
+    def test_h_demais_seis_permanecem_nao_prontos(self):
+        plano = npoc.plano_poc()
+        nomes = {item['sistema'] for item in plano['modelos_poc_ainda_nao_prontos']}
+        self.assertEqual(len(nomes), 6)
+        self.assertNotIn('NOAA_NCEP/CFSv2', nomes)
 
     def test_plano_mostra_periodo_comum_documentado(self):
         plano = npoc.plano_poc()
@@ -352,21 +369,39 @@ class DryRunPlanTestCase(unittest.TestCase):
             npoc.main()
         m_baixar.assert_not_called()
 
-    def test_executar_poc_real_falha_por_lista_executavel_vazia(self):
-        """Com o catálogo atual (nenhum sistema CONFIRMED), o guardrail
-        da Seção 13 dispara ANTES do "não implementado" — prova de que
-        a checagem está ativa e correta, mesmo com a execução real
-        ainda não implementada nesta entrega."""
+    def test_executar_poc_real_falha_por_lista_vazia(self):
+        """Com um catálogo sintético sem nenhum sistema em {CONFIRMED,
+        POC_READY_DOCUMENTED}, o guardrail da Seção 13 dispara ANTES do
+        "não implementado" — prova de que a checagem está ativa e
+        correta. Desde a Rodada 4, o catálogo REAL tem CFSv2
+        POC_READY_DOCUMENTED (ver test_executar_poc_real_falha_como_nao_
+        implementado_com_catalogo_real abaixo), então este teste isola
+        o caminho "lista vazia" com um catálogo construído à parte."""
         from unittest import mock
-        with mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
+        from dataclasses import replace
+        sistema_nao_pronto = replace(ncat.sistema_por_nome('NOAA_GFDL', 'GFDL_SPEAR'),
+                                      data_access_status=ncat.DATA_ACCESS_PARTIAL)
+        with mock.patch.object(ncat, 'CATALOGO', [sistema_nao_pronto]), \
+             mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
             with self.assertRaises(RuntimeError) as e:
                 npoc.main()
-        self.assertIn('SISTEMAS_POC_EXECUTAVEIS', str(e.exception))
+        self.assertIn('CONFIRMED, POC_READY_DOCUMENTED', str(e.exception))
 
-    def test_executar_poc_real_falha_como_nao_implementado_quando_ha_executavel(self):
-        """Se algum dia houver >=1 sistema CONFIRMED, o guardrail da
-        Seção 13 passa e cai no SystemExit "não implementado" (Seção
-        38/50) — comportamento verificado com um catálogo sintético."""
+    def test_executar_poc_real_falha_como_nao_implementado_com_catalogo_real(self):
+        """Desde a Rodada 4, o catálogo REAL já tem CFSv2
+        POC_READY_DOCUMENTED — o guardrail da Seção 13 passa e cai no
+        SystemExit "não implementado" (Seção 38/50), sem precisar de
+        nenhum mock de catálogo."""
+        from unittest import mock
+        with mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
+            with self.assertRaises(SystemExit):
+                npoc.main()
+
+    def test_executar_poc_real_falha_como_nao_implementado_quando_ha_confirmed(self):
+        """Se algum dia houver >=1 sistema CONFIRMED (não só
+        POC_READY_DOCUMENTED), o guardrail da Seção 13 também passa e
+        cai no SystemExit "não implementado" — comportamento verificado
+        com um catálogo sintético."""
         from unittest import mock
         from dataclasses import replace
         sistema_confirmado = replace(ncat.sistema_por_nome('NOAA_GFDL', 'GFDL_SPEAR'),

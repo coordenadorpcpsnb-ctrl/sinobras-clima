@@ -12,16 +12,15 @@ month, parsing e conversão mm/mês. CHIRPS não entra nesta etapa (fica
 reservado para a futura Fase 2C.2/2C.3, quando skill for calculada —
 Seção 25/26).
 
-Origem preferencial (Seção 17): 2015-01. Só usada para um modelo se o
-catálogo tiver hindcast_start/hindcast_end CONFIRMADOS (evidence !=
-UNCONFIRMED) cobrindo 2015 — nunca assumida coberta por omissão. Onde a
-cobertura ficou UNCONFIRMED nesta sessão (a maioria dos candidatos, ver
-nmme_catalogo.py), a decisão de usar 2015-01 mesmo assim fica registrada
-explicitamente como pendência a confirmar no POC real (Seção 17: "se
-não, usar uma origem comum documentada... e registrar a decisão" — não
-há origem alternativa mais documentada que 2015-01 nesta investigação,
-então ela permanece a escolha, com a pendência registrada em vez de
-trocada por outra igualmente incerta).
+Origem do POC (Seção 7, Rodada 4 — trocada de 2015-01 para 2005-01):
+2005-01 está DENTRO do S grid nativo EMPIRICALLY_CONFIRMED da Rota B do
+CFSv2 (IRI member-level, dez/1981 a mar/2011 — ver
+nmme_download.origem_dentro_do_nativo_rota_b/S_NATIVO_INICIO/
+S_NATIVO_FIM), diferente de 2015-01, que ficava fora desse período. Para
+os outros 6 candidatos (ainda POC_READY_DOCUMENTED/UNCONFIRMED/PARTIAL,
+não investigados nesta rodada — Seção 16 da tarefa), a cobertura de
+2005-01 permanece pendência a confirmar no POC real, igual valia para
+2015-01 antes.
 """
 
 import argparse
@@ -42,7 +41,7 @@ ARTIFACTS_DIR = ROOT / 'artifacts' / 'nmme_poc'
 
 MUNICIPIO = nproc.MUNICIPIO
 LEADS = (1, 2, 3, 4, 5, 6)   # Seção 13 — POC tenta exatamente H1-H6, mesma comparabilidade do C3S.
-POC_ORIGEM = (2015, 1)       # Seção 17.
+POC_ORIGEM = (2005, 1)       # Seção 7, Rodada 4 — dentro do S grid nativo da Rota B do CFSv2.
 
 ARTIFACT_FILENAMES = [
     'nmme_model_catalog.csv', 'nmme_common_period.json', 'nmme_poc_raw.csv',
@@ -69,22 +68,26 @@ def verificar_origem_no_hindcast(sistema, ano, mes):
 
 
 def validar_execucao_poc_possivel(sistemas=None):
-    """Seção 13 (correção pós-revisão) — o POC real só pode rodar se
-    pelo menos 1 sistema tiver data_access_status=CONFIRMED (endpoint +
-    variável de precipitação + dimensões confirmados, Seção 7/8). NÃO
-    exige 7/7 — só que a lista executável não esteja vazia. Levanta
-    RuntimeError explícito caso contrário — nunca inventa acesso para
-    poder seguir adiante."""
+    """Seção 13 (correção pós-revisão; ampliada na Rodada 4/Seção 13) —
+    o POC real só pode rodar se pelo menos 1 sistema tiver
+    data_access_status em {CONFIRMED, POC_READY_DOCUMENTED} (endpoint +
+    variável + TODAS as dimensões documentadas com evidência forte o
+    bastante para um request auditável — Seção 4/7/8). NÃO exige 7/7 —
+    só que a lista não esteja vazia. Levanta RuntimeError explícito caso
+    contrário — nunca inventa acesso para poder seguir adiante. Nota:
+    isto é mais permissivo que sistemas_poc_executaveis (CONFIRMED
+    puro) de propósito — POC_READY_DOCUMENTED autoriza uma TENTATIVA
+    real controlada, não afirma que ela vai ter sucesso (Seção 4)."""
     sistemas = sistemas if sistemas is not None else ncat.CATALOGO
-    executaveis = ncat.sistemas_poc_executaveis(sistemas)
-    if not executaveis:
+    prontos = ncat.sistemas_poc_prontos_para_teste_real(sistemas)
+    if not prontos:
         raise RuntimeError(
-            "SISTEMAS_POC_EXECUTAVEIS está vazio — nenhum modelo do catálogo tem "
-            "data_access_status=CONFIRMED (endpoint do hindcast + variável de precipitação + "
-            "dimensões, todos confirmados ao mesmo tempo — Seção 7/8). O POC real não pode rodar "
-            "sobre um endpoint adivinhado (Seção 13). Investigar/confirmar pelo menos 1 endpoint "
-            "antes de tentar executar.")
-    return executaveis
+            "Nenhum sistema do catálogo está pronto para uma tentativa real — nenhum tem "
+            "data_access_status em {CONFIRMED, POC_READY_DOCUMENTED} (endpoint + variável + todas as "
+            "dimensões documentadas o bastante para um request auditável, Seção 4/7/8). O POC real "
+            "não pode rodar sobre um endpoint adivinhado (Seção 13). Investigar/confirmar pelo menos 1 "
+            "endpoint antes de tentar executar.")
+    return prontos
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -109,6 +112,8 @@ def plano_poc(sistemas=None, origem=POC_ORIGEM, leads=LEADS):
     n_candidatos = len([s for s in sistemas if s.availability_status == ncat.STATUS_CANDIDATO])
     executaveis = ncat.sistemas_poc_executaveis(sistemas)
     nao_executaveis = ncat.sistemas_poc_nao_executaveis(sistemas)
+    prontos_teste_real = ncat.sistemas_poc_prontos_para_teste_real(sistemas)
+    nao_prontos_teste_real = [s for s in sistemas if s not in prontos_teste_real]
     cp = ncat.common_period_json(sistemas)
     return {
         'origem_poc': _origem_str(ano, mes), 'leads': list(leads), 'municipio': MUNICIPIO,
@@ -118,13 +123,23 @@ def plano_poc(sistemas=None, origem=POC_ORIGEM, leads=LEADS):
         'modelos_poc_nao_executaveis': [
             {'sistema': f'{s.centre}/{s.model_name}', 'motivo': s.data_access_status} for s in nao_executaveis
         ],
+        # Seção 4/12/13, Rodada 4 — degrau de "pronto para uma tentativa
+        # real controlada" (CONFIRMED ∪ POC_READY_DOCUMENTED), mais
+        # amplo que modelos_poc_executaveis (CONFIRMED puro).
+        'n_modelos_poc_prontos_para_teste_real': len(prontos_teste_real),
+        'modelos_poc_prontos_para_teste_real': [f'{s.centre}/{s.model_name}' for s in prontos_teste_real],
+        'modelos_poc_ainda_nao_prontos': [
+            {'sistema': f'{s.centre}/{s.model_name}', 'motivo': s.data_access_status}
+            for s in nao_prontos_teste_real
+        ],
         'periodo_comum_documentado': f"{cp['common_start']}-{cp['common_end']}" if cp['common_start']
         else 'UNCONFIRMED',
         'requests_previstos': len(executaveis),
         'modelos': info, 'artifacts_esperados': ARTIFACT_FILENAMES,
         'aviso': 'POC de infraestrutura (Seção 18/35-S) — nunca calcula skill. Só valida acesso/'
                  'modelo/versão/membros/variável/unidade/grade/leads/target month/parsing/conversão. '
-                 'Lista executável pode legitimamente vir vazia nesta etapa (Seção 13) — não é erro.',
+                 'Lista executável pode legitimamente vir vazia nesta etapa (Seção 13) — não é erro. '
+                 'modelos_poc_prontos_para_teste_real != já empiricamente confirmado (Seção 4).',
     }
 
 
@@ -140,7 +155,7 @@ def imprimir_plano(plano):
                       f"membros_doc={m['hindcast_members_documentado']}, "
                       f"url_confirmada={m['data_url_template_confirmado']}, "
                       f"variavel_confirmada={m['precip_variable_confirmado']}")
-        elif chave == 'modelos_poc_nao_executaveis':
+        elif chave in ('modelos_poc_nao_executaveis', 'modelos_poc_ainda_nao_prontos'):
             print(f"  {chave}:")
             for m in valor:
                 print(f"    - {m['sistema']}: {m['motivo']}")
@@ -159,7 +174,21 @@ def imprimir_plano(plano):
 # ══════════════════════════════════════════════════════════════════════════
 
 def processar_origem_modelo(sistema, ano, mes, ds, esquema_temporal='lead1_igual_mes_inicializacao',
-                             leads=LEADS, municipio=MUNICIPIO, source_url='', source_type='NetCDF/IRIDL'):
+                             leads=LEADS, municipio=MUNICIPIO, source_url='', source_type='NetCDF/IRIDL',
+                             mapa_lead_para_L=None, membros_esperados_min=None, membros_esperados_max=None):
+    """`mapa_lead_para_L` (Seção 8, Rodada 4): callable opcional
+    H-lead -> valor L real do grid da fonte (ex.:
+    nmme_download.h_lead_para_L_ingrid, para a Rota B do CFSv2, cujo L
+    nativo é 0.5/1.5/.../9.5, não 1/2/3...). None (default) mantém o
+    comportamento original — `L=lead` direto — para fontes cujo L já é
+    inteiro; NUNCA arredonda silenciosamente (Seção 8 da tarefa).
+
+    `membros_esperados_min`/`max` (Seção 5, Rodada 4): quando ao menos
+    um dos dois é informado, a contagem de membros é validada contra
+    essa FAIXA em vez de exigir igualdade exata com
+    sistema.hindcast_members — usado pela Rota B do CFSv2, cujo dado
+    bruto pode legitimamente ter entre 24 e 28 membros conforme o
+    período (nunca hardcodar um valor único para esse caso)."""
     from _c3s_utils import MUNICIPIOS
     info = MUNICIPIOS[municipio]
     lat, lon = info['lat'], info['lon']
@@ -186,7 +215,15 @@ def processar_origem_modelo(sistema, ano, mes, ds, esquema_temporal='lead1_igual
 
     membros = list(ponto['M'].values) if 'M' in ponto.dims else [0]
     n_membros = len(membros)
-    if sistema.hindcast_members is not None and n_membros != sistema.hindcast_members:
+    if membros_esperados_min is not None or membros_esperados_max is not None:
+        lo = membros_esperados_min if membros_esperados_min is not None else membros_esperados_max
+        hi = membros_esperados_max if membros_esperados_max is not None else membros_esperados_min
+        if not (lo <= n_membros <= hi):
+            raise RuntimeError(f"[{sistema.centre}/{sistema.model_name} {_origem_str(ano, mes)}] "
+                                f"nº de membros = {n_membros}, fora da faixa aceita [{lo},{hi}] "
+                                f"(barreira A — Seção 5, Rodada 4: faixa documentada, não um valor "
+                                f"único hardcoded).")
+    elif sistema.hindcast_members is not None and n_membros != sistema.hindcast_members:
         raise RuntimeError(f"[{sistema.centre}/{sistema.model_name} {_origem_str(ano, mes)}] "
                             f"nº de membros = {n_membros}, documented_expected "
                             f"{sistema.hindcast_members} (barreira A — nunca aceitar silenciosamente "
@@ -195,7 +232,8 @@ def processar_origem_modelo(sistema, ano, mes, ds, esquema_temporal='lead1_igual
     raw_linhas, temporal_linhas = [], []
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
-        fatia_lead = ponto.sel(L=lead) if 'L' in ponto.dims else ponto
+        L_selecionado = mapa_lead_para_L(lead) if mapa_lead_para_L is not None else lead
+        fatia_lead = ponto.sel(L=L_selecionado) if 'L' in ponto.dims else ponto
         for m in membros:
             fatia = fatia_lead.sel(M=m) if 'M' in fatia_lead.dims else fatia_lead
             valor_bruto = float(fatia.item())
@@ -208,7 +246,11 @@ def processar_origem_modelo(sistema, ano, mes, ds, esquema_temporal='lead1_igual
             sistema, init_date, lead, target_month,
             initialization_reference=str(init_date),
             source_time_coordinate='S (ingrid)' if 'S' in ponto.dims else 'desconhecida',
-            source_lead_coordinate='L (ingrid)' if 'L' in ponto.dims else 'desconhecida',
+            source_lead_coordinate=(f'L (ingrid, H{lead} mapeado para L={L_selecionado} — HIPÓTESE não '
+                                     f'validada contra subset real, ver '
+                                     f'nmme_download.h_lead_para_L_ingrid, Seção 8)'
+                                     if mapa_lead_para_L is not None else
+                                     ('L (ingrid)' if 'L' in ponto.dims else 'desconhecida')),
             mapping_status='ASSUMIDO_NAO_VALIDADO',
             notes=f"esquema={esquema_temporal} — convenção C3S replicada por padrão, NUNCA "
                   f"confirmada para NMME nesta sessão (Seção 13)."))
@@ -222,7 +264,8 @@ def processar_origem_modelo(sistema, ano, mes, ds, esquema_temporal='lead1_igual
         raise RuntimeError(f"[{sistema.centre}/{sistema.model_name} {_origem_str(ano, mes)}] "
                             f"{len(tabela)} linhas raw, esperado {n_esperado} (barreira H).")
 
-    metadata_origem = {'n_membros': n_membros, 'lat_grade': selected_lat, 'lon_grade': selected_lon,
+    metadata_origem = {'n_membros': n_membros, 'n_members_observed': n_membros,
+                        'lat_grade': selected_lat, 'lon_grade': selected_lon,
                         'unidade': unidade, 'variavel': var_precip}
     return tabela, temporal_audit, metadata_origem
 
@@ -251,6 +294,7 @@ def montar_metadata(sistemas=None, resultado_poc=None):
                               if s.availability_status == ncat.STATUS_NAO_HOMOGENEO]
     executaveis = ncat.sistemas_poc_executaveis(sistemas)
     nao_executaveis = ncat.sistemas_poc_nao_executaveis(sistemas)
+    prontos_teste_real = ncat.sistemas_poc_prontos_para_teste_real(sistemas)
     cp = ncat.common_period_json(sistemas)
     r = resultado_poc or {}
     return {
@@ -267,6 +311,14 @@ def montar_metadata(sistemas=None, resultado_poc=None):
                                             if s.data_access_status == ncat.DATA_ACCESS_UNCONFIRMED],
         'models_data_access_partial': [f'{s.centre}/{s.model_name}' for s in nao_executaveis
                                         if s.data_access_status == ncat.DATA_ACCESS_PARTIAL],
+        # Seção 4/12, Rodada 4 — degrau "pronto para teste real"
+        # (CONFIRMED ∪ POC_READY_DOCUMENTED), nunca confundido com
+        # n_models_poc_executable (CONFIRMED puro, empiricamente aberto).
+        'n_models_poc_ready_for_real_test': len(prontos_teste_real),
+        'models_poc_ready_for_real_test': [f'{s.centre}/{s.model_name}' for s in prontos_teste_real],
+        'models_data_access_poc_ready_documented': [
+            f'{s.centre}/{s.model_name}' for s in sistemas
+            if s.data_access_status == ncat.DATA_ACCESS_POC_READY_DOCUMENTED],
         'documented_common_period': (f"{cp['common_start']}-{cp['common_end']}"
                                       if cp['common_start'] else 'UNCONFIRMED'),
         'empirically_confirmed_common_period': ('UNCONFIRMED' if cp['n_empirically_confirmed_models'] == 0
@@ -284,8 +336,9 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'nota': 'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. '
                 'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S. '
-                'n_models_poc_executable=0 é um resultado honesto desta etapa — falta confirmar '
-                'endpoint+variável+dimensões por modelo, não indica erro (Seção 8/13).',
+                'n_models_poc_executable=0 continua honesto (nenhum subset real foi de fato aberto). '
+                'n_models_poc_ready_for_real_test=1 (CFSv2, Rota B/IRI member-level, Rodada 4) — '
+                '"pronto para testar" não é "já confirmado" (Seção 4).',
     }
 
 
@@ -304,11 +357,26 @@ def gerar_relatorio_markdown(sistemas=None):
                        f"[{ncat.status_evidencia(s, 'hindcast_start')}/"
                        f"{ncat.status_evidencia(s, 'hindcast_end')}]")
 
-    linhas += ["", "## Confirmado empiricamente", "",
-               "Nenhum campo desta entrega tem status EMPIRICALLY_CONFIRMED ou "
-               "DOCUMENTED_AND_CONFIRMED — nenhum arquivo de dado NMME foi aberto nesta sessão "
-               "(só páginas de documentação HTML/texto, dentro do permitido pela Seção 38/50). "
-               "O primeiro POC real é que vai gerar as primeiras confirmações empíricas."]
+    campos_empiricos = [(s, [c for c in ('hindcast_start', 'hindcast_end', 'hindcast_members',
+                                          'grid_resolution', 'precip_variable', 'precip_units',
+                                          'initialization_scheme', 'data_url_template')
+                              if ncat.status_evidencia(s, c) in
+                              (ncat.EMPIRICALLY_CONFIRMED, ncat.DOCUMENTED_AND_CONFIRMED)])
+                         for s in sistemas]
+    campos_empiricos = [(s, campos) for s, campos in campos_empiricos if campos]
+    linhas += ["", "## Confirmado empiricamente", ""]
+    if campos_empiricos:
+        linhas.append("Nenhum ARQUIVO de dado NMME foi aberto nesta sessão (Seção 38/50) — mas alguns "
+                       "campos de CATÁLOGO/METADADO foram lidos de primeira mão em fontes reais fora do "
+                       "domínio bloqueado (github.com/iridl/dlentries, github.com/iri-pycpt/pycpt — "
+                       "Rodadas 3/4), e por isso já carregam EMPIRICALLY_CONFIRMED:")
+        for s, campos in campos_empiricos:
+            linhas.append(f"- {s.centre}/{s.model_name}: {', '.join(campos)}")
+    else:
+        linhas.append("Nenhum campo desta entrega tem status EMPIRICALLY_CONFIRMED ou "
+                       "DOCUMENTED_AND_CONFIRMED ainda.")
+    linhas.append("O primeiro subset real aberto contra o servidor de dados (não só o catálogo-fonte) "
+                   "é que vai gerar a primeira confirmação empírica do DADO em si.")
 
     linhas += ["", "## Ainda não confirmado", ""]
     for s in sistemas:
@@ -343,35 +411,61 @@ def gerar_relatorio_markdown(sistemas=None):
 
     executaveis = ncat.sistemas_poc_executaveis(sistemas)
     nao_executaveis = ncat.sistemas_poc_nao_executaveis(sistemas)
-    linhas += ["", "## Catálogo científico vs. lista executável do POC (Seção 8)", "",
+    prontos_teste_real = ncat.sistemas_poc_prontos_para_teste_real(sistemas)
+    linhas += ["", "## Catálogo científico vs. lista executável do POC (Seção 8/4, Rodada 4)", "",
                f"- Candidatos científicos documentados: {len(sistemas)}/7",
-               f"- Executáveis no POC (data_access_status=CONFIRMED): {len(executaveis)}",
-               "", "### Não executáveis (motivo = data_access_status)", ""]
+               f"- Prontos para uma tentativa real controlada (CONFIRMED ∪ POC_READY_DOCUMENTED): "
+               f"{len(prontos_teste_real)} ({', '.join(f'{s.centre}/{s.model_name}' for s in prontos_teste_real) or '—'})",
+               f"- Executáveis/já confirmados empiricamente (data_access_status=CONFIRMED): "
+               f"{len(executaveis)}",
+               "", "### Ainda não prontos (motivo = data_access_status)", ""]
     for s in nao_executaveis:
-        linhas.append(f"- {s.centre}/{s.model_name}: {s.data_access_status}")
-    linhas += ["", "Nenhum modelo sai do catálogo científico por faltar acesso — as duas listas são "
-                    "conceitos ortogonais (Seção 8). n_models_poc_executable=0 é o resultado honesto "
-                    "desta etapa, não um erro."]
+        if s not in prontos_teste_real:
+            linhas.append(f"- {s.centre}/{s.model_name}: {s.data_access_status}")
+    linhas += ["", "Nenhum modelo sai do catálogo científico por faltar acesso — as três listas são "
+                    "conceitos ortogonais (Seção 8). n_models_poc_executable=0 continua o resultado "
+                    "honesto desta etapa (nenhum subset real foi de fato aberto) — "
+                    "n_models_poc_ready_for_real_test autoriza uma TENTATIVA, nunca afirma sucesso "
+                    "(Seção 4)."]
 
     cfsv2 = ncat.sistema_por_nome('NOAA_NCEP', 'CFSv2')
-    linhas += ["", "## Investigação CPC/CPT (Rodada 3) — CFSv2", "",
-               "Rota oficial `monthly_nmme_hindcast_in_cpt_format/` (NOAA CPC FTP) priorizada para "
-               "CFSv2. Padrão de nome de arquivo e formato CPT v10 agora DOCUMENTED/confirmados "
-               "(ver scripts/nmme_cpc_cpt.py e a nota da Rodada 3 em nmme_catalogo.py) — "
-               f"data_access_status subiu de UNCONFIRMED para {cfsv2.data_access_status}. Continua "
-               "abaixo de CONFIRMED: nenhum byte de um arquivo CFSv2/MENSAL real foi lido nesta sessão "
-               "(ftp.cpc.ncep.noaa.gov bloqueado), e a única fixture real do MESMO formato "
-               "(CanCM4i/SAZONAL, lida via github.com/iri-pycpt/pycpt) não tem dimensão de membro — "
-               "risco real, não hipotético, de o CPT-format do CPC ser ensemble-mean-only. "
-               "scripts/nmme_cpc_cpt.py já implementa o parser e as barreiras (unidade obrigatória, "
-               "membro obrigatório para uso por-membro, contagem de membros, target month nunca só "
-               "pelo nome do arquivo) para quando um arquivo real puder ser aberto."]
+    linhas += ["", "## Investigação CFSv2 — Rota A (CPC/CPT, Rodada 3) vs. Rota B (IRI member-level, "
+                    "Rodada 4)", "",
+               "**Rota A** (`monthly_nmme_hindcast_in_cpt_format/`, NOAA CPC FTP): padrão de nome e "
+               "formato CPT v10 DOCUMENTED/EMPIRICALLY_CONFIRMED ao nível de formato genérico (Rodada "
+               "3), mas a única fixture real do MESMO formato (CanCM4i/SAZONAL, via "
+               "github.com/iri-pycpt/pycpt) é ensemble-mean, sem dimensão de membro — risco real para "
+               "o objetivo de POC por membro. Mantida em scripts/nmme_cpc_cpt.py para auditoria, "
+               "NÃO é a rota priorizada para o POC por membro.",
+               "",
+               "**Rota B** (IRI Data Library, "
+               f"`{cfsv2.member_level_dataset_path.split(' ')[0] if cfsv2.member_level_dataset_path else '?'}`"
+               f"): PRIORITÁRIA para o POC por membro — mesma estrutura X/Y/L/M/S já usada nas Fases "
+               "C3S, não ensemble-mean. Endpoint + variável (PRATE) + as 5 dimensões (S/M/L/X/Y) "
+               "EMPIRICALLY_CONFIRMED via leitura direta do catálogo-fonte Ingrid real (github.com/"
+               f"iridl/dlentries, não o servidor iridl.ldeo.columbia.edu, que segue bloqueado) — "
+               f"data_access_status = **{cfsv2.data_access_status}**: documentado o bastante para "
+               "montar um request real auditável (ver nmme_download.montar_url_iri_cfsv2_member_level), "
+               "mas nenhum subset de fato foi aberto ainda, então não é CONFIRMED (Seção 4). "
+               "Achados-chave: S nativo dez/1981-mar/2011 (passo de 5 dias, não mensal — a descrição "
+               "\"monthly starts\" da IRI é uma agregação por cima do arquivo nativo, mecanismo exato "
+               "não confirmado); L nativo 0.5-9.5 (passo 1 mês, H{h}↔L={h-0.5} é HIPÓTESE não validada "
+               "contra subset real); M declarado com tamanho fixo 28 no catálogo (contagem real "
+               "aceita a faixa observada 24-28, nunca um valor único); X 0-360°/384 pontos (0,9375°); "
+               "Y grade Gaussiana de 190 pontos (não uniforme); PRATE em kg m-2 s-1. Risco operacional "
+               "registrado: a página oficial \"Data Library Sunset\" da IRI (não aberta de primeira "
+               "mão) diz que a IRIDL está prevista para parar de operar na forma atual a partir de "
+               "abril/2026 por falta de financiamento — verificar se o serviço segue no ar deve ser o "
+               "primeiro passo de qualquer tentativa real contra esta rota."]
 
     linhas += ["", "## Próxima etapa", "",
-               "Revisão humana deste catálogo → confirmar pelo menos 1 endpoint+variável+dimensões "
-               "(Seção 7/8) → primeiro POC real controlado (1 origem, "
-               f"{_origem_str(*POC_ORIGEM)}, só sobre SISTEMAS_POC_EXECUTAVEIS, H1-H6) → só então "
-               "considerar a Fase 2C.2 (calibração/skill), fora do escopo desta entrega."]
+               f"CFSv2 (Rota B, IRI member-level) está POC_READY_DOCUMENTED — a próxima etapa é uma "
+               f"tentativa real pequena e controlada (1 origem, {_origem_str(*POC_ORIGEM)}, H1-H6, "
+               "todos os membros, só o ponto de São Bento) para confirmar endpoint/variável/unidade/"
+               "dimensões/acesso e então, só depois disso, considerar CFSv2 CONFIRMED (Seção 4). Os "
+               "outros 6 candidatos permanecem como estavam — não investigados nesta rodada (Seção 16 "
+               "da tarefa) — e só entram na fila depois de CFSv2 provado. Fase 2C.2 "
+               "(calibração/skill) continua fora do escopo desta entrega."]
     return '\n'.join(linhas) + '\n'
 
 

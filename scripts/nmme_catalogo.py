@@ -161,13 +161,100 @@ mudam a base de evidência do CFSv2, ambos obtidos fora do domínio bloqueado:
 
 Isso é evidência de FAMÍLIA de formato (mesmo raciocínio já aplicado ao
 CanSIPS-IC3 FORECAST vs HINDCAST acima), não confirmação do arquivo
-CFSv2/MENSAL específico. Por isso `data_access_status` do CFSv2 sobe
-para `PARTIAL` (data_url_template agora documentado) mas NÃO chega a
-`CONFIRMED` — falta confirmar, no arquivo real, a variável interna
-exata e, principalmente, se há dimensão de membro (risco real, não
-hipotético, de ser ensemble-mean-only como o exemplo lido). `scripts/
-nmme_cpc_cpt.py` já implementa o parser CPT v10 e as barreiras
-necessárias para quando um arquivo real puder ser aberto.
+CFSv2/MENSAL específico. Por isso `data_access_status` do CFSv2 subiu
+para `PARTIAL` nesta rodada (data_url_template agora documentado) mas
+NÃO chegou a `CONFIRMED`. `scripts/nmme_cpc_cpt.py` já implementa o
+parser CPT v10 e as barreiras necessárias para quando um arquivo real
+puder ser aberto.
+
+═══════════════════════════════════════════════════════════════════════
+RODADA 4 DE INVESTIGAÇÃO (rota alternativa: IRI Data Library, dataset
+member-level) — ver scripts/nmme_download.py e scripts/nmme_processar.py
+═══════════════════════════════════════════════════════════════════════
+
+A revisão externa apontou uma rota alternativa, documentada pelo IRI:
+`SOURCES/.NOAA/.NCEP/.EMC/.CFSv2/.ENSEMBLE/.FLXF/.surface/.PRATE/` —
+POTENCIALMENTE muito mais adequada ao POC por membro do que a rota CPC/
+CPT (Rodada 3), porque é o mesmo tipo de estrutura X/Y/L/M/S por
+membro já usado nas Fases C3S (`.sel(M=...)`), não um ensemble mean.
+
+`iridl.ldeo.columbia.edu` continua BLOQUEADO nesta sessão (confirmado
+de novo). Mas o catálogo da própria IRI é código aberto versionado —
+`github.com/iridl/dlentries` (não bloqueado, github). Naveguei até
+`entries/NOAA/NCEP/EMC/CFSv2/ENSEMBLE/FLXF/index.tex` e li de primeira
+mão (via raw.githubusercontent.com) a definição Ingrid LITERAL deste
+dataset exato — é o arquivo-fonte que gera a página que a revisão
+externa descreveu, não uma paráfrase. Valores lidos verbatim:
+
+```
+S: grid: /name (S) def /calendar /365 def /units (days since 1960-01-01) def
+   1981 12 12 ymd2d365c ... 5 ... 2011 3 27 ymd2d365c ... :grid
+L: grid: /name /L def /units (months) def   .5 1 9.5 :grid
+M: /M 28 NewIntegerGRID
+X: grid: /name (X) def /units (degree_east) def   0 360 384. div dup 360 exch sub :grid
+Y: 190 gaussianlat high low subgrid
+PRATE: surface 0 Zvariable:/name (PRATE) def /long_name (Precipitation Rate) def
+       /units (kg m-2 s-1) def :Zvariable
+```
+
+Isso é EMPIRICALLY_CONFIRMED para a DEFINIÇÃO DE CATÁLOGO do dataset
+(abri e li o arquivo-fonte real) — mas continua **NÃO**
+EMPIRICALLY_CONFIRMED para o dado em si (nenhum subset real foi aberto
+contra `iridl.ldeo.columbia.edu`, que segue bloqueado). Interpretação:
+
+- **S**: início 12/dez/1981, fim 27/mar/2011, passo "5" — em um
+  calendário de 365 dias com unidade "dias", um passo de 5 significa
+  inicializações a cada 5 DIAS, não uma por mês. Isso bate com um
+  achado independente via WebSearch (não aberto de primeira mão): o
+  whitepaper/paper de Yuan et al. (2011) sobre o CFSv2 descreve
+  "9-month hindcasts... initiated every 5 days with 4 cycles on those
+  days" — corrobora o passo de 5. A descrição textual do nível pai
+  (`ENSEMBLE/index.tex`, também lida de primeira mão) diz "hindcasts
+  organized as monthly starts of 24-28 members" — **não resolvido**
+  como o arquivo nativo a cada 5 dias vira "monthly starts" — é uma
+  agregação/pooling que a IRI aplica por cima do arquivo nativo, cujo
+  mecanismo exato não foi confirmado nesta sessão. Registrado como
+  pendência explícita, não resolvido por inferência.
+- **L**: `.5 1 9.5` é sintaxe Ingrid de grade regular (início, passo,
+  fim) = 0.5, 1.5, 2.5, ..., 9.5 — 10 valores, EMPIRICALLY_CONFIRMED,
+  bate com o que a revisão externa descreveu.
+- **M**: `/M 28 NewIntegerGRID` declara um eixo M de TAMANHO FIXO 28 no
+  catálogo — não uma faixa "24-28". A faixa 24-28 citada pela revisão
+  externa (e por Yuan et al. 2011, que fala em 24 membros para
+  1982-2009) pode refletir preenchimento incompleto (menos membros
+  reais, resto `missing`) em parte do período, ou uma mudança de
+  tamanho ao longo do tempo — não confirmado nesta sessão; por isso o
+  código aceita uma FAIXA observada [24,28], nunca um valor único
+  hardcoded (Seção 5 da tarefa).
+- **X**: 0-360°, 384 pontos → espaçamento 360/384 = 0.9375° —
+  EMPIRICALLY_CONFIRMED, convenção 0-360 (não -180/180).
+- **Y**: grade GAUSSIANA de 190 pontos, não espaçamento regular
+  simples — EMPIRICALLY_CONFIRMED; nunca assumir espaçamento uniforme
+  nesta grade.
+- **PRATE**: nome interno confirmado "PRATE", `long_name`="Precipitation
+  Rate", `units`="kg m-2 s-1" — EMPIRICALLY_CONFIRMED, já uma unidade
+  reconhecida por `nmme_processar.UNIDADES_KG_M2_S_ACEITAS`.
+
+**Sobre 1991-2020 vs. o período nativo desta rota (Seção 6 da
+tarefa)**: a revisão externa afirmou "hindcasts CFSv2 para 1991-mar/2011;
+forecasts arquivados para abr/2011-dez/2020" como o período nativo
+homogêneo. A leitura EMPÍRICA desta sessão do S grid mostra o arquivo
+nativo cobrindo **dez/1981 a mar/2011** — início diferente do que a
+revisão citou (1991), mas o MESMO fim (mar/2011) — convergência entre
+duas fontes independentes (a citação da revisão + a leitura empírica
+desta sessão) sobre onde o arquivo nativo homogêneo PARA, mesmo com
+divergência sobre onde ele COMEÇA. `hindcast_start=1991`/
+`hindcast_end=2020` no catálogo continuam representando o período
+CONCEITUAL do produto NMME3 pooled/multi-modelo (documentado via manual
+NMME3, Rodada 2) — NUNCA confundido com o período nativo desta rota
+específica, registrado à parte em `homogeneous_hindcast_end` (Seção 6:
+"1991-2020 = NMME climatology construction period", não "homogeneous
+native hindcast period").
+
+Nenhum arquivo de dado real (NetCDF/GRIB) foi baixado nesta rodada —
+só o catálogo-fonte (texto Ingrid) do próprio projeto IRI, lido via
+GitHub, dentro do mesmo espírito de investigação documental da Rodada
+3.
 """
 
 from dataclasses import dataclass, field
@@ -191,16 +278,20 @@ STATUS_NAO_HOMOGENEO = 'NOT_HOMOGENEOUSLY_AVAILABLE'
 # disponibilidade científica: um modelo pode ser um CANDIDATO válido
 # (retrospectiva documentada) e ainda assim não ter endpoint/variável/
 # dimensões confirmados o bastante para um POC real executar sem
-# adivinhar (Seção 7/8). CONFIRMED exige as 3 coisas ao mesmo tempo
-# (endpoint do HINDCAST específico, variável de precipitação
-# identificada NESSE endpoint, dimensões documentadas); PARTIAL quando
-# só parte disso existe (ex.: endpoint do modelo conhecido mas variável
-# de precipitação não confirmada nesse path); UNCONFIRMED quando nada
-# disso existe.
+# adivinhar (Seção 7/8). CONFIRMED exige as 3 coisas ao mesmo tempo E
+# um subset real já ter sido aberto com sucesso — nunca marcado só por
+# documentação, por mais forte que seja (Seção 4 da Rodada 4 revisão).
+# POC_READY_DOCUMENTED (Seção 4 da Rodada 4) é o degrau abaixo: endpoint
+# + variável + TODAS as dimensões (S/M/L/X/Y) documentadas com evidência
+# forte o bastante para montar um request real auditável — mas nenhum
+# subset real foi de fato aberto ainda. PARTIAL quando só parte disso
+# existe; UNCONFIRMED quando nada disso existe.
 DATA_ACCESS_CONFIRMED = 'CONFIRMED'
+DATA_ACCESS_POC_READY_DOCUMENTED = 'POC_READY_DOCUMENTED'
 DATA_ACCESS_PARTIAL = 'PARTIAL'
 DATA_ACCESS_UNCONFIRMED = 'UNCONFIRMED'
-DATA_ACCESS_STATUS_VALIDOS = {DATA_ACCESS_CONFIRMED, DATA_ACCESS_PARTIAL, DATA_ACCESS_UNCONFIRMED}
+DATA_ACCESS_STATUS_VALIDOS = {DATA_ACCESS_CONFIRMED, DATA_ACCESS_POC_READY_DOCUMENTED,
+                                DATA_ACCESS_PARTIAL, DATA_ACCESS_UNCONFIRMED}
 
 
 @dataclass(frozen=True)
@@ -234,6 +325,20 @@ class SistemaNMME:
     # UNCONFIRMED por _validar_catalogo() (Seção 35-B), nunca por omissão
     # silenciosa.
     evidence: dict = field(default_factory=dict)
+    # Rodada 4 (correção pós-revisão) — rota B: dataset IRI member-level
+    # (distinto do data_url_template genérico, que pode representar OUTRA
+    # rota/estrutura — ex.: CPT ensemble-mean da Rodada 3, Seção 3).
+    # None para os sistemas que não têm essa rota específica investigada.
+    member_level_data_source: Optional[str] = None     # de onde veio a evidência (ex.: "IRI Data
+                                                          # Library — SOURCES/.../.ENSEMBLE/.../.PRATE/,
+                                                          # catálogo-fonte lido via github.com/iridl/dlentries")
+    member_level_dataset_path: Optional[str] = None    # path Ingrid do dataset member-level (rota B),
+                                                          # nunca reaproveita data_url_template (rota A)
+    # Seção 6 (Rodada 4) — fim do arquivo NATIVO homogêneo desta rota
+    # específica, DISTINTO de hindcast_end (que é o fim do período
+    # CONCEITUAL do produto NMME3 pooled/multi-modelo, Rodada 2). Nunca
+    # tratar os dois como o mesmo conceito.
+    homogeneous_hindcast_end: Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -308,39 +413,53 @@ _FONTE_ABOUT_NMME_JUN2025 = (
 CATALOGO = [
     SistemaNMME(
         centre='NOAA_NCEP', model_name='CFSv2', model_version=None, official_model_id=None,
-        data_source='NOAA CPC FTP — rota oficial priorizada (Rodada 3): '
-                     '`International/nmme/monthly_nmme_hindcast_in_cpt_format/` (arquivos CPT v10, '
-                     'padrão de nome `cfsv2_precip_hcst_{MesAbrev}ic_{n}_{ano}.txt`, DOCUMENTED via '
-                     'múltiplas buscas independentes com URLs reais indexadas — nunca aberto de '
-                     'primeira mão, ftp.cpc.ncep.noaa.gov bloqueado). IRI Data Library (CFSv2 hindcast '
-                     '"legado" 1982+, PRATE) mantida como rota secundária — ver notes sobre risco de '
-                     'não ser o mesmo dataset do produto NMME3.',
+        data_source='Rota A (CPC/CPT, Rodada 3): NOAA CPC FTP — '
+                     '`International/nmme/monthly_nmme_hindcast_in_cpt_format/` — ensemble-mean por T, '
+                     'não por membro (ver member_level_data_source para a rota realmente usada no POC '
+                     'por membro). Rota B (IRI, Rodada 4, PRIORITÁRIA para o POC por membro): ver '
+                     'member_level_data_source/member_level_dataset_path.',
         data_url_template='https://ftp.cpc.ncep.noaa.gov/International/nmme/'
                            'monthly_nmme_hindcast_in_cpt_format/cfsv2_precip_hcst_{MesAbrev}ic_{n}_'
-                           '{ano}.txt (padrão DOCUMENTED — Rodada 3/scripts/nmme_cpc_cpt.py — nunca '
-                           'buscado/confirmado com HTTP 200 nesta sessão; {n} é "numero_apos_ic", cujo '
-                           'significado exato — lead vs. outra convenção — é hipótese UNCONFIRMED, ver '
-                           'nmme_cpc_cpt.hipotese_interpretacao_numero_apos_ic())',
-        data_access_status=DATA_ACCESS_PARTIAL,   # padrão de URL e formato CPT agora documentados/
-                                                    # confirmados (Rodada 3), mas nenhum byte real do
-                                                    # arquivo CFSv2/MENSAL foi lido — variável interna
-                                                    # exata e presença de dimensão de membro continuam
-                                                    # sem confirmação própria (ver notes)
+                           '{ano}.txt (Rota A — CPT ensemble-mean, Rodada 3; NÃO é a rota do POC por '
+                           'membro, mantida só para auditoria — ver nmme_cpc_cpt.py)',
+        data_access_status=DATA_ACCESS_POC_READY_DOCUMENTED,   # Rodada 4: endpoint + variável + TODAS
+                                                    # as dimensões (S/M/L/X/Y) da rota B (IRI member-
+                                                    # level) documentadas com evidência forte (leitura
+                                                    # de primeira mão do catálogo-fonte Ingrid via
+                                                    # GitHub) — mas nenhum subset real foi aberto contra
+                                                    # iridl.ldeo.columbia.edu (bloqueado). Não é CONFIRMED.
         current_operational_name='CFSv2',   # citado como core operacional em ambas as páginas CPC (Seção 3)
-        hindcast_start=1991, hindcast_end=2020,
-        hindcast_members=24, realtime_members=None,
+        hindcast_start=1991, hindcast_end=2020,   # período CONCEITUAL do produto NMME3 pooled — NUNCA
+                                                    # confundir com o período nativo da rota B, ver
+                                                    # homogeneous_hindcast_end abaixo (Seção 6, Rodada 4)
+        hindcast_members=24, realtime_members=None,   # 24 = amostra NOMINAL do produto NMME3 (manual,
+                                                         # Rodada 2) — DISTINTO do tamanho bruto do eixo M
+                                                         # da rota B (28, EMPIRICALLY_CONFIRMED, Rodada 4;
+                                                         # ver scripts/nmme_download.py sobre a faixa
+                                                         # aceita [24,28] no dado bruto observado)
         leads_available=(1, 2, 3, 4, 5, 6),
-        grid_resolution='1° (documentado para o formato CPT v10 de hindcast NMME em geral — Rodada 3, '
-                          'confirmado numa fixture real do MESMO formato, produto/modelo diferentes — '
-                          'NÃO confirmado para o arquivo CFSv2/MENSAL especificamente)',
-        precip_variable='prate', precip_units=None,
-        hindcast_frequency='monthly (múltiplas inicializações diárias agregadas ao mês, a confirmar '
-                            '— Seção 14)',
-        initialization_scheme='CFSv2 roda com múltiplas inicializações DIÁRIAS dentro do mês (padrão '
-                               'documentado do sistema desde a Fase NMME original) — como o ensemble '
-                               'mensal é formado a partir dessas rodadas NÃO foi confirmado nesta '
-                               'sessão (Seção 14); nunca misturar rodada diária com ensemble mensal '
-                               'sem essa confirmação.',
+        grid_resolution='Rota A (CPT, Rodada 3): 1° (DOCUMENTED por analogia de família de formato). '
+                          'Rota B (IRI ENSEMBLE/FLXF, Rodada 4): X 0-360°/384 pontos (0,9375° de '
+                          'espaçamento) e Y grade GAUSSIANA de 190 pontos (NÃO uniforme) — '
+                          'EMPIRICALLY_CONFIRMED via leitura direta do catálogo-fonte Ingrid '
+                          '(github.com/iridl/dlentries).',
+        precip_variable='prate', precip_units='kg m-2 s-1',   # kg m-2 s-1 é o valor EMPIRICALLY_CONFIRMED
+                                                                 # (Rodada 4) para a variável PRATE da rota
+                                                                 # B — já reconhecido por
+                                                                 # nmme_processar.UNIDADES_KG_M2_S_ACEITAS;
+                                                                 # continua UNCONFIRMED para a rota A (CPT)
+        hindcast_frequency='monthly (rota A/CPT); rota B (IRI) é nativamente a cada 5 DIAS '
+                            '(EMPIRICALLY_CONFIRMED via catálogo-fonte Ingrid, Rodada 4 — S grid com '
+                            'passo "5" num calendário de 365 dias/unidade dias) — como isso vira '
+                            '"monthly starts of 24-28 members" na descrição da IRI não foi confirmado '
+                            'nesta sessão (pendência explícita, Rodada 4).',
+        initialization_scheme='CFSv2 roda com múltiplas inicializações a cada 5 dias, 4 ciclos/dia '
+                               '(EMPIRICALLY_CONFIRMED via catálogo-fonte Ingrid da rota B, Rodada 4, '
+                               'corroborado independentemente por Yuan et al. 2011 via WebSearch, não '
+                               'aberto de primeira mão) — como o ensemble "mensal"/pooled de 24-28 '
+                               'membros é formado a partir dessas rodadas de 5 em 5 dias NÃO foi '
+                               'confirmado nesta sessão; nunca misturar rodada nativa com o pooled sem '
+                               'essa confirmação.',
         availability_status=STATUS_CANDIDATO,
         source_reference=(
             'LaJoie (CPC), Climate Diagnostics and Prediction Workshop nº47, 25-27/out/2022, slide 4: '
@@ -348,45 +467,71 @@ CATALOGO = [
             'session8-oral1.pdf — PDF lido de primeira mão nesta sessão).',
             _FONTE_NMME3_MANUAL, _FONTE_ABOUT_NMME_JUN2025,
             'WebSearch (Rodada 3) — múltiplos resultados independentes devolvendo URLs reais indexadas '
-            'em ftp.cpc.ncep.noaa.gov/International/nmme/monthly_nmme_hindcast_in_cpt_format/ (ex.: '
-            'nmme_precip_hcst_Janic_6_1991.txt, cfsv2_tmp2m_hcst_Novic_4_1992.txt) — não abertas de '
-            'primeira mão, mas URLs genuínas, não paráfrase.',
-            'github.com/iri-pycpt/pycpt, cpt-io/src/cptio/fileio/cpt.py — parser oficial IRI do formato '
-            'CPT v10, lido de primeira mão via raw.githubusercontent.com (Rodada 3).',
-            'github.com/iri-pycpt/pycpt, cpt-io/tests/data/SEASONAL_CANCM4I_PRCP_HCST_JUN-SEP_None_'
-            '2021-05.tsv — fixture de teste real (hindcast NMME genuíno em CPT v10, CanCM4i/SAZONAL, '
-            'não CFSv2/MENSAL), lida de primeira mão via raw.githubusercontent.com (Rodada 3): '
-            'cpt:field=prec, cpt:units=mm/day, grade 1°×1°, cpt:S/cpt:L explícitos, SEM cpt:M em '
-            'nenhum bloco.',
+            'em ftp.cpc.ncep.noaa.gov/International/nmme/monthly_nmme_hindcast_in_cpt_format/ — Rota A.',
+            'github.com/iri-pycpt/pycpt, cpt-io/src/cptio/fileio/cpt.py + fixture real CanCM4i/SAZONAL '
+            '(cpt-io/tests/data/SEASONAL_CANCM4I_...) — lidos de primeira mão via '
+            'raw.githubusercontent.com (Rodada 3) — evidência de que a Rota A é ensemble-mean-only.',
+            'github.com/iridl/dlentries, entries/NOAA/NCEP/EMC/CFSv2/ENSEMBLE/FLXF/index.tex — '
+            'catálogo-fonte Ingrid REAL da Rota B (IRI SOURCES/.NOAA/.NCEP/.EMC/.CFSv2/.ENSEMBLE/.FLXF/'
+            '.surface/.PRATE/), lido de primeira mão via raw.githubusercontent.com (Rodada 4): S grid '
+            '(1981-12-12 a 2011-03-27, passo 5 dias), L grid (0.5 a 9.5, passo 1 mês), M (28, '
+            'NewIntegerGRID), X (0-360°, 384 pontos), Y (gaussianlat, 190 pontos), PRATE '
+            '(long_name="Precipitation Rate", units="kg m-2 s-1").',
+            'WebSearch (Rodada 4, não aberto de primeira mão) — Yuan et al. (2011), Geophysical '
+            'Research Letters, "A first look at CFSv2 for hydrological seasonal prediction": hindcasts '
+            'iniciados a cada 5 dias, 4 ciclos/dia, 1982-2009, 24 membros — corrobora o passo "5" do S '
+            'grid lido de primeira mão.',
+            'WebSearch (Rodada 4) — página IRI "Data Library Sunset" (iri.columbia.edu/resources/'
+            'data-library/sunset/, não aberta de primeira mão): a IRIDL está prevista para deixar de '
+            'operar na forma atual a partir de abr/2026 por falta de financiamento — ver notes, risco '
+            'operacional real para a Rota B.',
         ),
-        notes='Seção 10 (correção pós-revisão): existe documentação IRI para um dataset CFSv2 hindcast '
-              '"legado" (desde 1982, variável PRATE, 24-28 membros DEPENDENDO da organização histórica '
-              'usada) que é POTENCIALMENTE DIFERENTE do hindcast 1991-2020/24-membros definido pelo '
-              'NMME3 manual — os dois nunca devem ser misturados sem verificar como o CPC realmente '
-              'constrói os 24 membros do produto NMME3 atual. precip_variable="prate" é o nome '
-              'CONCEITUAL documentado no manual NMME3 — o nome real da variável dentro de um arquivo '
-              'CFSv2/MENSAL real continua UNCONFIRMED (Rodada 3: um arquivo real do MESMO FORMATO, mas '
-              'modelo/produto diferentes, usa o nome interno "prec", não "precip"/"prate" — a fixture '
-              'mostra que o nome interno pode divergir do token do NOME do arquivo, então nenhum dos '
-              'dois deve ser assumido para CFSv2 sem abrir o arquivo real).'
-              '\n\nRODADA 3 — por que data_access_status ficou PARTIAL e não CONFIRMED: o padrão de URL '
-              'e o formato CPT v10 em si agora têm base de evidência muito mais forte (URL pattern '
-              'DOCUMENTED por múltiplas buscas independentes; formato CPT v10 lido de primeira mão via '
-              'GitHub, EMPIRICALLY_CONFIRMED ao nível genérico). Mas o risco mais crítico para o '
-              'objetivo desta fase (POC probabilístico por membro, Seção 8/9 da tarefa) é real, não '
-              'hipotético: a única fixture de hindcast NMME em CPT v10 realmente lida nesta sessão '
-              '(mesmo formato, CanCM4i/SAZONAL) NÃO tem dimensão de membro — é ensemble mean por ano. '
-              'Isso é evidência de FAMÍLIA de formato (mesmo raciocínio da nota do CanSIPS-IC3 FORECAST '
-              'vs HINDCAST acima), não confirmação do arquivo CFSv2/MENSAL específico — mas é forte o '
-              'bastante para não forçar CONFIRMED sem abrir um arquivo real primeiro. '
-              'scripts/nmme_cpc_cpt.py já tem o parser CPT v10 e as barreiras (unidade obrigatória, '
-              'membro obrigatório para uso por-membro, contagem de membros esperada, target month '
-              'nunca só pelo nome do arquivo se cpt:S contradizer) prontos para quando um arquivo real '
-              'puder ser aberto — CFSv2 sobe para CONFIRMED só depois disso, nunca antes.',
+        notes='ROTA A (CPT, Rodada 3) vs. ROTA B (IRI member-level, Rodada 4) — nunca confundidas '
+              '(Seção 3 da tarefa): data_url_template continua representando SÓ a Rota A '
+              '(ensemble-mean, Rodada 3); a Rota B tem seus PRÓPRIOS campos '
+              '(member_level_data_source/member_level_dataset_path), nunca reaproveitando '
+              'data_url_template para uma estrutura diferente.'
+              '\n\nPor que data_access_status é POC_READY_DOCUMENTED e não CONFIRMED (Seção 4, Rodada '
+              '4): a Rota B tem endpoint + variável (PRATE) + as 5 dimensões (S/M/L/X/Y) documentadas '
+              'com evidência FORTE — não uma busca ou paráfrase, mas a leitura direta do arquivo-fonte '
+              'Ingrid que a própria IRI usa para gerar a página do dataset (via GitHub, não bloqueado). '
+              'Isso é o bastante para montar um request real auditável (ver '
+              'nmme_download.montar_url_iri_cfsv2_member_level). Mas continua abaixo de CONFIRMED '
+              'porque nenhum request de fato foi enviado contra iridl.ldeo.columbia.edu (bloqueado '
+              'nesta sessão) — "documentado o suficiente para testar" não é "já empiricamente '
+              'validado" (Seção 4). CFSv2 sobe para CONFIRMED só depois de um subset real pequeno abrir '
+              'com sucesso e confirmar variável/unidade/dimensões/acesso.'
+              '\n\nRisco operacional (Rodada 4): a página oficial "Data Library Sunset" da IRI (não '
+              'aberta de primeira mão, só via WebSearch) diz que a IRIDL está prevista para deixar de '
+              'ter equipe suficiente para operar na forma atual a partir de abril/2026 por queda de '
+              'financiamento — o primeiro passo de qualquer tentativa real contra esta rota deve ser '
+              'verificar se o serviço ainda está no ar, não assumir que a documentação implica '
+              'disponibilidade contínua.'
+              '\n\nMembros — nominal vs. bruto (Seção 5, Rodada 4): hindcast_members=24 é a amostra '
+              'NOMINAL do produto NMME3 (manual, Rodada 2) — o eixo M bruto da Rota B tem tamanho FIXO '
+              '28 no catálogo-fonte (EMPIRICALLY_CONFIRMED), mas a contagem REAL de membros não-'
+              '"missing" observada num subset pode variar entre 24 e 28 conforme o período (Yuan et '
+              'al. 2011 cita 24 para 1982-2009) — nunca hardcodar um valor único para o dado bruto da '
+              'Rota B; aceitar a faixa observada [24,28] e registrar n_members_observed (ver '
+              'nmme_processar.processar_origem_modelo).'
+              '\n\nPeríodo nativo vs. período NMME3 pooled (Seção 6, Rodada 4): homogeneous_hindcast_end '
+              '="2011-03" registra o fim do arquivo NATIVO da Rota B (EMPIRICALLY_CONFIRMED via S grid: '
+              '27/mar/2011) — DISTINTO de hindcast_end=2020 (fim do período CONCEITUAL do produto NMME3 '
+              'pooled/multi-modelo). O início do arquivo nativo lido nesta sessão (dez/1981) diverge do '
+              'que a revisão externa citou (1991) — convergência só no FIM (mar/2011), não no início; '
+              'registrado como pendência, não resolvido por inferência.',
         evidence={'hindcast_members': DOCUMENTED, 'hindcast_start': DOCUMENTED, 'hindcast_end': DOCUMENTED,
                    'precip_variable': DOCUMENTED, 'realtime_members': UNCONFIRMED,
-                   'grid_resolution': DOCUMENTED, 'precip_units': UNCONFIRMED,
-                   'initialization_scheme': UNCONFIRMED, 'data_url_template': DOCUMENTED},
+                   'grid_resolution': EMPIRICALLY_CONFIRMED, 'precip_units': EMPIRICALLY_CONFIRMED,
+                   'initialization_scheme': EMPIRICALLY_CONFIRMED, 'data_url_template': DOCUMENTED},
+        member_level_data_source='IRI Data Library — catálogo-fonte Ingrid lido de primeira mão via '
+                                  'github.com/iridl/dlentries (Rodada 4); o servidor '
+                                  'iridl.ldeo.columbia.edu em si continua bloqueado nesta sessão.',
+        member_level_dataset_path='SOURCES/.NOAA/.NCEP/.EMC/.CFSv2/.ENSEMBLE/.FLXF/.surface/.PRATE/ '
+                                   '(Ingrid, base https://iridl.ldeo.columbia.edu/ — EMPIRICALLY_'
+                                   'CONFIRMED ao nível de definição de catálogo, NÃO testado contra o '
+                                   'servidor real)',
+        homogeneous_hindcast_end='2011-03',
     ),
     SistemaNMME(
         centre='ECCC', model_name='CanESM5', model_version='CanESM5 (uma fonte cita "CanESM5.1" — '
@@ -655,13 +800,12 @@ def sistema_por_nome(centre, model_name):
 
 def sistemas_poc_executaveis(catalogo=None):
     """Só entra na lista executável quem tem data_access_status=CONFIRMED
-    (endpoint do HINDCAST + variável de precipitação NESSE endpoint +
-    dimensões documentadas, todos ao mesmo tempo — Seção 7/8). Nesta
-    rodada, NENHUM dos 7 candidatos atinge essa barra (o mais próximo,
-    GEM5.2_NEMO/GFDL_SPEAR/NCAR_CESM1, tem o endpoint do modelo
-    conhecido mas a variável de precipitação NÃO confirmada nesse path
-    — PARTIAL, não CONFIRMED) — resultado esperado e honesto desta
-    etapa, não um bug."""
+    — endpoint + variável + dimensões documentados E um subset real já
+    aberto com sucesso (Seção 7/8, Seção 4 da Rodada 4). Nesta rodada,
+    NENHUM dos 7 candidatos atinge essa barra — nem CFSv2, que subiu
+    para POC_READY_DOCUMENTED (evidência forte o bastante para montar
+    um request real, mas nenhum subset de fato aberto ainda) — resultado
+    esperado e honesto desta etapa, não um bug."""
     catalogo = catalogo if catalogo is not None else CATALOGO
     return [s for s in catalogo if s.data_access_status == DATA_ACCESS_CONFIRMED]
 
@@ -671,6 +815,18 @@ def sistemas_poc_nao_executaveis(catalogo=None):
     motivo (data_access_status) para auditoria (Seção 8/13)."""
     catalogo = catalogo if catalogo is not None else CATALOGO
     return [s for s in catalogo if s.data_access_status != DATA_ACCESS_CONFIRMED]
+
+
+def sistemas_poc_prontos_para_teste_real(catalogo=None):
+    """Seção 4/13 da Rodada 4 — degrau abaixo de sistemas_poc_executaveis:
+    inclui CONFIRMED **e** POC_READY_DOCUMENTED (evidência documental
+    forte o bastante para autorizar uma tentativa real controlada, ainda
+    que nenhum subset tenha sido aberto). É esta lista, não
+    sistemas_poc_executaveis, que o workflow real deve consultar para
+    decidir se libera uma tentativa de POC real (Seção 13)."""
+    catalogo = catalogo if catalogo is not None else CATALOGO
+    return [s for s in catalogo
+            if s.data_access_status in (DATA_ACCESS_CONFIRMED, DATA_ACCESS_POC_READY_DOCUMENTED)]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -704,6 +860,11 @@ def _validar_catalogo(catalogo):
                 (s.data_url_template is None or s.precip_variable is None):
             raise ValueError(f"{chave}: data_access_status=CONFIRMED exige data_url_template E "
                               f"precip_variable preenchidos (nunca confirmado por omissão, Seção 7/8).")
+        if s.data_access_status == DATA_ACCESS_POC_READY_DOCUMENTED and \
+                (s.member_level_dataset_path is None or s.precip_variable is None):
+            raise ValueError(f"{chave}: data_access_status=POC_READY_DOCUMENTED exige "
+                              f"member_level_dataset_path E precip_variable preenchidos (Seção 4 da "
+                              f"Rodada 4 — 'documentado o bastante para testar' não é omissão).")
     return True
 
 

@@ -60,6 +60,90 @@ def montar_url_iridl(sistema, ano, mes, lat, lon, variavel=None):
     return f"{base}/.{variavel}/X/{lon}/VALUE/Y/{lat}/VALUE/S/({mes:02d}%20{ano})/VALUE/data.nc"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Rodada 4 (correção pós-revisão) — Rota B: dataset IRI member-level do
+# CFSv2 (distinto da Rota A/CPT ensemble-mean, Rodada 3). Endpoint +
+# variável + as 5 dimensões (S/M/L/X/Y) EMPIRICALLY_CONFIRMED via
+# leitura direta do catálogo-fonte Ingrid (github.com/iridl/dlentries,
+# entries/NOAA/NCEP/EMC/CFSv2/ENSEMBLE/FLXF/index.tex) — ver a nota
+# completa em nmme_catalogo.py. O servidor real (iridl.ldeo.columbia.edu)
+# continua bloqueado nesta sessão — a sintaxe de seleção abaixo (RANGE
+# de L) segue a convenção pública "ingrid" já usada em montar_url_iridl,
+# mas NÃO foi testada contra o servidor real (Seção 11 da tarefa: "gerado
+# de forma auditável", não "confirmado").
+# ══════════════════════════════════════════════════════════════════════════
+
+IRI_CFSV2_MEMBER_LEVEL_BASE = 'https://iridl.ldeo.columbia.edu'
+IRI_CFSV2_MEMBER_LEVEL_PATH = 'SOURCES/.NOAA/.NCEP/.EMC/.CFSv2/.ENSEMBLE/.FLXF/.surface/.PRATE'
+
+# S grid nativo (EMPIRICALLY_CONFIRMED, Rodada 4) — início/fim do
+# arquivo homogêneo desta rota; DISTINTO do período conceitual NMME3
+# (hindcast_start/end no catálogo, 1991-2020).
+S_NATIVO_INICIO = (1981, 12, 12)
+S_NATIVO_FIM = (2011, 3, 27)
+
+# L grid nativo (EMPIRICALLY_CONFIRMED, Rodada 4): "grid: /name /L def
+# /units (months) def   .5 1 9.5 :grid" — início 0.5, passo 1, fim 9.5.
+L_NATIVO_INICIO, L_NATIVO_PASSO, L_NATIVO_FIM = 0.5, 1.0, 9.5
+
+# M grid nativo (EMPIRICALLY_CONFIRMED, Rodada 4): "/M 28 NewIntegerGRID"
+# — tamanho FIXO 28 no catálogo. A contagem REAL de membros não-missing
+# num subset pode ser menor (Seção 5 da tarefa — nunca hardcodar 24).
+M_NATIVO_TAMANHO = 28
+M_OBSERVADO_MIN, M_OBSERVADO_MAX = 24, 28
+
+
+def origem_dentro_do_nativo_rota_b(ano, mes):
+    """Verifica (ano, mes) contra o S grid NATIVO empiricamente
+    confirmado da rota B (Seção 15-B/C da tarefa) — nunca contra
+    hindcast_start/hindcast_end do catálogo (que são o período
+    CONCEITUAL do NMME3 pooled, Seção 6)."""
+    ini = pd_period(*S_NATIVO_INICIO[:2])
+    fim = pd_period(*S_NATIVO_FIM[:2])
+    alvo = pd_period(ano, mes)
+    return ini <= alvo <= fim
+
+
+def pd_period(ano, mes):
+    import pandas as pd
+    return pd.Period(f'{ano:04d}-{mes:02d}', 'M')
+
+
+def h_lead_para_L_ingrid(h):
+    """Mapeia H1..H10 (nossa convenção inteira de lead) para o valor L
+    real do grid Ingrid (0.5, 1.5, ..., 9.5 — EMPIRICALLY_CONFIRMED,
+    Rodada 4). NUNCA arredonda silenciosamente: a correspondência H{h}
+    <-> L={h-0.5} é HIPÓTESE (Seção 8 da tarefa — 'não deve ser mapeado
+    automaticamente pela lógica C3S'), não confirmada contra um subset
+    real aberto. Todo uso desta função deve registrar
+    source_lead_coordinate/mapping_status explicitamente (ver
+    nmme_processar.montar_linha_temporal_audit)."""
+    if not (1 <= h <= 10):
+        raise ValueError(f"H fora da faixa nativa do grid L (H1-H10, L 0.5-9.5); recebido H{h}.")
+    return h - 0.5
+
+
+def montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min=1, h_lead_max=6):
+    """Monta a URL de subset IRIDL (sintaxe ingrid, Rota B) para 1
+    origem x 1 ponto x uma faixa de leads H — NUNCA baixa o globo nem
+    todos os 30 anos: X/Y recortados a um ponto, S a uma única origem,
+    L a uma faixa pequena de leads (Seção 11 da tarefa). M fica
+    IRRESTRITO (queremos todos os membros — esse é o objetivo do POC
+    por membro). Levanta ValueError explícito se a origem estiver fora
+    do S grid nativo (Seção 15-C) — nunca monta um request para um
+    período que o arquivo não cobre."""
+    if not origem_dentro_do_nativo_rota_b(ano, mes):
+        raise ValueError(f"origem {ano:04d}-{mes:02d} fora do S grid nativo da Rota B "
+                          f"({S_NATIVO_INICIO[0]}-{S_NATIVO_INICIO[1]:02d} a "
+                          f"{S_NATIVO_FIM[0]}-{S_NATIVO_FIM[1]:02d}) — nunca montar request para "
+                          f"período que o catálogo-fonte não documenta (Seção 15-C).")
+    l_ini, l_fim = h_lead_para_L_ingrid(h_lead_min), h_lead_para_L_ingrid(h_lead_max)
+    base = f'{IRI_CFSV2_MEMBER_LEVEL_BASE}/{IRI_CFSV2_MEMBER_LEVEL_PATH}'
+    return (f"{base}/X/{lon}/VALUE/Y/{lat}/VALUE/"
+            f"S/({mes:02d}%20{ano})/VALUE/"
+            f"L/({l_ini})/({l_fim})/RANGEEDGES/data.nc")
+
+
 def verificar_acesso():
     """NMME não exige credencial conhecida (Seção 29 — preferir fontes
     públicas; se alguma rota exigir autenticação, documentar e nunca
