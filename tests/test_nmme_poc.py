@@ -251,7 +251,7 @@ class ProcessarOrigemModeloTestCase(unittest.TestCase):
 class DownloadUrlTestCase(unittest.TestCase):
 
     def test_url_sem_data_url_template_falha(self):
-        s = ncat.sistema_por_nome('NOAA_NCEP', 'CFSv2')   # data_url_template=None
+        s = ncat.sistema_por_nome('NCAR', 'NCAR_CCSM4')   # data_url_template=None
         with self.assertRaises(ValueError) as e:
             ndl.montar_url_iridl(s, 2015, 1, -6.0, -48.0)
         self.assertIn('data_url_template', str(e.exception))

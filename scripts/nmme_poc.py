@@ -353,6 +353,20 @@ def gerar_relatorio_markdown(sistemas=None):
                     "conceitos ortogonais (Seção 8). n_models_poc_executable=0 é o resultado honesto "
                     "desta etapa, não um erro."]
 
+    cfsv2 = ncat.sistema_por_nome('NOAA_NCEP', 'CFSv2')
+    linhas += ["", "## Investigação CPC/CPT (Rodada 3) — CFSv2", "",
+               "Rota oficial `monthly_nmme_hindcast_in_cpt_format/` (NOAA CPC FTP) priorizada para "
+               "CFSv2. Padrão de nome de arquivo e formato CPT v10 agora DOCUMENTED/confirmados "
+               "(ver scripts/nmme_cpc_cpt.py e a nota da Rodada 3 em nmme_catalogo.py) — "
+               f"data_access_status subiu de UNCONFIRMED para {cfsv2.data_access_status}. Continua "
+               "abaixo de CONFIRMED: nenhum byte de um arquivo CFSv2/MENSAL real foi lido nesta sessão "
+               "(ftp.cpc.ncep.noaa.gov bloqueado), e a única fixture real do MESMO formato "
+               "(CanCM4i/SAZONAL, lida via github.com/iri-pycpt/pycpt) não tem dimensão de membro — "
+               "risco real, não hipotético, de o CPT-format do CPC ser ensemble-mean-only. "
+               "scripts/nmme_cpc_cpt.py já implementa o parser e as barreiras (unidade obrigatória, "
+               "membro obrigatório para uso por-membro, contagem de membros, target month nunca só "
+               "pelo nome do arquivo) para quando um arquivo real puder ser aberto."]
+
     linhas += ["", "## Próxima etapa", "",
                "Revisão humana deste catálogo → confirmar pelo menos 1 endpoint+variável+dimensões "
                "(Seção 7/8) → primeiro POC real controlado (1 origem, "

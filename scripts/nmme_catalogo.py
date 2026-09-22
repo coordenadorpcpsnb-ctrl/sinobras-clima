@@ -132,6 +132,42 @@ bem-sucedido a domínios novos):
 Nenhum arquivo de dado (NetCDF/GRIB) foi baixado em nenhuma das duas
 rodadas — só páginas/documentos de texto, dentro do que a tarefa
 permite.
+
+═══════════════════════════════════════════════════════════════════════
+RODADA 3 DE INVESTIGAÇÃO (tentativa de tornar CFSv2 executável via rota
+CPC/CPT) — ver scripts/nmme_cpc_cpt.py para o relato completo
+═══════════════════════════════════════════════════════════════════════
+
+`ftp.cpc.ncep.noaa.gov` continua BLOQUEADO (confirmado de novo — diretório,
+readme e um arquivo específico, todos EGRESS_BLOCKED). Nenhum byte de um
+arquivo real `cfsv2_precip_hcst_..._MENSAL` foi lido. Dois achados reais
+mudam a base de evidência do CFSv2, ambos obtidos fora do domínio bloqueado:
+
+1. Padrão de nome de arquivo da rota `monthly_nmme_hindcast_in_cpt_format/`
+   corroborado por múltiplas buscas independentes devolvendo URLs reais
+   indexadas (não paráfrase) — `{modelo}_{variavel}_hcst_{MesAbrev}ic_
+   {n}_{ano}.txt`, `n`/`ano` singulares (família MENSAL, distinta da
+   família SAZONAL do diretório irmão, que usa faixas).
+2. O formato CPT v10 em si foi EMPIRICAMENTE confirmado: o parser oficial
+   da IRI (`github.com/iri-pycpt/pycpt`, `cpt-io/src/cptio/fileio/cpt.py`)
+   foi lido de primeira mão via `raw.githubusercontent.com` (não
+   bloqueado), e uma fixture de teste real do mesmo pacote — um hindcast
+   NMME genuíno em CPT v10 (CanCM4i, produto SAZONAL, não CFSv2/MENSAL) —
+   também foi lida de primeira mão. Essa fixture real mostra `cpt:field=
+   prec` (nome interno diferente do token "precip" do NOME do arquivo!),
+   `cpt:units=mm/day`, grade 1°×1°, `cpt:S`/`cpt:L` explícitos no
+   cabeçalho — e **nenhum bloco com `cpt:M=`**, ou seja, ensemble mean
+   por T, não por membro, embora o formato-padrão suporte a dimensão M.
+
+Isso é evidência de FAMÍLIA de formato (mesmo raciocínio já aplicado ao
+CanSIPS-IC3 FORECAST vs HINDCAST acima), não confirmação do arquivo
+CFSv2/MENSAL específico. Por isso `data_access_status` do CFSv2 sobe
+para `PARTIAL` (data_url_template agora documentado) mas NÃO chega a
+`CONFIRMED` — falta confirmar, no arquivo real, a variável interna
+exata e, principalmente, se há dimensão de membro (risco real, não
+hipotético, de ser ensemble-mean-only como o exemplo lido). `scripts/
+nmme_cpc_cpt.py` já implementa o parser CPT v10 e as barreiras
+necessárias para quando um arquivo real puder ser aberto.
 """
 
 from dataclasses import dataclass, field
@@ -272,17 +308,32 @@ _FONTE_ABOUT_NMME_JUN2025 = (
 CATALOGO = [
     SistemaNMME(
         centre='NOAA_NCEP', model_name='CFSv2', model_version=None, official_model_id=None,
-        data_source='IRI Data Library (CFSv2 hindcast "legado" 1982+, PRATE) e/ou CPC FTP (arquivos '
-                     'CPT-format, padrão "cfsv2_precip_hcst_..." — Seção 6/10) — nenhuma das duas rotas '
-                     'tem endpoint específico confirmado nesta sessão para o hindcast 1991-2020 do '
-                     'NMME3.',
-        data_url_template=None,   # nenhum endpoint específico confirmado (nem IRI nem CPC FTP)
-        data_access_status=DATA_ACCESS_UNCONFIRMED,
+        data_source='NOAA CPC FTP — rota oficial priorizada (Rodada 3): '
+                     '`International/nmme/monthly_nmme_hindcast_in_cpt_format/` (arquivos CPT v10, '
+                     'padrão de nome `cfsv2_precip_hcst_{MesAbrev}ic_{n}_{ano}.txt`, DOCUMENTED via '
+                     'múltiplas buscas independentes com URLs reais indexadas — nunca aberto de '
+                     'primeira mão, ftp.cpc.ncep.noaa.gov bloqueado). IRI Data Library (CFSv2 hindcast '
+                     '"legado" 1982+, PRATE) mantida como rota secundária — ver notes sobre risco de '
+                     'não ser o mesmo dataset do produto NMME3.',
+        data_url_template='https://ftp.cpc.ncep.noaa.gov/International/nmme/'
+                           'monthly_nmme_hindcast_in_cpt_format/cfsv2_precip_hcst_{MesAbrev}ic_{n}_'
+                           '{ano}.txt (padrão DOCUMENTED — Rodada 3/scripts/nmme_cpc_cpt.py — nunca '
+                           'buscado/confirmado com HTTP 200 nesta sessão; {n} é "numero_apos_ic", cujo '
+                           'significado exato — lead vs. outra convenção — é hipótese UNCONFIRMED, ver '
+                           'nmme_cpc_cpt.hipotese_interpretacao_numero_apos_ic())',
+        data_access_status=DATA_ACCESS_PARTIAL,   # padrão de URL e formato CPT agora documentados/
+                                                    # confirmados (Rodada 3), mas nenhum byte real do
+                                                    # arquivo CFSv2/MENSAL foi lido — variável interna
+                                                    # exata e presença de dimensão de membro continuam
+                                                    # sem confirmação própria (ver notes)
         current_operational_name='CFSv2',   # citado como core operacional em ambas as páginas CPC (Seção 3)
         hindcast_start=1991, hindcast_end=2020,
         hindcast_members=24, realtime_members=None,
         leads_available=(1, 2, 3, 4, 5, 6),
-        grid_resolution=None, precip_variable='prate', precip_units=None,
+        grid_resolution='1° (documentado para o formato CPT v10 de hindcast NMME em geral — Rodada 3, '
+                          'confirmado numa fixture real do MESMO formato, produto/modelo diferentes — '
+                          'NÃO confirmado para o arquivo CFSv2/MENSAL especificamente)',
+        precip_variable='prate', precip_units=None,
         hindcast_frequency='monthly (múltiplas inicializações diárias agregadas ao mês, a confirmar '
                             '— Seção 14)',
         initialization_scheme='CFSv2 roda com múltiplas inicializações DIÁRIAS dentro do mês (padrão '
@@ -296,20 +347,46 @@ CATALOGO = [
             '"CFSv2 24 members" (cpc.ncep.noaa.gov/products/outreach/CDPW/47/sessions/presentations/'
             'session8-oral1.pdf — PDF lido de primeira mão nesta sessão).',
             _FONTE_NMME3_MANUAL, _FONTE_ABOUT_NMME_JUN2025,
+            'WebSearch (Rodada 3) — múltiplos resultados independentes devolvendo URLs reais indexadas '
+            'em ftp.cpc.ncep.noaa.gov/International/nmme/monthly_nmme_hindcast_in_cpt_format/ (ex.: '
+            'nmme_precip_hcst_Janic_6_1991.txt, cfsv2_tmp2m_hcst_Novic_4_1992.txt) — não abertas de '
+            'primeira mão, mas URLs genuínas, não paráfrase.',
+            'github.com/iri-pycpt/pycpt, cpt-io/src/cptio/fileio/cpt.py — parser oficial IRI do formato '
+            'CPT v10, lido de primeira mão via raw.githubusercontent.com (Rodada 3).',
+            'github.com/iri-pycpt/pycpt, cpt-io/tests/data/SEASONAL_CANCM4I_PRCP_HCST_JUN-SEP_None_'
+            '2021-05.tsv — fixture de teste real (hindcast NMME genuíno em CPT v10, CanCM4i/SAZONAL, '
+            'não CFSv2/MENSAL), lida de primeira mão via raw.githubusercontent.com (Rodada 3): '
+            'cpt:field=prec, cpt:units=mm/day, grade 1°×1°, cpt:S/cpt:L explícitos, SEM cpt:M em '
+            'nenhum bloco.',
         ),
         notes='Seção 10 (correção pós-revisão): existe documentação IRI para um dataset CFSv2 hindcast '
               '"legado" (desde 1982, variável PRATE, 24-28 membros DEPENDENDO da organização histórica '
               'usada) que é POTENCIALMENTE DIFERENTE do hindcast 1991-2020/24-membros definido pelo '
               'NMME3 manual — os dois nunca devem ser misturados sem verificar como o CPC realmente '
-              'constrói os 24 membros do produto NMME3 atual; o POC real precisa confirmar isso '
-              'empiricamente na rota escolhida, não assumir que são o mesmo dataset. precip_variable='
-              '"prate" é o nome CONCEITUAL documentado no manual NMME3 para o produto como um todo — '
-              'o nome real da variável no arquivo específico que o POC abrir continua UNCONFIRMED '
-              '(Seção 11).',
+              'constrói os 24 membros do produto NMME3 atual. precip_variable="prate" é o nome '
+              'CONCEITUAL documentado no manual NMME3 — o nome real da variável dentro de um arquivo '
+              'CFSv2/MENSAL real continua UNCONFIRMED (Rodada 3: um arquivo real do MESMO FORMATO, mas '
+              'modelo/produto diferentes, usa o nome interno "prec", não "precip"/"prate" — a fixture '
+              'mostra que o nome interno pode divergir do token do NOME do arquivo, então nenhum dos '
+              'dois deve ser assumido para CFSv2 sem abrir o arquivo real).'
+              '\n\nRODADA 3 — por que data_access_status ficou PARTIAL e não CONFIRMED: o padrão de URL '
+              'e o formato CPT v10 em si agora têm base de evidência muito mais forte (URL pattern '
+              'DOCUMENTED por múltiplas buscas independentes; formato CPT v10 lido de primeira mão via '
+              'GitHub, EMPIRICALLY_CONFIRMED ao nível genérico). Mas o risco mais crítico para o '
+              'objetivo desta fase (POC probabilístico por membro, Seção 8/9 da tarefa) é real, não '
+              'hipotético: a única fixture de hindcast NMME em CPT v10 realmente lida nesta sessão '
+              '(mesmo formato, CanCM4i/SAZONAL) NÃO tem dimensão de membro — é ensemble mean por ano. '
+              'Isso é evidência de FAMÍLIA de formato (mesmo raciocínio da nota do CanSIPS-IC3 FORECAST '
+              'vs HINDCAST acima), não confirmação do arquivo CFSv2/MENSAL específico — mas é forte o '
+              'bastante para não forçar CONFIRMED sem abrir um arquivo real primeiro. '
+              'scripts/nmme_cpc_cpt.py já tem o parser CPT v10 e as barreiras (unidade obrigatória, '
+              'membro obrigatório para uso por-membro, contagem de membros esperada, target month '
+              'nunca só pelo nome do arquivo se cpt:S contradizer) prontos para quando um arquivo real '
+              'puder ser aberto — CFSv2 sobe para CONFIRMED só depois disso, nunca antes.',
         evidence={'hindcast_members': DOCUMENTED, 'hindcast_start': DOCUMENTED, 'hindcast_end': DOCUMENTED,
                    'precip_variable': DOCUMENTED, 'realtime_members': UNCONFIRMED,
-                   'grid_resolution': UNCONFIRMED, 'precip_units': UNCONFIRMED,
-                   'initialization_scheme': UNCONFIRMED, 'data_url_template': UNCONFIRMED},
+                   'grid_resolution': DOCUMENTED, 'precip_units': UNCONFIRMED,
+                   'initialization_scheme': UNCONFIRMED, 'data_url_template': DOCUMENTED},
     ),
     SistemaNMME(
         centre='ECCC', model_name='CanESM5', model_version='CanESM5 (uma fonte cita "CanESM5.1" — '
