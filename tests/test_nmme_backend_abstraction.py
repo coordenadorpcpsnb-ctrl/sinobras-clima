@@ -161,8 +161,10 @@ class MetadataInformaBackendTestCase(unittest.TestCase):
         self.assertIn('data_backend_used', meta)
         self.assertIn('dataset_representation', meta)
         self.assertIn('service_status', meta)
+        # Fase 2C.1b, Seção 3: Representação B (NMME_HARMONIZED_MONTHLY)
+        # agora é a preferida para o primeiro POC real — A é fallback.
         self.assertEqual(meta['data_backend_used'], ncat.SOURCE_BACKEND_IRIDL_LEGACY)
-        self.assertEqual(meta['dataset_representation'], ncat.REPR_RAW_NATIVE_ENSEMBLE)
+        self.assertEqual(meta['dataset_representation'], ncat.REPR_NMME_HARMONIZED_MONTHLY)
 
     def test_f_metadata_tem_legacy_service_expected_shutdown(self):
         meta = npoc.montar_metadata()
