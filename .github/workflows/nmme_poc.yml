@@ -1,0 +1,119 @@
+name: NMME Catálogo + POC (Fase 2C.1)
+
+# Fase 2C.1 — catálogo auditável + infraestrutura do POC controlado do
+# NMME (North American Multi-Model Ensemble), fonte dinâmica sazonal
+# INDEPENDENTE do C3S (Fases 2A-2B). ECMWF deliberadamente excluído
+# (Seção 5) — ver scripts/nmme_catalogo.py.
+#
+# Este workflow só roda infraestrutura (catálogo/plano) — NÃO executa o
+# POC real (download de verdade) nesta entrega (Seção 38/50). Nenhum
+# resultado desta fase é conclusão científica (Seção 18/35-S — o POC
+# nunca calcula skill) nem promove nenhum sistema para produção.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
+# executar_poc_real=false — clicar em "Run workflow" sem mexer em nada
+# NUNCA acessa a rede NMME: só valida código, roda a suíte de testes,
+# mostra catálogo/plano. NMME não exige credencial conhecida (Seção 29
+# — fontes públicas oficiais); `executar_poc_real` está mantido aqui só
+# por paridade de guardrail com os workflows C3S — nesta entrega,
+# scripts/nmme_poc.py::main() FALHA explicitamente se chamado com
+# --executar-poc-real (não implementado, Seção 38/50), então mesmo com
+# a confirmação certa o job não baixaria nada de verdade.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run_plan:
+        description: 'true (default, seguro) = só valida código/testes e mostra catálogo/plano — nunca acessa a rede NMME'
+        required: true
+        default: 'true'
+      executar_poc_real:
+        description: 'NÃO IMPLEMENTADO nesta entrega (Seção 38/50) — mesmo com confirmação, scripts/nmme_poc.py falha explicitamente.'
+        required: true
+        default: 'false'
+      confirm_poc_real:
+        description: 'Só necessário com dry_run_plan=false e executar_poc_real=true: digite EXECUTAR_NMME_POC para liberar (ver aviso acima — ainda assim não implementado)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nmme-poc
+  cancel-in-progress: false
+
+jobs:
+  nmme-catalogo-poc:
+    name: NMME Catálogo + POC
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Bloqueia o POC real acidental sem confirmação explícita — roda
+      # ANTES de instalar dependências ou tocar em qualquer rede.
+      # Pulado quando dry_run_plan=true (default seguro) ou
+      # executar_poc_real=false.
+      - name: Guardrail — POC real exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        run: |
+          if [ "${{ inputs.confirm_poc_real }}" != "EXECUTAR_NMME_POC" ]; then
+            echo "::error::POC real NMME bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ POC real bloqueado"
+              echo ""
+              echo "Rodar o POC real (download de verdade) exige preencher o input"
+              echo "**confirm_poc_real** com o texto exato \`EXECUTAR_NMME_POC\`."
+              echo ""
+              echo "AVISO: mesmo com a confirmação certa, esta entrega (Fase 2C.1) não"
+              echo "implementa o download real — scripts/nmme_poc.py::main() falha"
+              echo "explicitamente com --executar-poc-real (Seção 38/50). O default"
+              echo "(dry_run_plan=true) nunca acessa a rede — só valida código, roda"
+              echo "testes e mostra o catálogo/plano do POC."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_poc_real=EXECUTAR_NMME_POC) — liberando execução."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S/NMME)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      # Sempre roda (nunca acessa rede) — catálogo/plano são dados
+      # estáticos do módulo, não dependem de download.
+      - name: Mostrar catálogo e plano do POC (dry-run, nunca acessa a rede NMME)
+        run: python scripts/nmme_poc.py --dry-run-plan
+
+      - name: Rodar POC real (NÃO IMPLEMENTADO nesta entrega — Seção 38/50)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        run: python scripts/nmme_poc.py --executar-poc-real
+
+      - name: Publicar artifacts (CSVs/JSON/relatório — nunca NetCDF/GRIB)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nmme-catalogo-poc
+          path: |
+            artifacts/nmme_poc/nmme_model_catalog.csv
+            artifacts/nmme_poc/nmme_common_period.json
+            artifacts/nmme_poc/nmme_poc_raw.csv
+            artifacts/nmme_poc/nmme_poc_temporal_audit.csv
+            artifacts/nmme_poc/metadata.json
+            artifacts/nmme_poc/RELATORIO.md
+          retention-days: 30
+          if-no-files-found: warn

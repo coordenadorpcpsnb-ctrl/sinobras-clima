@@ -5,3 +5,7 @@ __pycache__/
 .cdsapirc
 data/c3s_cache/
 artifacts/
+
+# NMME (Fase 2C.1, .github/workflows/nmme_poc.yml) — cache local de
+# NetCDF, nunca commitado (Seção 28).
+cache/nmme/

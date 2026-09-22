@@ -16,6 +16,13 @@ xarray>=2026.1
 cfgrib>=0.9
 eccodes>=2.48
 
+# Fase 2C.1 (NMME) — xarray abre NetCDF via este backend (netCDF4), em
+# vez de cfgrib/eccodes (GRIB, só C3S). Já estava presente no ambiente
+# desta sessão como dependência transitiva; declarado aqui explicitamente
+# porque nmme_poc.py depende dele e o workflow instala este arquivo num
+# runner limpo.
+netCDF4>=1.6
+
 # Usado só por tests/test_c3s_poc.py para validar a estrutura do YAML
 # do workflow (on.workflow_dispatch.inputs, ausência de cron) — não é
 # dependência de produção nem do restante do pipeline C3S. Declarado
