@@ -22,7 +22,8 @@ import nmme_catalogo as ncat  # noqa: E402
 def _sistema_minimo(**overrides):
     base = dict(
         centre='TEST', model_name='TESTMODEL', model_version=None, official_model_id=None,
-        data_source='teste', data_url_template=None, hindcast_start=None, hindcast_end=None,
+        data_source='teste', data_url_template=None, data_access_status=ncat.DATA_ACCESS_UNCONFIRMED,
+        current_operational_name=None, hindcast_start=None, hindcast_end=None,
         hindcast_members=10, realtime_members=None, leads_available=(1, 2, 3, 4, 5, 6),
         grid_resolution=None, precip_variable=None, precip_units=None, hindcast_frequency=None,
         initialization_scheme=None, availability_status=ncat.STATUS_CANDIDATO,
@@ -176,12 +177,16 @@ class SeteCandidatosTestCase(unittest.TestCase):
 class PeriodoComumTestCase(unittest.TestCase):
 
     def test_periodo_comum_usa_so_sistemas_confirmados(self):
+        """Rodada 2 (manual NMME3 Operational User Manual, DOCUMENTED
+        para os 7): agora os 7/7 candidatos têm hindcast_start/end
+        DOCUMENTED e nenhum fica em incompatibilidade — diferente da
+        Rodada 1, onde só 3/7 tinham evidência suficiente."""
         cp = ncat.periodo_comum_hindcast(ncat.CATALOGO)
         self.assertEqual(cp['common_start'], 1991)
         self.assertEqual(cp['common_end'], 2020)
-        self.assertEqual(cp['n_elegiveis'], 3)
+        self.assertEqual(cp['n_elegiveis'], 7)
         self.assertEqual(cp['n_total'], 7)
-        self.assertIn('NOAA_NCEP/CFSv2', cp['incompatibilidade'])
+        self.assertEqual(cp['incompatibilidade'], {})
 
     def test_periodo_comum_vazio_quando_nenhum_sistema_confirmado(self):
         sistemas = [_sistema_minimo(centre='X', model_name='Y')]
@@ -226,6 +231,105 @@ class TabelaCatalogoTestCase(unittest.TestCase):
         import json
         cp = ncat.common_period_json()
         json.dumps(cp, default=str)   # não deve levantar
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Correção de auditabilidade pré-PR — nova evidência oficial (NMME3
+# manual + "About NMME" 08/jun/2025). Itens 1-7/9 do pedido de revisão.
+# ══════════════════════════════════════════════════════════════════════════
+
+class RevisaoAuditabilidadeTestCase(unittest.TestCase):
+
+    _MEMBROS_ESPERADOS = {
+        'CFSv2': 24, 'CanESM5': 20, 'GEM5.2_NEMO': 20, 'GFDL_SPEAR': 15,
+        'NCAR_CCSM4': 10, 'NCAR_CESM1': 10, 'GEOS5v2': 4,
+    }
+
+    # 1 — sete candidatos com hindcast documental 1991-2020.
+    def test_1_sete_candidatos_hindcast_1991_2020_documented(self):
+        self.assertEqual(len(ncat.CATALOGO), 7)
+        for s in ncat.CATALOGO:
+            self.assertEqual(s.hindcast_start, 1991, f'{s.model_name}: hindcast_start')
+            self.assertEqual(s.hindcast_end, 2020, f'{s.model_name}: hindcast_end')
+            self.assertEqual(ncat.status_evidencia(s, 'hindcast_start'), ncat.DOCUMENTED)
+            self.assertEqual(ncat.status_evidencia(s, 'hindcast_end'), ncat.DOCUMENTED)
+            # nunca EMPIRICALLY_CONFIRMED nesta etapa — nenhum arquivo foi aberto.
+            self.assertNotEqual(ncat.status_evidencia(s, 'hindcast_start'), ncat.EMPIRICALLY_CONFIRMED)
+
+    # 2 — membros documentados por modelo.
+    def test_2_membros_documentados_por_modelo(self):
+        for s in ncat.CATALOGO:
+            self.assertEqual(s.hindcast_members, self._MEMBROS_ESPERADOS[s.model_name],
+                              f'{s.model_name}: hindcast_members')
+            self.assertEqual(ncat.status_evidencia(s, 'hindcast_members'), ncat.DOCUMENTED)
+
+    # 3 — período comum documental = 1991-2020 para 7/7.
+    def test_3_periodo_comum_documental_7_de_7(self):
+        cp = ncat.periodo_comum_hindcast(ncat.CATALOGO)
+        self.assertEqual(cp['common_start'], 1991)
+        self.assertEqual(cp['common_end'], 2020)
+        self.assertEqual(cp['n_documented_models'], 7)
+        self.assertEqual(cp['n_elegiveis'], 7)
+        self.assertEqual(cp['n_total'], 7)
+        self.assertEqual(cp['incompatibilidade'], {})
+
+    # 4 — período empiricamente confirmado ainda UNCONFIRMED antes do POC.
+    def test_4_periodo_empiricamente_confirmado_ainda_unconfirmed(self):
+        cp = ncat.periodo_comum_hindcast(ncat.CATALOGO)
+        self.assertEqual(cp['n_empirically_confirmed_models'], 0)
+        for s in ncat.CATALOGO:
+            self.assertNotEqual(ncat.status_evidencia(s, 'hindcast_start'), ncat.EMPIRICALLY_CONFIRMED)
+            self.assertNotEqual(ncat.status_evidencia(s, 'hindcast_start'), ncat.DOCUMENTED_AND_CONFIRMED)
+
+    # 5/6 — modelo sem endpoint confirmado não entra em
+    # SISTEMAS_POC_EXECUTAVEIS, mas continua no catálogo científico.
+    def test_5_modelo_sem_endpoint_confirmado_fora_da_lista_executavel(self):
+        executaveis = {f'{s.centre}/{s.model_name}' for s in ncat.sistemas_poc_executaveis()}
+        self.assertEqual(executaveis, set())   # nenhum CONFIRMED nesta rodada — resultado honesto
+
+    def test_6_catalogo_cientifico_nao_perde_modelo_por_falta_de_acesso(self):
+        nomes_catalogo = {(s.centre, s.model_name) for s in ncat.CATALOGO}
+        nomes_nao_executaveis = {(s.centre, s.model_name) for s in ncat.sistemas_poc_nao_executaveis()}
+        self.assertEqual(nomes_nao_executaveis, nomes_catalogo)   # os 7 continuam no catálogo
+        self.assertEqual(len(ncat.CATALOGO), 7)   # nada foi removido
+
+    # 7 — nenhum URL é inventado por analogia (CONFIRMED exige url+variável).
+    def test_7_confirmed_exige_url_e_variavel_ao_mesmo_tempo(self):
+        s = _sistema_minimo(data_access_status=ncat.DATA_ACCESS_CONFIRMED, data_url_template=None,
+                             precip_variable=None)
+        with self.assertRaises(ValueError) as e:
+            ncat._validar_catalogo([s])
+        self.assertIn('CONFIRMED', str(e.exception))
+
+    def test_7_nenhum_data_url_template_no_catalogo_real_e_extrapolado_sem_marca(self):
+        """Todo data_url_template presente no catálogo real vem
+        acompanhado de data_access_status != CONFIRMED quando a
+        variável de precipitação não foi confirmada nesse path — nunca
+        promovido a executável por analogia."""
+        for s in ncat.CATALOGO:
+            if s.data_url_template is not None and s.precip_variable is None:
+                self.assertNotEqual(s.data_access_status, ncat.DATA_ACCESS_CONFIRMED)
+
+    # 9 — NASA GEOS5v2 não é automaticamente igual a GEOS-S2S-2.
+    def test_9_geos5v2_nao_e_automaticamente_geos_s2s_2(self):
+        geos = ncat.sistema_por_nome('NASA', 'GEOS5v2')
+        self.assertEqual(geos.model_name, 'GEOS5v2')
+        self.assertNotEqual(geos.model_name, 'GEOS-S2S-2')
+        # o nome operacional atual pode CITAR GEOS-S2S-2, mas isso não é
+        # tratado como confirmação de equivalência (fica registrado em notes).
+        self.assertIn('GEOS-S2S-2', geos.current_operational_name or '')
+        self.assertIn('NÃO confirmado', geos.current_operational_name or '')
+        self.assertEqual(ncat.status_evidencia(geos, 'model_version'), ncat.UNCONFIRMED)
+
+    def test_current_operational_name_registrado_separado_do_hindcast_system_name(self):
+        """Seção 3 — hindcast_system_name (model_name) e
+        current_operational_name são conceitos distintos; GFDL_SPEAR é
+        um caso onde eles divergem (SPEAR não aparece no rol "core"
+        operacional atual, mas continua candidato histórico válido)."""
+        spear = ncat.sistema_por_nome('NOAA_GFDL', 'GFDL_SPEAR')
+        self.assertEqual(spear.model_name, 'GFDL_SPEAR')
+        self.assertIsNone(spear.current_operational_name)
+        self.assertEqual(spear.availability_status, ncat.STATUS_CANDIDATO)   # continua candidato
 
 
 if __name__ == '__main__':

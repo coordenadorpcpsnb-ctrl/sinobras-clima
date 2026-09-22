@@ -68,6 +68,25 @@ def verificar_origem_no_hindcast(sistema, ano, mes):
     return sistema.hindcast_start <= ano <= sistema.hindcast_end
 
 
+def validar_execucao_poc_possivel(sistemas=None):
+    """Seção 13 (correção pós-revisão) — o POC real só pode rodar se
+    pelo menos 1 sistema tiver data_access_status=CONFIRMED (endpoint +
+    variável de precipitação + dimensões confirmados, Seção 7/8). NÃO
+    exige 7/7 — só que a lista executável não esteja vazia. Levanta
+    RuntimeError explícito caso contrário — nunca inventa acesso para
+    poder seguir adiante."""
+    sistemas = sistemas if sistemas is not None else ncat.CATALOGO
+    executaveis = ncat.sistemas_poc_executaveis(sistemas)
+    if not executaveis:
+        raise RuntimeError(
+            "SISTEMAS_POC_EXECUTAVEIS está vazio — nenhum modelo do catálogo tem "
+            "data_access_status=CONFIRMED (endpoint do hindcast + variável de precipitação + "
+            "dimensões, todos confirmados ao mesmo tempo — Seção 7/8). O POC real não pode rodar "
+            "sobre um endpoint adivinhado (Seção 13). Investigar/confirmar pelo menos 1 endpoint "
+            "antes de tentar executar.")
+    return executaveis
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Seção 17/38 — plano do POC, nunca acessa rede.
 # ══════════════════════════════════════════════════════════════════════════
@@ -81,18 +100,31 @@ def plano_poc(sistemas=None, origem=POC_ORIGEM, leads=LEADS):
         info.append({
             'centre': s.centre, 'model_name': s.model_name,
             'availability_status': s.availability_status,
+            'data_access_status': s.data_access_status,
             'origem_dentro_do_hindcast_confirmado': cobertura,
             'hindcast_members_documentado': s.hindcast_members,
             'data_url_template_confirmado': s.data_url_template is not None,
             'precip_variable_confirmado': s.precip_variable is not None,
         })
     n_candidatos = len([s for s in sistemas if s.availability_status == ncat.STATUS_CANDIDATO])
+    executaveis = ncat.sistemas_poc_executaveis(sistemas)
+    nao_executaveis = ncat.sistemas_poc_nao_executaveis(sistemas)
+    cp = ncat.common_period_json(sistemas)
     return {
         'origem_poc': _origem_str(ano, mes), 'leads': list(leads), 'municipio': MUNICIPIO,
-        'n_modelos_candidatos': n_candidatos, 'requests_previstos': n_candidatos,
+        'n_modelos_candidatos_documentados': n_candidatos,
+        'n_modelos_poc_executaveis': len(executaveis),
+        'modelos_poc_executaveis': [f'{s.centre}/{s.model_name}' for s in executaveis],
+        'modelos_poc_nao_executaveis': [
+            {'sistema': f'{s.centre}/{s.model_name}', 'motivo': s.data_access_status} for s in nao_executaveis
+        ],
+        'periodo_comum_documentado': f"{cp['common_start']}-{cp['common_end']}" if cp['common_start']
+        else 'UNCONFIRMED',
+        'requests_previstos': len(executaveis),
         'modelos': info, 'artifacts_esperados': ARTIFACT_FILENAMES,
         'aviso': 'POC de infraestrutura (Seção 18/35-S) — nunca calcula skill. Só valida acesso/'
-                 'modelo/versão/membros/variável/unidade/grade/leads/target month/parsing/conversão.',
+                 'modelo/versão/membros/variável/unidade/grade/leads/target month/parsing/conversão. '
+                 'Lista executável pode legitimamente vir vazia nesta etapa (Seção 13) — não é erro.',
     }
 
 
@@ -103,10 +135,15 @@ def imprimir_plano(plano):
             print(f"  {chave}:")
             for m in valor:
                 print(f"    - {m['centre']}/{m['model_name']}: status={m['availability_status']}, "
+                      f"data_access={m['data_access_status']}, "
                       f"origem_no_hindcast={m['origem_dentro_do_hindcast_confirmado']}, "
                       f"membros_doc={m['hindcast_members_documentado']}, "
                       f"url_confirmada={m['data_url_template_confirmado']}, "
                       f"variavel_confirmada={m['precip_variable_confirmado']}")
+        elif chave == 'modelos_poc_nao_executaveis':
+            print(f"  {chave}:")
+            for m in valor:
+                print(f"    - {m['sistema']}: {m['motivo']}")
         else:
             print(f"  {chave}: {valor}")
 
@@ -212,6 +249,8 @@ def montar_metadata(sistemas=None, resultado_poc=None):
                              if s.availability_status == ncat.STATUS_CANDIDATO]
     modelos_indisponiveis = [f'{s.centre}/{s.model_name}' for s in sistemas
                               if s.availability_status == ncat.STATUS_NAO_HOMOGENEO]
+    executaveis = ncat.sistemas_poc_executaveis(sistemas)
+    nao_executaveis = ncat.sistemas_poc_nao_executaveis(sistemas)
     cp = ncat.common_period_json(sistemas)
     r = resultado_poc or {}
     return {
@@ -219,7 +258,22 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'scientific_evaluation_applicable': False,
         'modelos_documentados': modelos_documentados, 'modelos_confirmados': modelos_confirmados,
         'modelos_indisponiveis': modelos_indisponiveis,
+        # Seção 14 (correção pós-revisão) — distinção explícita entre catálogo
+        # científico (documentado) e lista executável do POC (acesso confirmado).
+        'n_models_documented': len(modelos_documentados),
+        'n_models_poc_executable': len(executaveis),
+        'models_poc_executable': [f'{s.centre}/{s.model_name}' for s in executaveis],
+        'models_data_access_unconfirmed': [f'{s.centre}/{s.model_name}' for s in nao_executaveis
+                                            if s.data_access_status == ncat.DATA_ACCESS_UNCONFIRMED],
+        'models_data_access_partial': [f'{s.centre}/{s.model_name}' for s in nao_executaveis
+                                        if s.data_access_status == ncat.DATA_ACCESS_PARTIAL],
+        'documented_common_period': (f"{cp['common_start']}-{cp['common_end']}"
+                                      if cp['common_start'] else 'UNCONFIRMED'),
+        'empirically_confirmed_common_period': ('UNCONFIRMED' if cp['n_empirically_confirmed_models'] == 0
+                                                  else f"{cp['common_start']}-{cp['common_end']}"),
         'modelo_versions': {f'{s.centre}/{s.model_name}': s.model_version for s in sistemas},
+        'current_operational_names': {f'{s.centre}/{s.model_name}': s.current_operational_name
+                                       for s in sistemas},
         'periodo_comum': cp,
         'source_endpoints': sorted({s.data_source for s in sistemas}),
         'requests_realizados': r.get('requests_realizados', 0),
@@ -229,7 +283,9 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'grid_status': r.get('grid_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'nota': 'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. '
-                'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S.',
+                'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S. '
+                'n_models_poc_executable=0 é um resultado honesto desta etapa — falta confirmar '
+                'endpoint+variável+dimensões por modelo, não indica erro (Seção 8/13).',
     }
 
 
@@ -277,17 +333,31 @@ def gerar_relatorio_markdown(sistemas=None):
                        "ser decidida depois do POC real confirmar acesso.")
 
     linhas += ["", "## Período comum", "",
-               f"common_start={cp['common_start']}, common_end={cp['common_end']} "
-               f"(calculado só a partir dos {cp['n_elegiveis']}/{cp['n_total']} sistemas com "
-               f"hindcast_start/end confirmados — CanESM5, GEM5.2_NEMO, GFDL_SPEAR — os demais "
-               f"ficam de fora do cálculo até confirmação, nunca preenchidos por suposição)."
+               f"common_start={cp['common_start']}, common_end={cp['common_end']} — "
+               f"documented_common_period ({cp['n_documented_models']}/{cp['n_total']} sistemas com "
+               f"hindcast_start/end DOCUMENTED). empirically_confirmed_common_period=UNCONFIRMED "
+               f"({cp['n_empirically_confirmed_models']}/{cp['n_total']} confirmados empiricamente — "
+               f"0 até o POC real abrir algum arquivo, Seção 2/14)."
                if cp['common_start'] else "UNCONFIRMED — nenhum sistema com período confirmado "
                                             "o bastante para calcular interseção."]
 
+    executaveis = ncat.sistemas_poc_executaveis(sistemas)
+    nao_executaveis = ncat.sistemas_poc_nao_executaveis(sistemas)
+    linhas += ["", "## Catálogo científico vs. lista executável do POC (Seção 8)", "",
+               f"- Candidatos científicos documentados: {len(sistemas)}/7",
+               f"- Executáveis no POC (data_access_status=CONFIRMED): {len(executaveis)}",
+               "", "### Não executáveis (motivo = data_access_status)", ""]
+    for s in nao_executaveis:
+        linhas.append(f"- {s.centre}/{s.model_name}: {s.data_access_status}")
+    linhas += ["", "Nenhum modelo sai do catálogo científico por faltar acesso — as duas listas são "
+                    "conceitos ortogonais (Seção 8). n_models_poc_executable=0 é o resultado honesto "
+                    "desta etapa, não um erro."]
+
     linhas += ["", "## Próxima etapa", "",
-               "Revisão humana deste catálogo → primeiro POC real controlado (1 origem, "
-               f"{_origem_str(*POC_ORIGEM)}, todos os candidatos, H1-H6) → só então considerar a "
-               "Fase 2C.2 (calibração/skill), fora do escopo desta entrega."]
+               "Revisão humana deste catálogo → confirmar pelo menos 1 endpoint+variável+dimensões "
+               "(Seção 7/8) → primeiro POC real controlado (1 origem, "
+               f"{_origem_str(*POC_ORIGEM)}, só sobre SISTEMAS_POC_EXECUTAVEIS, H1-H6) → só então "
+               "considerar a Fase 2C.2 (calibração/skill), fora do escopo desta entrega."]
     return '\n'.join(linhas) + '\n'
 
 
@@ -331,6 +401,12 @@ def main():
     args = ap.parse_args()
 
     if args.executar_poc_real:
+        # Seção 13 — mesmo antes de qualquer outra coisa, o POC real
+        # nunca pode seguir sem pelo menos 1 sistema executável (nunca
+        # inventa acesso). Esta checagem já fica ativa agora, mesmo com
+        # a execução real ainda não implementada nesta entrega, para
+        # que a regra esteja pronta/testada quando for implementada.
+        validar_execucao_poc_possivel()
         raise SystemExit("--executar-poc-real não está implementado nesta entrega (Fase 2C.1, Seção "
                           "38/50 — só infraestrutura). Requer revisão humana e uma tarefa separada "
                           "antes de qualquer download real.")

@@ -285,8 +285,18 @@ class OrigemPocTestCase(unittest.TestCase):
         self.assertTrue(npoc.verificar_origem_no_hindcast(canesm5, 2015, 1))
 
     def test_origem_none_quando_periodo_unconfirmed(self):
-        cfsv2 = ncat.sistema_por_nome('NOAA_NCEP', 'CFSv2')
-        self.assertIsNone(npoc.verificar_origem_no_hindcast(cfsv2, 2015, 1))
+        """Após a Rodada 2 (manual NMME3), os 7 sistemas reais do
+        catálogo têm hindcast_start/end DOCUMENTED — não há mais nenhum
+        UNCONFIRMED real para testar este caminho. Usa um sistema
+        sintético com evidence UNCONFIRMED para continuar cobrindo o
+        caso "não dá para saber" (Seção 17/19)."""
+        from dataclasses import replace
+        canesm5 = ncat.sistema_por_nome('ECCC', 'CanESM5')
+        sintetico = replace(
+            canesm5, centre='TEST', model_name='TESTMODEL',
+            evidence={**canesm5.evidence, 'hindcast_start': ncat.UNCONFIRMED,
+                      'hindcast_end': ncat.UNCONFIRMED})
+        self.assertIsNone(npoc.verificar_origem_no_hindcast(sintetico, 2015, 1))
 
     def test_origem_false_quando_fora_do_periodo_confirmado(self):
         canesm5 = ncat.sistema_por_nome('ECCC', 'CanESM5')
@@ -313,12 +323,27 @@ class DryRunPlanTestCase(unittest.TestCase):
 
     def test_plano_lista_os_7_candidatos(self):
         plano = npoc.plano_poc()
-        self.assertEqual(plano['n_modelos_candidatos'], 7)
+        self.assertEqual(plano['n_modelos_candidatos_documentados'], 7)
         self.assertEqual(len(plano['modelos']), 7)
 
     def test_plano_origem_2015_01(self):
         plano = npoc.plano_poc()
         self.assertEqual(plano['origem_poc'], '2015-01')
+
+    # 8 — dry-run lista candidatos vs executáveis (Seção 13).
+    def test_8_plano_lista_executaveis_vs_nao_executaveis(self):
+        plano = npoc.plano_poc()
+        self.assertIn('modelos_poc_executaveis', plano)
+        self.assertIn('modelos_poc_nao_executaveis', plano)
+        self.assertEqual(plano['n_modelos_poc_executaveis'], len(plano['modelos_poc_executaveis']))
+        self.assertEqual(len(plano['modelos_poc_nao_executaveis']),
+                          plano['n_modelos_candidatos_documentados'] - plano['n_modelos_poc_executaveis'])
+        for item in plano['modelos_poc_nao_executaveis']:
+            self.assertIn(item['motivo'], (ncat.DATA_ACCESS_UNCONFIRMED, ncat.DATA_ACCESS_PARTIAL))
+
+    def test_plano_mostra_periodo_comum_documentado(self):
+        plano = npoc.plano_poc()
+        self.assertEqual(plano['periodo_comum_documentado'], '1991-2020')
 
     def test_main_dry_run_nunca_acessa_rede(self):
         from unittest import mock
@@ -327,9 +352,28 @@ class DryRunPlanTestCase(unittest.TestCase):
             npoc.main()
         m_baixar.assert_not_called()
 
-    def test_executar_poc_real_falha_explicitamente(self):
+    def test_executar_poc_real_falha_por_lista_executavel_vazia(self):
+        """Com o catálogo atual (nenhum sistema CONFIRMED), o guardrail
+        da Seção 13 dispara ANTES do "não implementado" — prova de que
+        a checagem está ativa e correta, mesmo com a execução real
+        ainda não implementada nesta entrega."""
         from unittest import mock
         with mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
+            with self.assertRaises(RuntimeError) as e:
+                npoc.main()
+        self.assertIn('SISTEMAS_POC_EXECUTAVEIS', str(e.exception))
+
+    def test_executar_poc_real_falha_como_nao_implementado_quando_ha_executavel(self):
+        """Se algum dia houver >=1 sistema CONFIRMED, o guardrail da
+        Seção 13 passa e cai no SystemExit "não implementado" (Seção
+        38/50) — comportamento verificado com um catálogo sintético."""
+        from unittest import mock
+        from dataclasses import replace
+        sistema_confirmado = replace(ncat.sistema_por_nome('NOAA_GFDL', 'GFDL_SPEAR'),
+                                      data_access_status=ncat.DATA_ACCESS_CONFIRMED,
+                                      precip_variable='prec')
+        with mock.patch.object(ncat, 'CATALOGO', [sistema_confirmado]), \
+             mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
             with self.assertRaises(SystemExit):
                 npoc.main()
 
