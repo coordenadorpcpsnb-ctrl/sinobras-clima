@@ -255,6 +255,72 @@ Nenhum arquivo de dado real (NetCDF/GRIB) foi baixado nesta rodada —
 só o catálogo-fonte (texto Ingrid) do próprio projeto IRI, lido via
 GitHub, dentro do mesmo espírito de investigação documental da Rodada
 3.
+
+═══════════════════════════════════════════════════════════════════════
+RODADA 5 DE INVESTIGAÇÃO (correção final pré-PR) — sunset do IRIDL,
+migração para forecast.ccsr, abstração de backend, 2 representações do
+CFSv2 legado
+═══════════════════════════════════════════════════════════════════════
+
+**Sunset do IRIDL confirmado e corroborado independentemente**:
+WebSearch (não aberto de primeira mão — `iri.columbia.edu` segue
+bloqueado) encontrou, de forma consistente em múltiplas buscas
+independentes desta rodada, que o desligamento completo da IRIDL é
+esperado até o final de outubro de 2026 ("by the end of October 2026,
+possibly earlier"), e que a IRI está montando uma instância mais
+simples em `forecast.ccsr.columbia.edu` (Columbia Climate School/CCSR)
+para hospedar dados de NMME/SubX/S2S. `forecast.ccsr.columbia.edu`
+também está BLOQUEADO para WebFetch direto nesta sessão — nada foi
+aberto de primeira mão desse domínio.
+
+**O que se sabe sobre forecast.ccsr (tudo via WebSearch, DOCUMENTED, não
+EMPIRICALLY_CONFIRMED)**: serviço em beta desde ~dez/2025-jan/2026;
+hospeda inicialmente 4 dos 5 modelos NMME ativos (precipitação, T2m,
+SST); CFSv2 (o 5º modelo) estava sendo adicionado "gradualmente nas
+semanas seguintes" a partir de um ponto não datado com precisão —
+consistente com a citação da revisão externa de que "early month
+samples" do CFSv2 já estariam disponíveis, mas SEM um endpoint/path
+exato encontrado nesta sessão. Seguindo a Seção 12 da tarefa
+("Não tentar descobrir endpoint CCSR por adivinhação... se o endpoint
+exato não estiver documentado: manter DISCOVERY_REQUIRED"): nenhuma URL
+foi construída para CCSR_BETA — o campo `dataset_path` dessa rota fica
+`None` deliberadamente.
+
+**Duas representações distintas do CFSv2 no IRIDL legado (Seção 9)**:
+além da rota A já registrada na Rodada 4 (`SOURCES/.NOAA/.NCEP/.EMC/
+.CFSv2/.ENSEMBLE/.FLXF/.surface/.PRATE/`, catálogo-fonte lido de
+primeira mão via `github.com/iridl/dlentries`), esta rodada leu de
+primeira mão (mesma via GitHub, mesmo método) uma SEGUNDA entrada real:
+`entries/Models/NMME/NCEP-CFSv2/HINDCAST/MONTHLY/index.tex` —
+`SOURCES/.Models/.NMME/.NCEP-CFSv2/.HINDCAST/.MONTHLY/.prec/`. Valores
+lidos verbatim: S = 1/jan/1982 a 1/dez/2010 (mensal); L = `0.5 1 9.5`
+(mesma convenção 0.5-9.5, passo 1 mês, da rota A); M = `/M 24
+NewIntegerGRID` (tamanho FIXO 24, não 28); X = `0.0 1. 359.` (360
+pontos, 1°); Y = `90. 1. -90.` (181 pontos, 1°, não Gaussiana); variável
+interna `prec` (não "PRATE" nem "prate"), armazenada em kg/m²/s e
+convertida para mm/day pelo próprio catálogo Ingrid (`unitconvert`).
+Isso é EMPIRICALLY_CONFIRMED para a definição de catálogo desta segunda
+representação, pelo mesmo método (leitura direta do catálogo-fonte real
+via GitHub) já usado para a primeira.
+
+As duas representações NÃO são reconciliadas nesta rodada (instrução
+explícita da revisão, Seção 9) — ficam registradas como:
+- **A. raw/native CFSv2 ensemble** (`ENSEMBLE/FLXF`, M=28, grade
+  384×190 Gaussiana, variável PRATE em kg m-2 s-1) — a rota já usada
+  pelo downloader/testes da Rodada 4.
+- **B. NMME harmonized/monthly sample** (`Models/NMME/NCEP-CFSv2/
+  HINDCAST/MONTHLY`, M=24, grade 360×181 regular 1°, variável prec
+  convertida para mm/day) — mais próxima do produto NMME3
+  "pooled"/24-membros documentado no manual (Rodada 2), mas ainda
+  assim não confirmada como sendo LITERALMENTE o mesmo dado.
+
+Todo uso real (quando o POC de fato executar) deve declarar
+explicitamente qual das duas representações usou — nunca tratar como
+intercambiáveis.
+
+Nenhum arquivo de dado real foi baixado nesta rodada — só catálogos-
+fonte (texto Ingrid) via GitHub, mesmo espírito documental das rodadas
+anteriores.
 """
 
 from dataclasses import dataclass, field
@@ -292,6 +358,74 @@ DATA_ACCESS_PARTIAL = 'PARTIAL'
 DATA_ACCESS_UNCONFIRMED = 'UNCONFIRMED'
 DATA_ACCESS_STATUS_VALIDOS = {DATA_ACCESS_CONFIRMED, DATA_ACCESS_POC_READY_DOCUMENTED,
                                 DATA_ACCESS_PARTIAL, DATA_ACCESS_UNCONFIRMED}
+
+# ══════════════════════════════════════════════════════════════════════════
+# Rodada 5 (correção final pré-PR) — abstração simples de backend (Seção
+# 4): a lógica científica não deve ficar presa à sintaxe Ingrid do
+# IRIDL. Um sistema pode ter mais de uma ROTA member-level registrada
+# (backend + representação de dado), cada uma com seu próprio status —
+# nunca um único data_access_status no nível do sistema tentando cobrir
+# rotas com maturidade diferente (Seção 5/6/9).
+# ══════════════════════════════════════════════════════════════════════════
+SOURCE_BACKEND_IRIDL_LEGACY = 'IRIDL_LEGACY'
+SOURCE_BACKEND_CCSR_BETA = 'CCSR_BETA'
+SOURCE_BACKEND_VALIDOS = {SOURCE_BACKEND_IRIDL_LEGACY, SOURCE_BACKEND_CCSR_BETA}
+
+# Seção 9 — duas representações de dado DISTINTAS podem existir sob o
+# MESMO backend (ex.: IRIDL_LEGACY tem tanto o ensemble bruto quanto a
+# amostra harmonizada do NMME) — nunca reconciliadas automaticamente.
+REPR_RAW_NATIVE_ENSEMBLE = 'RAW_NATIVE_ENSEMBLE'          # A
+REPR_NMME_HARMONIZED_MONTHLY = 'NMME_HARMONIZED_MONTHLY'  # B
+REPR_UNKNOWN = 'UNKNOWN'                                   # CCSR_BETA, ainda não descoberta
+REPR_VALIDOS = {REPR_RAW_NATIVE_ENSEMBLE, REPR_NMME_HARMONIZED_MONTHLY, REPR_UNKNOWN}
+
+# Seção 5 — status por ROTA (não por sistema): uma rota pode estar
+# documentada o bastante para uma tentativa real (LEGACY, Rodada 4/5)
+# enquanto outra do MESMO sistema segue sem endpoint confirmado
+# (CCSR_BETA, Seção 12 — nunca inventado por adivinhação de padrão).
+ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY = 'POC_READY_DOCUMENTED_LEGACY'
+ROUTE_STATUS_DISCOVERY_REQUIRED = 'DISCOVERY_REQUIRED'
+ROUTE_STATUS_VALIDOS = {ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY, ROUTE_STATUS_DISCOVERY_REQUIRED}
+
+# Seção 7 — risco de continuidade operacional da rota: HIGH para o
+# serviço com data de desligamento anunciada (IRIDL legado); BETA para
+# o serviço novo ainda em beta, sem garantia de estabilidade de
+# metadata (forecast.ccsr).
+CONTINUITY_RISK_HIGH = 'HIGH'
+CONTINUITY_RISK_BETA = 'BETA'
+CONTINUITY_RISK_VALIDOS = {CONTINUITY_RISK_HIGH, CONTINUITY_RISK_BETA}
+
+# Data operacional aproximada de desligamento do IRIDL legado (Seção 7
+# — "by the end of October 2026, possibly earlier", DOCUMENTED via
+# WebSearch corroborado em múltiplas buscas independentes nesta rodada
+# e na Rodada 4; NUNCA tratada como garantia contratual, só como sinal
+# operacional para priorizar a migração).
+LEGACY_SERVICE_EXPECTED_SHUTDOWN = '2026-10-31'
+
+
+@dataclass(frozen=True)
+class RotaMemberLevel:
+    """1 rota concreta (backend + representação de dado) para acessar
+    precipitação por membro de 1 sistema — Seção 4 da correção final:
+    campos simples, sem tentar generalizar para os outros 6 candidatos
+    nesta rodada (Seção 16, mantido de rodadas anteriores)."""
+    data_backend: str                  # IRIDL_LEGACY | CCSR_BETA
+    dataset_representation: str        # RAW_NATIVE_ENSEMBLE | NMME_HARMONIZED_MONTHLY | UNKNOWN
+    dataset_path: Optional[str]        # None quando status=DISCOVERY_REQUIRED — nunca um path
+                                        # inventado por analogia (Seção 12)
+    variable_name: Optional[str]
+    units_expected: Optional[str]
+    member_dimension: Optional[str]
+    lead_dimension: Optional[str]
+    init_dimension: Optional[str]
+    lat_dimension: Optional[str]
+    lon_dimension: Optional[str]
+    member_axis_size: Optional[int]    # tamanho declarado do eixo M no catálogo-fonte (ex.: 28 ou 24)
+    grid_shape: Optional[str]          # ex.: "384x190 (Gaussiana)" ou "360x181 (1°x1°)"
+    status: str                        # POC_READY_DOCUMENTED_LEGACY | DISCOVERY_REQUIRED
+    source_continuity_risk: str        # HIGH | BETA
+    source_reference: tuple = field(default_factory=tuple)
+    notes: str = ''
 
 
 @dataclass(frozen=True)
@@ -339,6 +473,10 @@ class SistemaNMME:
     # CONCEITUAL do produto NMME3 pooled/multi-modelo, Rodada 2). Nunca
     # tratar os dois como o mesmo conceito.
     homogeneous_hindcast_end: Optional[str] = None
+    # Rodada 5 — abstração de backend (Seção 4): tupla de RotaMemberLevel,
+    # uma por (backend, representação) investigada. Vazia para os
+    # sistemas não investigados nesta rodada (Seção 16).
+    member_level_routes: tuple = field(default_factory=tuple)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -532,6 +670,80 @@ CATALOGO = [
                                    'CONFIRMED ao nível de definição de catálogo, NÃO testado contra o '
                                    'servidor real)',
         homogeneous_hindcast_end='2011-03',
+        member_level_routes=(
+            RotaMemberLevel(
+                data_backend=SOURCE_BACKEND_CCSR_BETA,
+                dataset_representation=REPR_UNKNOWN,
+                dataset_path=None,   # Seção 12 — nunca inventado por adivinhação de padrão
+                variable_name='pr',   # citado pela revisão externa (25/ago/2026) — DOCUMENTED, não
+                                       # confirmado num endpoint real
+                units_expected='mm/day',
+                member_dimension=None, lead_dimension=None, init_dimension=None,
+                lat_dimension=None, lon_dimension=None,
+                member_axis_size=None, grid_shape=None,
+                status=ROUTE_STATUS_DISCOVERY_REQUIRED,
+                source_continuity_risk=CONTINUITY_RISK_BETA,
+                source_reference=(
+                    'WebSearch (Rodada 5, não aberto de primeira mão — forecast.ccsr.columbia.edu '
+                    'bloqueado): serviço em beta desde ~dez/2025-jan/2026, hospedando 4 dos 5 modelos '
+                    'NMME ativos (precipitação/T2m/SST); CFSv2 sendo adicionado gradualmente. '
+                    'Comunicação oficial IRI citada pela revisão externa (25/ago/2026): "early month '
+                    'samples" do CFSv2 já disponível, "pentad samples" a caminho, variável padronizada '
+                    'como "pr" em mm/day, convenções mais próximas de CMIP6.',
+                ),
+                notes='DISCOVERY_REQUIRED deliberado (Seção 12) — nenhum endpoint/path exato foi '
+                      'encontrado nesta sessão para forecast.ccsr, e o domínio está bloqueado para '
+                      'WebFetch direto. Nunca construir URL por tentativa de padrão. Promover para '
+                      'POC_READY_DOCUMENTED só depois de confirmar endpoint+formato+cobertura de '
+                      'hindcast+membro+lead+coordenadas+arquivos reais (Seção 5).',
+            ),
+            RotaMemberLevel(
+                data_backend=SOURCE_BACKEND_IRIDL_LEGACY,
+                dataset_representation=REPR_RAW_NATIVE_ENSEMBLE,
+                dataset_path='SOURCES/.NOAA/.NCEP/.EMC/.CFSv2/.ENSEMBLE/.FLXF/.surface/.PRATE/',
+                variable_name='PRATE', units_expected='kg m-2 s-1',
+                member_dimension='M', lead_dimension='L', init_dimension='S',
+                lat_dimension='Y', lon_dimension='X',
+                member_axis_size=28, grid_shape='384x190 (Gaussiana, 0,9375° em X)',
+                status=ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY,
+                source_continuity_risk=CONTINUITY_RISK_HIGH,
+                source_reference=(
+                    'github.com/iridl/dlentries, entries/NOAA/NCEP/EMC/CFSv2/ENSEMBLE/FLXF/index.tex — '
+                    'lido de primeira mão via raw.githubusercontent.com (Rodada 4).',
+                    'WebSearch (Rodada 5) — página IRI "Data Library Sunset": desligamento completo '
+                    'esperado até o final de outubro de 2026, possivelmente antes.',
+                ),
+                notes='Representação A (Seção 9) — dado bruto/nativo por membro, a rota já usada pelo '
+                      'downloader/testes da Rodada 4 (nmme_download.montar_url_iri_cfsv2_member_level). '
+                      f'source_continuity_risk=HIGH: legacy_service_expected_shutdown='
+                      f'{LEGACY_SERVICE_EXPECTED_SHUTDOWN} (aproximado, não uma garantia contratual).',
+            ),
+            RotaMemberLevel(
+                data_backend=SOURCE_BACKEND_IRIDL_LEGACY,
+                dataset_representation=REPR_NMME_HARMONIZED_MONTHLY,
+                dataset_path='SOURCES/.Models/.NMME/.NCEP-CFSv2/.HINDCAST/.MONTHLY/.prec/',
+                variable_name='prec', units_expected='mm/day',
+                member_dimension='M', lead_dimension='L', init_dimension='S',
+                lat_dimension='Y', lon_dimension='X',
+                member_axis_size=24, grid_shape='360x181 (regular 1°x1°)',
+                status=ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY,
+                source_continuity_risk=CONTINUITY_RISK_HIGH,
+                source_reference=(
+                    'github.com/iridl/dlentries, entries/Models/NMME/NCEP-CFSv2/HINDCAST/MONTHLY/'
+                    'index.tex — lido de primeira mão via raw.githubusercontent.com (Rodada 5): S '
+                    '1/jan/1982 a 1/dez/2010 (mensal), L "0.5 1 9.5", M "/M 24 NewIntegerGRID", X "0.0 '
+                    '1. 359." (360 pontos), Y "90. 1. -90." (181 pontos), variável "prec" em kg/m²/s '
+                    'convertida para mm/day pelo próprio catálogo (unitconvert).',
+                ),
+                notes='Representação B (Seção 9) — amostra harmonizada do NMME (mais próxima do '
+                      'produto NMME3 "pooled"/24-membros documentado no manual, Rodada 2, mas NÃO '
+                      'confirmada como sendo literalmente o mesmo dado — nunca reconciliada com a '
+                      'Representação A nesta rodada, instrução explícita da revisão). Nenhum downloader '
+                      'foi escrito para esta representação especificamente nesta rodada — registrada '
+                      'para auditoria/futuro uso, não é a rota padrão escolhida por '
+                      'nmme_download.escolher_backend_member_level (que prioriza a Representação A).',
+            ),
+        ),
     ),
     SistemaNMME(
         centre='ECCC', model_name='CanESM5', model_version='CanESM5 (uma fonte cita "CanESM5.1" — '
@@ -865,6 +1077,31 @@ def _validar_catalogo(catalogo):
             raise ValueError(f"{chave}: data_access_status=POC_READY_DOCUMENTED exige "
                               f"member_level_dataset_path E precip_variable preenchidos (Seção 4 da "
                               f"Rodada 4 — 'documentado o bastante para testar' não é omissão).")
+        for r in s.member_level_routes:
+            rchave = f'{chave}/{r.data_backend}/{r.dataset_representation}'
+            if r.data_backend not in SOURCE_BACKEND_VALIDOS:
+                raise ValueError(f"{rchave}: data_backend inválido: {r.data_backend!r} (precisa ser "
+                                  f"um de {sorted(SOURCE_BACKEND_VALIDOS)}).")
+            if r.dataset_representation not in REPR_VALIDOS:
+                raise ValueError(f"{rchave}: dataset_representation inválido: "
+                                  f"{r.dataset_representation!r} (precisa ser um de {sorted(REPR_VALIDOS)}).")
+            if r.status not in ROUTE_STATUS_VALIDOS:
+                raise ValueError(f"{rchave}: status de rota inválido: {r.status!r} (precisa ser um de "
+                                  f"{sorted(ROUTE_STATUS_VALIDOS)}).")
+            if r.source_continuity_risk not in CONTINUITY_RISK_VALIDOS:
+                raise ValueError(f"{rchave}: source_continuity_risk inválido: "
+                                  f"{r.source_continuity_risk!r} (precisa ser um de "
+                                  f"{sorted(CONTINUITY_RISK_VALIDOS)}).")
+            if r.status == ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY and \
+                    (r.dataset_path is None or r.variable_name is None):
+                raise ValueError(f"{rchave}: status=POC_READY_DOCUMENTED_LEGACY exige dataset_path E "
+                                  f"variable_name preenchidos (Seção 4/5, Rodada 5).")
+            if r.status == ROUTE_STATUS_DISCOVERY_REQUIRED and r.dataset_path is not None:
+                raise ValueError(f"{rchave}: status=DISCOVERY_REQUIRED nunca pode ter dataset_path "
+                                  f"preenchido — isso seria inventar URL por adivinhação (Seção 12).")
+            if not r.source_reference:
+                raise ValueError(f"{rchave}: rota sem source_reference — nada pode ser registrado sem "
+                                  f"citação (Seção 35-A aplicada às rotas).")
     return True
 
 

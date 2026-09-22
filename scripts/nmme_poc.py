@@ -134,7 +134,7 @@ def plano_poc(sistemas=None, origem=POC_ORIGEM, leads=LEADS):
         ],
         'periodo_comum_documentado': f"{cp['common_start']}-{cp['common_end']}" if cp['common_start']
         else 'UNCONFIRMED',
-        'requests_previstos': len(executaveis),
+        'requests_previstos': len(prontos_teste_real),
         'modelos': info, 'artifacts_esperados': ARTIFACT_FILENAMES,
         'aviso': 'POC de infraestrutura (Seção 18/35-S) — nunca calcula skill. Só valida acesso/'
                  'modelo/versão/membros/variável/unidade/grade/leads/target month/parsing/conversão. '
@@ -297,6 +297,28 @@ def montar_metadata(sistemas=None, resultado_poc=None):
     prontos_teste_real = ncat.sistemas_poc_prontos_para_teste_real(sistemas)
     cp = ncat.common_period_json(sistemas)
     r = resultado_poc or {}
+
+    # Seção 10, Rodada 5 (correção final) — qual backend/representação
+    # SERIA usado (decisão catalog-driven, nunca depende de um POC real
+    # ter rodado) vs. o que foi de fato OBSERVADO num subset real
+    # (esses últimos ficam NAO_EXECUTADO_NESTA_TAREFA, igual aos outros
+    # campos empíricos, até o primeiro POC real abrir um arquivo).
+    cfsv2_candidatos = [s for s in sistemas if s.centre == 'NOAA_NCEP' and s.model_name == 'CFSv2']
+    if cfsv2_candidatos and cfsv2_candidatos[0].member_level_routes:
+        escolha = ndl.escolher_backend_member_level(cfsv2_candidatos[0])
+        rota_escolhida = escolha['rota']
+        data_backend_used = rota_escolhida.data_backend
+        dataset_representation = rota_escolhida.dataset_representation
+        legacy_or_current = ('legacy' if rota_escolhida.data_backend == ncat.SOURCE_BACKEND_IRIDL_LEGACY
+                              else 'current')
+        service_status = rota_escolhida.status
+        backend_fallback_ocorreu = escolha['fallback_ocorreu']
+        backend_fallback_motivo = escolha['motivo']
+    else:
+        data_backend_used = dataset_representation = legacy_or_current = service_status = 'NAO_APLICAVEL'
+        backend_fallback_ocorreu = False
+        backend_fallback_motivo = 'Nenhum sistema com member_level_routes no conjunto avaliado.'
+
     return {
         'fase': '2C.1', 'purpose': 'infrastructure_validation',
         'scientific_evaluation_applicable': False,
@@ -333,12 +355,30 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'temporal_mapping_status': r.get('temporal_mapping_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'units_status': r.get('units_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'grid_status': r.get('grid_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 10, Rodada 5 — decisão de backend/representação (catalog-
+        # driven, sempre computável) vs. observações empíricas de um
+        # subset real (só depois do primeiro POC real, Seção 38/50).
+        'data_backend_used': data_backend_used,
+        'dataset_representation': dataset_representation,
+        'legacy_or_current': legacy_or_current,
+        'service_status': service_status,
+        'backend_fallback_ocorreu': backend_fallback_ocorreu,
+        'backend_fallback_motivo': backend_fallback_motivo,
+        'member_axis_observed': r.get('member_axis_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'member_count_non_missing': r.get('member_count_non_missing', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'lead_axis_observed': r.get('lead_axis_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'variable_observed': r.get('variable_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'units_observed': r.get('units_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'legacy_service_expected_shutdown': ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN,
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'nota': 'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. '
                 'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S. '
                 'n_models_poc_executable=0 continua honesto (nenhum subset real foi de fato aberto). '
-                'n_models_poc_ready_for_real_test=1 (CFSv2, Rota B/IRI member-level, Rodada 4) — '
-                '"pronto para testar" não é "já confirmado" (Seção 4).',
+                'n_models_poc_ready_for_real_test=1 (CFSv2) — "pronto para testar" não é "já '
+                'confirmado" (Seção 4). data_backend_used reflete a escolha operacional atual (Seção '
+                f'6, Rodada 5) — IRIDL_LEGACY como fallback documentado enquanto forecast.ccsr '
+                f'permanecer {ncat.ROUTE_STATUS_DISCOVERY_REQUIRED} (Seção 12); desligamento do IRIDL '
+                f'legado esperado até {ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN} (aproximado).',
     }
 
 
@@ -458,13 +498,47 @@ def gerar_relatorio_markdown(sistemas=None):
                "abril/2026 por falta de financiamento — verificar se o serviço segue no ar deve ser o "
                "primeiro passo de qualquer tentativa real contra esta rota."]
 
+    escolha_backend = ndl.escolher_backend_member_level(cfsv2)
+    linhas += ["", "## Sunset do IRIDL e migração para forecast.ccsr (Rodada 5, correção final)", "",
+               f"O IRIDL legado está em processo de desligamento — a IRI confirma (WebSearch, "
+               f"corroborado de forma consistente em múltiplas buscas independentes; "
+               f"iri.columbia.edu segue bloqueado para WebFetch direto) que o desligamento completo é "
+               f"esperado até **{ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN}**, possivelmente antes — "
+               "aproximado, não uma garantia contratual (Seção 7). A IRI está migrando NMME/SubX/S2S "
+               "para **forecast.ccsr.columbia.edu** (Columbia Climate School/CCSR), em beta desde "
+               "~dez/2025-jan/2026, hospedando inicialmente 4 dos 5 modelos NMME ativos — CFSv2 "
+               "sendo adicionado gradualmente (\"early month samples\" já citado pela revisão "
+               "externa). `forecast.ccsr.columbia.edu` segue BLOQUEADO para WebFetch direto nesta "
+               "sessão — nenhum endpoint exato foi encontrado, e por isso a rota fica registrada "
+               f"como **{ncat.ROUTE_STATUS_DISCOVERY_REQUIRED}** (Seção 12: nunca construir URL por "
+               "tentativa de padrão).",
+               "",
+               "**Abstração de backend (Seção 4)**: `nmme_catalogo.RotaMemberLevel` separa "
+               "`data_backend`/`dataset_representation`/`dataset_path`/`variable_name`/"
+               "`units_expected`/as 5 dimensões — a lógica científica (POC_ORIGEM, H1-H6, sem skill) "
+               "não depende da sintaxe Ingrid. `nmme_download.escolher_backend_member_level()` decide "
+               f"a prioridade operacional (Seção 6): CFSv2 hoje usa **{escolha_backend['rota'].data_backend}"
+               f"/{escolha_backend['rota'].dataset_representation}** "
+               f"(fallback_ocorreu={escolha_backend['fallback_ocorreu']}) — {escolha_backend['motivo']}",
+               "",
+               "**Duas representações do CFSv2 legado, nunca reconciliadas (Seção 9)**: A) "
+               "raw/native ensemble (M=28, grade 384×190 Gaussiana, variável PRATE) — a rota usada "
+               "pelo downloader/testes; B) NMME harmonized/monthly sample (M=24, grade 360×181 "
+               "regular 1°, variável prec) — mais próxima do produto NMME3 pooled documentado no "
+               "manual, mas não confirmada como o mesmo dado. Todo uso real deve declarar "
+               "explicitamente qual representação usou."]
+
     linhas += ["", "## Próxima etapa", "",
-               f"CFSv2 (Rota B, IRI member-level) está POC_READY_DOCUMENTED — a próxima etapa é uma "
-               f"tentativa real pequena e controlada (1 origem, {_origem_str(*POC_ORIGEM)}, H1-H6, "
-               "todos os membros, só o ponto de São Bento) para confirmar endpoint/variável/unidade/"
-               "dimensões/acesso e então, só depois disso, considerar CFSv2 CONFIRMED (Seção 4). Os "
-               "outros 6 candidatos permanecem como estavam — não investigados nesta rodada (Seção 16 "
-               "da tarefa) — e só entram na fila depois de CFSv2 provado. Fase 2C.2 "
+               f"CFSv2 está POC_READY_DOCUMENTED_LEGACY (Rota IRIDL_LEGACY/Representação A) — a "
+               f"próxima etapa é uma tentativa real pequena e controlada (1 origem, "
+               f"{_origem_str(*POC_ORIGEM)}, H1-H6, todos os membros, só o ponto de São Bento) para "
+               "confirmar endpoint/variável/unidade/dimensões/acesso e então, só depois disso, "
+               "considerar CFSv2 CONFIRMED (Seção 4). Em paralelo, acompanhar forecast.ccsr: assim "
+               "que um endpoint real for documentado, promover a rota CCSR_BETA de DISCOVERY_REQUIRED "
+               "para um status pronto para teste, dado que é a preferência operacional de longo prazo "
+               f"(Seção 6) — o IRIDL legado tem desligamento esperado em "
+               f"{ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN}. Os outros 6 candidatos permanecem como "
+               "estavam — não investigados nesta rodada (Seção 16 da tarefa). Fase 2C.2 "
                "(calibração/skill) continua fora do escopo desta entrega."]
     return '\n'.join(linhas) + '\n'
 
