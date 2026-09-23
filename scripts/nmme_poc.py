@@ -324,6 +324,54 @@ class DimensoesInvalidasRota(AcessoRotaError):
     status = 'DIMS_INVALID'
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão pós-execução #1 (Seção 1/2/6) — execução real encontrou
+# DATASET_OPEN_ERROR nas duas representações do IRIDL_LEGACY:
+# "unable to decode time units 'months since 1960-01-01' with calendar
+# '360'. Try opening your dataset with decode_times=False or installing
+# cftime". Isso NÃO é SERVICE_UNAVAILABLE — a URL respondeu, o NetCDF
+# foi baixado, só a decodificação de tempo do xarray falhou (calendário
+# 360_day sem cftime instalado). `cftime` foi adicionado a
+# requirements-c3s.txt (Seção 1) — resolve a maioria dos casos na
+# primeira tentativa. Esta função é a segunda linha de defesa: só cai
+# para decode_times=False quando a falha for ESPECIFICAMENTE de
+# decodificação temporal (nunca um catch-all — Seção 2/10-C).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _e_erro_decode_temporal(exc):
+    """Reconhece a assinatura do erro de decodificação temporal CF/
+    calendar do xarray — a mensagem real observada na execução #1
+    sugere explicitamente 'decode_times=False' como saída, e/ou fala em
+    decodificar tempo e calendário juntos. Qualquer outro erro (arquivo
+    corrompido, HTML de erro salvo como .nc, variável ausente, etc.)
+    NÃO casa aqui e segue como DATASET_OPEN_ERROR comum, sem acionar o
+    fallback (Seção 6/10-C — nunca um catch-all)."""
+    texto = str(exc).lower()
+    return 'decode_times=false' in texto or ('decode time' in texto and 'calendar' in texto)
+
+
+def abrir_dataset_com_fallback_temporal(caminho, abrir_fn):
+    """Seção 1/2 — primeira tentativa é a normal (decode_times padrão,
+    cftime instalado decodifica 360_day e outros calendários CF não-
+    padrão de primeira). Só se a falha for ESPECIFICAMENTE de
+    decodificação temporal, tenta de novo com decode_times=False e
+    devolve time_decode_mode=RAW_NUMERIC_CF — nesse modo as unidades/
+    calendário brutos da coordenada de inicialização continuam
+    disponíveis para auditoria (nmme_processar.inspecionar_metadata_
+    temporal), mas o mapeamento temporal L<->mês-alvo NUNCA é
+    considerado confirmado a partir de valores não decodificados (Seção
+    2/8 — nmme_processar.avaliar_mapeamento_temporal recusa a tentar).
+    Se a segunda tentativa também falhar, a exceção original desse
+    segundo erro propaga normalmente (vira DATASET_OPEN_ERROR de
+    verdade no chamador — não é mascarada)."""
+    try:
+        return abrir_fn(caminho), nproc.TIME_DECODE_MODE_CF_DATETIME
+    except Exception as e:
+        if not _e_erro_decode_temporal(e):
+            raise
+        return abrir_fn(caminho, decode_times=False), nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
+
+
 def validar_acesso_dataset_real(ds, rota):
     """Seção 5/6 — validação EMPÍRICA do dataset aberto de verdade
     contra o que a rota documentava: formato utilizável, variável
@@ -472,37 +520,72 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
 
     access_audit_linhas = []
     ds = fatos = rota_usada = url_usada = None
+    time_decode_mode_usada = calendar_observed_usada = time_units_observed_usada = ''
     for rota in ordem:
-        url = None
+        url = destino = None
+        cache_hit = False
+        download_status = dataset_open_status = 'NAO_TENTADO'
+        time_decode_mode = calendar_observed = time_units_observed = ''
         try:
             if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
                 raise AcessoRotaError(f"CCSR_BETA está {rota.status} — não tentado (Seção 12).")
             url = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1])
-            destino = ndl.caminho_cache(sistema, ano, mes)
+            # Seção 3/4 (revisão pós-execução #1) — path de cache
+            # INDEPENDENTE por backend+representação (nunca mais
+            # compartilhado entre Representação A e B do mesmo mês, que
+            # produzem dados diferentes), com hash da URL como defesa
+            # extra.
+            destino = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
+                                          ano, mes, url=url)
             try:
                 caminho, cache_hit = baixar_fn(url, destino)
-            except AcessoRotaError:
+                download_status = 'OK'
+            except AcessoRotaError as e:
+                download_status = e.status
                 raise
             except Exception as e:
+                download_status = 'HTTP_ERROR'
                 raise HttpErrorRota(f"{type(e).__name__}: {e}") from e
             try:
-                ds_tentativa = abrir_fn(caminho)
-            except AcessoRotaError:
+                ds_tentativa, time_decode_mode = abrir_dataset_com_fallback_temporal(caminho, abrir_fn)
+                dataset_open_status = 'OK'
+            except AcessoRotaError as e:
+                dataset_open_status = e.status
                 raise
             except Exception as e:
+                dataset_open_status = 'DATASET_OPEN_ERROR'
                 raise DatasetOpenErrorRota(f"{type(e).__name__}: {e}") from e
+            # Seção 7 — calendário/unidades de tempo REALMENTE
+            # observados no dataset aberto, registrados ANTES de
+            # qualquer validação subsequente poder reprovar a rota (nunca
+            # perder essa informação de auditoria mesmo se a rota for
+            # descartada por outro motivo abaixo).
+            metadata_temporal = nproc.inspecionar_metadata_temporal(ds_tentativa, rota.init_dimension)
+            calendar_observed = metadata_temporal['calendar_observed']
+            time_units_observed = metadata_temporal['time_units_observed']
             fatos_tentativa = validar_acesso_dataset_real(ds_tentativa, rota)
         except Exception as e:
             status = getattr(e, 'status', 'SERVICE_UNAVAILABLE')
             access_audit_linhas.append({
                 'backend': rota.data_backend, 'dataset_representation': rota.dataset_representation,
-                'source_url': url or '', 'status': status, 'cache_hit': False,
+                'source_url': url or '', 'status': status, 'cache_hit': cache_hit,
+                'cache_path': str(destino) if destino else '',
+                'download_status': download_status, 'dataset_open_status': dataset_open_status,
+                'time_decode_mode': time_decode_mode, 'calendar_observed': calendar_observed,
+                'time_units_observed': time_units_observed,
                 'motivo': f'{type(e).__name__}: {e}'})
             continue
         access_audit_linhas.append({
             'backend': rota.data_backend, 'dataset_representation': rota.dataset_representation,
-            'source_url': url, 'status': 'OK', 'cache_hit': cache_hit, 'motivo': ''})
+            'source_url': url, 'status': 'OK', 'cache_hit': cache_hit,
+            'cache_path': str(destino) if destino else '',
+            'download_status': download_status, 'dataset_open_status': dataset_open_status,
+            'time_decode_mode': time_decode_mode, 'calendar_observed': calendar_observed,
+            'time_units_observed': time_units_observed, 'motivo': ''})
         ds, fatos, rota_usada, url_usada = ds_tentativa, fatos_tentativa, rota, url
+        time_decode_mode_usada = time_decode_mode
+        calendar_observed_usada = calendar_observed
+        time_units_observed_usada = time_units_observed
         break
 
     access_audit_df = pd.DataFrame(access_audit_linhas)
@@ -536,7 +619,8 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
-        mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal)
+        mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
+                                                          time_decode_mode=time_decode_mode_usada)
         L_sel = mapeamento['source_L']
         fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
                        if rota_usada.lead_dimension in ponto.dims else ponto)
@@ -629,6 +713,18 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'grid_shape_documented': grid_shape_documented,
         'subset_grid_shape_observed': subset_grid_shape_observed,
         'longitude_convention': longitude_convention,
+        # Seção 1/2/6/7/11 (revisão pós-execução #1) — modo de
+        # decodificação temporal realmente usado para abrir o dataset
+        # vencedor, e o calendário/unidades observados na coordenada de
+        # inicialização. download_status/dataset_open_status ficam
+        # 'OK'/'OK' aqui por construção (só chegam a este ponto do
+        # código as rotas que abriram com sucesso) — a distinção entre
+        # os dois importa no access_audit, por tentativa, inclusive nas
+        # que falharam.
+        'time_decode_mode': time_decode_mode_usada,
+        'calendar_observed': calendar_observed_usada,
+        'time_units_observed': time_units_observed_usada,
+        'download_status': 'OK', 'dataset_open_status': 'OK',
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
         'n_raw_expected': n_raw_expected, 'n_raw': len(raw_df), 'raw_completo': raw_completo,
@@ -816,6 +912,19 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'grid_shape_documented': r.get('grid_shape_documented', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'subset_grid_shape_observed': r.get('subset_grid_shape_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'longitude_convention': r.get('longitude_convention', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 1/2/6/7/11 (revisão pós-execução #1) — modo de
+        # decodificação temporal e calendário/unidades REALMENTE
+        # observados na rota vencedora; download_status/
+        # dataset_open_status distintos (a execução #1 provou
+        # DOWNLOAD_SUCCESS/DATASET_OPEN_ERROR, nunca SERVICE_UNAVAILABLE
+        # — perder essa distinção some com a informação de que o IRIDL
+        # está funcional). O detalhe por TENTATIVA/rota (inclusive as
+        # que falharam) fica em nmme_poc_access_audit.csv, não aqui.
+        'time_decode_mode': r.get('time_decode_mode', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'calendar_observed': r.get('calendar_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'time_units_observed': r.get('time_units_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'download_status': r.get('download_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'dataset_open_status': r.get('dataset_open_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'nota': 'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. '
@@ -1006,7 +1115,13 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
         'mapping_status', 'evidence', 'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
-        'backend', 'dataset_representation', 'source_url', 'status', 'cache_hit', 'motivo']))
+        # Seção 11 (revisão pós-execução #1) — colunas de auditoria por
+        # rota/tentativa: cache_path/cache_hit reais, download_status
+        # distinto de dataset_open_status, modo de decodificação
+        # temporal e calendário/unidades observados.
+        'backend', 'dataset_representation', 'source_url', 'status', 'cache_hit', 'cache_path',
+        'download_status', 'dataset_open_status', 'time_decode_mode', 'calendar_observed',
+        'time_units_observed', 'motivo']))
     raw_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_raw.csv', index=False)
     temporal_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_temporal_audit.csv', index=False)
     access_audit_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_access_audit.csv', index=False)

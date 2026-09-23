@@ -30,6 +30,8 @@ validado — o primeiro uso real é o próprio POC (Seção 17/38), que deve
 falhar explicitamente (nunca simular sucesso) se o path estiver errado.
 """
 
+import hashlib
+import json
 import sys
 import time
 from pathlib import Path
@@ -290,12 +292,31 @@ def verificar_acesso():
                      'de prosseguir, nunca inserir segredo em código (Seção 29).'}
 
 
-def caminho_cache(sistema, ano, mes):
+def caminho_cache(sistema, data_backend, dataset_representation, ano, mes, url=None):
     """Nunca commitado (Seção 28, ver .gitignore) — só NetCDF pequeno já
-    recortado por ponto (Seção 9), nunca dataset global."""
+    recortado por ponto (Seção 9), nunca dataset global.
+
+    Revisão pós-execução #1 (Seção 3/4) — path INDEPENDENTE por
+    backend+representação: a versão anterior só variava por
+    sistema/ano/mês, então a Representação A e a Representação B do
+    MESMO sistema/mês colidiam no mesmo arquivo — bug real que fez a
+    tentativa de fallback (Representação A) reabrir o cache já gravado
+    pela tentativa anterior (Representação B), mostrando o MESMO erro
+    de decodificação temporal nas duas linhas do access_audit, como se
+    fossem falhas independentes. `url`, quando informado, entra como
+    hash curto adicional — defesa extra contra qualquer outra colisão
+    de path não prevista aqui (Seção 3, "pode adicionalmente
+    incorporar")."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    nome = f'{sistema.centre}_{sistema.model_name}_{ano:04d}-{mes:02d}.nc'
-    return CACHE_DIR / nome
+    nome = (f'{sistema.centre}_{sistema.model_name}_{data_backend}_{dataset_representation}_'
+            f'{ano:04d}-{mes:02d}')
+    if url:
+        nome += '_' + hashlib.sha256(url.encode('utf-8')).hexdigest()[:10]
+    return CACHE_DIR / f'{nome}.nc'
+
+
+def _caminho_sidecar(destino):
+    return destino.with_name(destino.name + '.meta.json')
 
 
 def baixar_arquivo(url, destino, sleep_fn=time.sleep, max_tentativas=MAX_TENTATIVAS):
@@ -304,10 +325,25 @@ def baixar_arquivo(url, destino, sleep_fn=time.sleep, max_tentativas=MAX_TENTATI
     c3s_validacao_multiorigem.py::_baixar_com_retry_e_cache (cache
     local, retry com backoff, falha explícita), via `requests` (HTTP
     simples) em vez de `cdsapi` — protocolo diferente, mesmo desenho.
-    Devolve (caminho, cache_hit)."""
+    Devolve (caminho, cache_hit).
+
+    Revisão pós-execução #1 (Seção 4) — `cache_hit=True` só é aceito
+    quando um sidecar `.meta.json` ao lado do arquivo confirma que ele
+    foi baixado desta MESMA `url` (nunca só porque um arquivo com esse
+    nome existe): defesa em profundidade além do path já ser único por
+    backend/representação/hash de URL (`caminho_cache`) — um arquivo
+    presente sem sidecar confiável, ou com `source_url` diferente, é
+    tratado como cache não verificável e baixado de novo, nunca
+    reaproveitado às cegas."""
     destino = Path(destino)
+    sidecar = _caminho_sidecar(destino)
     if destino.exists() and destino.stat().st_size > 0:
-        return destino, True
+        try:
+            meta = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+        except Exception:
+            meta = {}
+        if meta.get('source_url') == url:
+            return destino, True
     ultimo_erro = None
     for tentativa in range(1, max_tentativas + 1):
         try:
@@ -315,6 +351,7 @@ def baixar_arquivo(url, destino, sleep_fn=time.sleep, max_tentativas=MAX_TENTATI
             resp.raise_for_status()
             destino.parent.mkdir(parents=True, exist_ok=True)
             destino.write_bytes(resp.content)
+            sidecar.write_text(json.dumps({'source_url': url}))
             return destino, False
         except Exception as e:
             ultimo_erro = e
