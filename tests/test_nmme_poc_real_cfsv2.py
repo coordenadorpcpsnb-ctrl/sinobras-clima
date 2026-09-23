@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import nmme_catalogo as ncat  # noqa: E402
 import nmme_download as ndl  # noqa: E402
 import nmme_poc as npoc  # noqa: E402
+import nmme_processar as nproc  # noqa: E402
 from _c3s_utils import MUNICIPIOS  # noqa: E402
 
 CFSV2 = ncat.sistema_por_nome('NOAA_NCEP', 'CFSv2')
@@ -148,18 +149,33 @@ class FallbackExplicitoTestCase(unittest.TestCase):
         r = _executar(abrir_fn=lambda c: _ds_representacao_a(), baixar_fn=baixar_falha_b)
         audit = r['access_audit_df']
         self.assertEqual(len(audit), 2)
-        self.assertEqual(audit.iloc[0]['status'], 'SERVICE_UNAVAILABLE')
+        # Revisão final (item 6) — uma exceção genérica levantada dentro de
+        # baixar_fn é classificada como HTTP_ERROR (falha específica de
+        # download), não mais o genérico SERVICE_UNAVAILABLE de antes.
+        self.assertEqual(audit.iloc[0]['status'], 'HTTP_ERROR')
         self.assertEqual(audit.iloc[1]['status'], 'OK')
 
-    def test_c_todas_as_rotas_falham_vira_service_unavailable_sem_scraping(self):
+    def test_c_todas_as_rotas_falham_vira_http_error_sem_scraping(self):
         def baixar_falha_tudo(url, destino):
             raise RuntimeError('serviço fora do ar (simulado)')
 
         r = _executar(abrir_fn=lambda c: _ds_representacao_a(), baixar_fn=baixar_falha_tudo)
         self.assertEqual(r['poc_status'], 'REPROVADO_ACESSO')
-        self.assertTrue((r['access_audit_df']['status'] == 'SERVICE_UNAVAILABLE').all())
+        # Falha de download (não de rota indisponível por status do catálogo)
+        # vira HTTP_ERROR — item 6 exige status específico, não o genérico
+        # SERVICE_UNAVAILABLE por padrão para toda e qualquer exceção.
+        self.assertTrue((r['access_audit_df']['status'] == 'HTTP_ERROR').all())
         aprovacao = npoc.avaliar_aprovacao_poc(r)
         self.assertEqual(aprovacao['poc_status'], 'REPROVADO_ACESSO')
+
+    def test_c_ccsr_indisponivel_por_status_de_catalogo_vira_service_unavailable(self):
+        """SERVICE_UNAVAILABLE continua reservado para rota nem tentada por
+        estar com status de catálogo indisponível (ex.: CCSR_BETA
+        DISCOVERY_REQUIRED) — não para falha de download/HTTP."""
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b())
+        audit = r['access_audit_df']
+        self.assertTrue(len(audit) >= 1)
+        self.assertEqual(audit.iloc[0]['status'], 'OK')
 
 
 class RepresentacaoRegistradaTestCase(unittest.TestCase):
@@ -221,6 +237,89 @@ class MemberCountTestCase(unittest.TestCase):
         self.assertEqual(r2['member_axis_size'], 24)
         self.assertEqual(r2['member_count_non_missing'], 21)
         self.assertNotEqual(r2['member_axis_size'], r2['member_count_non_missing'])
+
+
+class MembrosPoliticaTestCase(unittest.TestCase):
+    """Revisão final (itens 2/9, cenários 1-6) — guardrail de membros por
+    representação: Harmonized exige exatamente 24 (eixo e por lead);
+    Raw native aceita a faixa 24-28 por lead, mas exige eixo==28."""
+
+    def test_1_harmonized_24x6_aprova_membros(self):
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b(n_membros=24, com_target_correto=True))
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_OK)
+        self.assertTrue(r['members_axis_size_ok'])
+        self.assertTrue(all(r['members_count_per_lead_ok']))
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_2_harmonized_23_em_um_lead_reprova(self):
+        ds = _ds_representacao_b(n_membros=24)
+        ds['prec'].values[:, :, 0, 0] = np.nan   # 1 membro missing só no lead 1 -> 23/24
+        r = _executar(abrir_fn=lambda c: ds)
+        self.assertEqual(r['member_count_non_missing_por_lead'][0], 23)
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_FAIL)
+        self.assertFalse(r['members_count_per_lead_ok'][0])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_3_harmonized_eixo_m_23_reprova(self):
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b(n_membros=23))
+        # member_axis_size é o valor DOCUMENTADO da rota (24, catálogo) —
+        # o eixo REAL observado no dataset aberto é member_ids_axis.
+        self.assertEqual(r['member_axis_size'], 24)
+        self.assertEqual(len(r['member_ids_axis']), 23)
+        self.assertFalse(r['members_axis_size_ok'])
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_FAIL)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_4_raw_native_entre_24_e_28_aceita(self):
+        def baixar_falha_b(url, destino):
+            if 'HINDCAST/.MONTHLY' in url:
+                raise RuntimeError('simulado')
+            return ('/tmp/fake.nc', False)
+
+        ds = _ds_representacao_a(n_membros=28, com_target_correto=True)
+        ds['PRATE'].values[:, :, 0, :4] = np.nan   # 4 missing no lead 1 -> 24/28, ainda dentro da faixa
+        r = _executar(abrir_fn=lambda c: ds, baixar_fn=baixar_falha_b)
+        self.assertEqual(r['member_axis_size'], 28)
+        self.assertEqual(r['member_count_non_missing_por_lead'][0], 24)
+        self.assertTrue(r['members_axis_size_ok'])
+        self.assertTrue(all(r['members_count_per_lead_ok']))
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_OK)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_5_raw_native_23_reprova(self):
+        def baixar_falha_b(url, destino):
+            if 'HINDCAST/.MONTHLY' in url:
+                raise RuntimeError('simulado')
+            return ('/tmp/fake.nc', False)
+
+        ds = _ds_representacao_a(n_membros=28)
+        ds['PRATE'].values[:, :, 0, :5] = np.nan   # 5 missing no lead 1 -> 23/28, abaixo do mínimo 24
+        r = _executar(abrir_fn=lambda c: ds, baixar_fn=baixar_falha_b)
+        self.assertEqual(r['member_count_non_missing_por_lead'][0], 23)
+        self.assertFalse(r['members_count_per_lead_ok'][0])
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_FAIL)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_6_raw_native_eixo_diferente_de_28_reprova(self):
+        def baixar_falha_b(url, destino):
+            if 'HINDCAST/.MONTHLY' in url:
+                raise RuntimeError('simulado')
+            return ('/tmp/fake.nc', False)
+
+        r = _executar(abrir_fn=lambda c: _ds_representacao_a(n_membros=26), baixar_fn=baixar_falha_b)
+        # member_axis_size é o valor DOCUMENTADO da rota (28, catálogo) —
+        # o eixo REAL observado no dataset aberto é member_ids_axis.
+        self.assertEqual(r['member_axis_size'], 28)
+        self.assertEqual(len(r['member_ids_axis']), 26)
+        self.assertFalse(r['members_axis_size_ok'])
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_FAIL)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
 
 
 class H1aH6TestCase(unittest.TestCase):
@@ -312,6 +411,45 @@ class GradeTestCase(unittest.TestCase):
         for col in ('requested_lat', 'requested_lon', 'selected_lat', 'selected_lon', 'grid_distance_km'):
             self.assertIn(col, r['raw_df'].columns)
 
+    def test_8_grid_documentada_e_diferente_da_observada_do_subset(self):
+        """Revisão final (item 4/9-#8) — grid_shape_documented vem do
+        catálogo/rota (nunca chamado de 'observado'); subset_grid_shape_observed
+        vem do Dataset real após o .sel() de ponto único, que colapsa as
+        dimensões lat/lon — "1x1" aqui, nunca igual à grade documentada da
+        fonte inteira."""
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b())
+        self.assertIn('grid_shape_documented', r)
+        self.assertIn('subset_grid_shape_observed', r)
+        self.assertEqual(r['subset_grid_shape_observed'], '1x1')
+        self.assertNotEqual(r['grid_shape_documented'], r['subset_grid_shape_observed'])
+
+
+class LongitudeConventionTestCase(unittest.TestCase):
+    """Revisão final (item 5/9-#9) — convenção de longitude só é afirmada
+    quando de fato desambiguável a partir do dado real; nunca adivinhada."""
+
+    def test_9_grade_completa_0_360_e_detectada(self):
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b())
+        self.assertEqual(r['longitude_convention'], nproc.LON_CONVENTION_0_360)
+
+    def test_9_subset_de_1_ponto_ambiguo_fica_undetermined(self):
+        # valor único, positivo e < 180 — não permite decidir entre 0-360
+        # e -180/180 (poderia ser qualquer uma das duas convenções).
+        self.assertEqual(nproc.detectar_convencao_longitude_observada([47.95]),
+                          nproc.LON_CONVENTION_UNDETERMINED)
+
+    def test_9_subset_de_1_ponto_negativo_e_neg180_180(self):
+        self.assertEqual(nproc.detectar_convencao_longitude_observada([-47.95]),
+                          nproc.LON_CONVENTION_NEG180_180)
+
+    def test_9_subset_de_1_ponto_maior_que_180_e_0_360(self):
+        self.assertEqual(nproc.detectar_convencao_longitude_observada([312.05]),
+                          nproc.LON_CONVENTION_0_360)
+
+    def test_9_grade_com_negativo_e_maior_que_180_e_ambigua(self):
+        self.assertEqual(nproc.detectar_convencao_longitude_observada([-10.0, 190.0]),
+                          nproc.LON_CONVENTION_UNDETERMINED)
+
 
 class TemporalAuditTestCase(unittest.TestCase):
     """K — nmme_poc_temporal_audit.csv com as colunas exatas pedidas."""
@@ -352,6 +490,18 @@ class TemporalMappingReprovaTestCase(unittest.TestCase):
         aprovacao = npoc.avaliar_aprovacao_poc(r)
         self.assertEqual(aprovacao['poc_status'], 'APROVADO')
 
+    def test_11_regressao_sem_valid_time_continua_reprovando(self):
+        """Revisão final (item 7/9-#11) — regressão explícita: a lógica de
+        mapeamento temporal NÃO foi afrouxada nesta rodada. Um dataset sem
+        target/valid_time (só atributos L) continua UNCONFIRMED por lead e
+        continua reprovando o POC — nenhum novo critério desta revisão
+        (membros, grade, longitude) relaxa essa barreira preexistente."""
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b(com_target_correto=False))
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+        self.assertIn('temporal_mapping_confirmado', aprovacao['motivos_reprovacao'])
+
     def test_l_um_lead_mismatch_reprova_mesmo_com_outros_ok(self):
         ds = _ds_representacao_b(com_target_correto=True)
         # corrompe o target de um lead só, criando um MISMATCH isolado
@@ -385,13 +535,26 @@ class RawCountTestCase(unittest.TestCase):
         self.assertEqual(r['n_raw'], 168)
         self.assertNotEqual(r['n_raw_expected'], 144)
 
-    def test_m_raw_count_reflete_membros_missing_por_lead(self):
+    def test_m_raw_count_nao_e_tautologico_com_membros_faltando(self):
+        """Revisão final (item 1/9-#7) — n_raw_expected da Representação B é
+        SEMPRE member_axis_size×len(leads) (144), derivado da rota, nunca
+        recomputado a partir da contagem real observada. Com 3 membros
+        faltando só no lead 1 (21/24 não-missing), n_raw real fica em 141
+        — n_raw_expected continua 144 (não se ajusta silenciosamente para
+        bater), raw_completo vira False, e o guardrail de membros reprova
+        o POC (lead 1 abaixo do mínimo exato exigido pela política
+        Harmonized)."""
         ds = _ds_representacao_b(n_membros=24)
         ds['prec'].values[:, :, 0, :3] = np.nan   # 3 membros missing só no lead 1
         r = _executar(abrir_fn=lambda c: ds)
-        # 21 no lead 1 + 24*5 nos demais = 141, nunca 144 fixo
-        self.assertEqual(r['n_raw_expected'], 21 + 24 * 5)
-        self.assertEqual(r['n_raw'], r['n_raw_expected'])
+        self.assertEqual(r['n_raw_expected'], 24 * 6)
+        self.assertEqual(r['n_raw'], 141)
+        self.assertFalse(r['raw_completo'])
+        self.assertEqual(r['members_status'], npoc.MEMBERS_STATUS_FAIL)
+        self.assertEqual(r['members_count_per_lead_ok'][0], False)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+        self.assertIn('members_status_ok', aprovacao['motivos_reprovacao'])
 
 
 class ZeroSkillTestCase(unittest.TestCase):

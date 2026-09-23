@@ -239,3 +239,45 @@ def contar_membros_nao_missing(valores_por_membro):
     membros válidos)."""
     v = np.asarray(valores_por_membro, dtype=float)
     return int(np.sum(~np.isnan(v)))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão final pré-execução (Seção 5) — convenção de longitude REALMENTE
+# observada no dataset aberto, nunca copiada do catálogo. Um subset já
+# recortado a 1 ponto normalmente não permite inferir a convenção da
+# grade inteira (um valor positivo <=180 é ambíguo nas duas convenções)
+# — nesse caso o resultado honesto é UNDETERMINED_FROM_POINT_SUBSET,
+# nunca uma adivinhação. Só desambigua quando o próprio valor observado
+# só é fisicamente possível numa convenção (>180 só existe em 0-360; <0
+# só existe em -180/180).
+# ══════════════════════════════════════════════════════════════════════════
+
+LON_CONVENTION_0_360 = '0_360'
+LON_CONVENTION_NEG180_180 = 'NEG180_180'
+LON_CONVENTION_UNDETERMINED = 'UNDETERMINED_FROM_POINT_SUBSET'
+
+
+def detectar_convencao_longitude_observada(valores_lon):
+    """`valores_lon`: array-like com os valores REAIS da coordenada de
+    longitude do dataset aberto (idealmente a grade inteira antes do
+    subset por ponto; se só houver 1 valor — caso comum de subset já
+    recortado — a desambiguação só é possível quando esse valor for
+    fisicamente exclusivo de uma convenção)."""
+    valores = np.atleast_1d(np.asarray(valores_lon, dtype=float))
+    if valores.size == 0:
+        return LON_CONVENTION_UNDETERMINED
+    if valores.size > 1:
+        tem_negativo, tem_maior_180 = bool(np.any(valores < 0)), bool(np.any(valores > 180))
+        if tem_negativo and tem_maior_180:
+            return LON_CONVENTION_UNDETERMINED   # grade ambígua/mista — nunca assumir
+        if tem_negativo:
+            return LON_CONVENTION_NEG180_180
+        if tem_maior_180:
+            return LON_CONVENTION_0_360
+        return LON_CONVENTION_UNDETERMINED   # todos os valores em [0,180] — ambíguo nas duas convenções
+    v = float(valores[0])
+    if v > 180:
+        return LON_CONVENTION_0_360
+    if v < 0:
+        return LON_CONVENTION_NEG180_180
+    return LON_CONVENTION_UNDETERMINED   # ponto único em [0,180] — não dá para inferir a convenção
