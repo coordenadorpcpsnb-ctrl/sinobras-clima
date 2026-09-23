@@ -426,6 +426,16 @@ class RotaMemberLevel:
     source_continuity_risk: str        # HIGH | BETA
     source_reference: tuple = field(default_factory=tuple)
     notes: str = ''
+    # Execução real #2 (Seção 4, item 7) — gate explícito para o Método B
+    # de confirmação temporal (nmme_processar._avaliar_semantica_
+    # forecast_period): só True quando a documentação oficial da
+    # COLEÇÃO específica desta rota (não uma convenção genérica
+    # assumida) já foi lida de primeira mão e registra S como
+    # forecast_reference_time / L como forecast_period em meses. Nunca
+    # True por padrão — cada rota precisa da própria citação em
+    # `mapping_reference`.
+    forecast_period_semantics_documented: bool = False
+    mapping_reference: tuple = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -716,7 +726,11 @@ CATALOGO = [
                 notes='Representação A (Seção 9) — dado bruto/nativo por membro, a rota já usada pelo '
                       'downloader/testes da Rodada 4 (nmme_download.montar_url_iri_cfsv2_member_level). '
                       f'source_continuity_risk=HIGH: legacy_service_expected_shutdown='
-                      f'{LEGACY_SERVICE_EXPECTED_SHUTDOWN} (aproximado, não uma garantia contratual).',
+                      f'{LEGACY_SERVICE_EXPECTED_SHUTDOWN} (aproximado, não uma garantia contratual). '
+                      'forecast_period_semantics_documented=False (default) — diferente da Representação '
+                      'B, o index.tex desta rota (FLXF/PRATE) NÃO foi lido com o mesmo nível de detalhe '
+                      'sobre a grade L; não promover para True sem essa citação específica (Seção 4-#7, '
+                      'execução real #2).',
             ),
             RotaMemberLevel(
                 data_backend=SOURCE_BACKEND_IRIDL_LEGACY,
@@ -742,6 +756,27 @@ CATALOGO = [
                       'foi escrito para esta representação especificamente nesta rodada — registrada '
                       'para auditoria/futuro uso, não é a rota padrão escolhida por '
                       'nmme_download.escolher_backend_member_level (que prioriza a Representação A).',
+                # Execução real #2 (run 35888809240, Seção 4-#7) — gate
+                # do Método B de confirmação temporal: o index.tex desta
+                # rota já foi lido de primeira mão (source_reference
+                # acima) e documenta explicitamente S como a grade de
+                # inicialização mensal (forecast_reference_time) e L
+                # como a grade de lead "0.5 1 9.5" em meses
+                # (forecast_period) — a mesma convenção S/L do IRI Data
+                # Library usada em todo este projeto (CLAUDE.md Seção
+                # 9). Os atributos standard_name/units REAIS do dataset
+                # aberto continuam checados empiricamente a cada
+                # execução (itens 1-6 do Método B); este campo só
+                # libera a TENTATIVA do Método B para esta rota
+                # específica, nunca confirma sozinho.
+                forecast_period_semantics_documented=True,
+                mapping_reference=(
+                    'github.com/iridl/dlentries, entries/Models/NMME/NCEP-CFSv2/HINDCAST/MONTHLY/'
+                    'index.tex (mesma fonte de source_reference, Rodada 5) — S documentado como grade '
+                    'mensal de inicialização (forecast_reference_time), L documentado como grade de '
+                    'lead "0.5 1 9.5" em meses (forecast_period), convenção padrão S/L do IRI Data '
+                    'Library.',
+                ),
             ),
         ),
     ),

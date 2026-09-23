@@ -456,8 +456,11 @@ class TemporalAuditTestCase(unittest.TestCase):
 
     def test_k_colunas_exatas(self):
         r = _executar(abrir_fn=lambda c: _ds_representacao_b())
+        # mapping_confirmation_method (Seção 5, execução real #2) — qual
+        # dos dois métodos confirmou (ou não) cada lead.
         colunas_esperadas = {'centre', 'model_name', 'init_date', 'H_lead', 'source_L',
-                              'target_month', 'mapping_status', 'evidence', 'notes'}
+                              'target_month', 'mapping_status', 'evidence',
+                              'mapping_confirmation_method', 'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
     def test_k_uma_linha_por_lead(self):
@@ -647,8 +650,11 @@ class CalendarCftimeCacheTestCase(unittest.TestCase):
                 coords={'S': da_S, 'L': np.arange(0.5, 6.5, 1.0), 'M': np.array([1, 2])})
             ds_escrever.to_netcdf(caminho)
 
-            ds_aberto, modo = npoc.abrir_dataset_com_fallback_temporal(caminho, xr.open_dataset)
+            ds_aberto, modo, info_calendar = npoc.abrir_dataset_com_fallback_temporal(caminho, xr.open_dataset)
             self.assertEqual(modo, nproc.TIME_DECODE_MODE_CF_DATETIME)
+            # decodificou de primeira (calendário já era '360_day', não
+            # um alias) — nada para normalizar.
+            self.assertFalse(info_calendar['calendar_normalization_applied'])
             # decodificado com sucesso (cftime instalado) — a coordenada
             # vira objeto de data real, não fica como número cru.
             self.assertNotEqual(str(ds_aberto['S'].dtype), 'float64')
@@ -669,10 +675,14 @@ class CalendarCftimeCacheTestCase(unittest.TestCase):
             self.assertEqual(kwargs.get('decode_times'), False)
             return _ds_representacao_b()
 
-        ds, modo = npoc.abrir_dataset_com_fallback_temporal('/tmp/fake-b.nc', abrir_com_erro_calendar)
+        ds, modo, info_calendar = npoc.abrir_dataset_com_fallback_temporal(
+            '/tmp/fake-b.nc', abrir_com_erro_calendar)
         self.assertEqual(modo, nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF)
         self.assertEqual(len(chamadas), 2)
         self.assertEqual(chamadas[1], {'decode_times': False})
+        # dataset sintético não tem atributo 'calendar' nenhum (nem '360'
+        # nem alias conhecido) — nada para normalizar, fica RAW_NUMERIC_CF.
+        self.assertFalse(info_calendar['calendar_normalization_applied'])
 
     def test_c_erro_generico_nao_aciona_fallback(self):
         chamadas = []
@@ -771,6 +781,200 @@ class CalendarCftimeCacheTestCase(unittest.TestCase):
                                                          time_decode_mode=nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF)
         self.assertEqual(resultado['mapping_status'], 'UNCONFIRMED')
         self.assertIn('RAW_NUMERIC_CF', resultado['evidence'])
+
+
+class CalendarAliasTestCase(unittest.TestCase):
+    """Execução real #2 (run 35888809240) — item 1/9-#1,#3: '360' é um
+    alias LEGADO DOCUMENTADO da convenção CF de '360_day', nunca tratado
+    como calendário desconhecido; só aliases evidenciados são aceitos."""
+
+    def test_1_calendar_360_normaliza_para_360_day(self):
+        self.assertEqual(nproc.normalizar_calendar_cf('360'), ('360_day', True))
+
+    def test_3_alias_desconhecido_nao_e_normalizado(self):
+        self.assertEqual(nproc.normalizar_calendar_cf('calendario-nunca-catalogado'),
+                          ('calendario-nunca-catalogado', False))
+
+
+def _rota_metodo_b(documented=True):
+    """Rota-fixture mínima para os testes do Método B — controla só
+    `forecast_period_semantics_documented`, sem depender dos detalhes
+    reais do catálogo (isola o teste da política de confirmação em si)."""
+    return ncat.RotaMemberLevel(
+        data_backend=ncat.SOURCE_BACKEND_IRIDL_LEGACY,
+        dataset_representation=ncat.REPR_NMME_HARMONIZED_MONTHLY,
+        dataset_path='fixture/teste', variable_name='prec', units_expected='mm/day',
+        member_dimension='M', lead_dimension='L', init_dimension='S',
+        lat_dimension='Y', lon_dimension='X',
+        member_axis_size=4, grid_shape='fixture',
+        status=ncat.ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY,
+        source_continuity_risk=ncat.CONTINUITY_RISK_HIGH,
+        forecast_period_semantics_documented=documented,
+        mapping_reference=('fixture de teste',) if documented else (),
+    )
+
+
+def _ds_metodo_b(s_periodo='2005-01', s_standard_name='forecast_reference_time',
+                   l_valores=(0.5, 1.5, 2.5, 3.5, 4.5, 5.5), l_units='months',
+                   l_standard_name='forecast_period', com_target=False):
+    """Dataset sintético SEM variável auxiliar de data-alvo (por padrão)
+    — o caso real da execução #2, onde só a semântica do eixo
+    forecast_period pôde confirmar o mapeamento."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    membros = np.array([1, 2, 3, 4])
+    rng = np.random.RandomState(21)
+    dados = 0.00003 + rng.rand(3, 3, len(l_valores), len(membros)) * 0.00004
+    l_attrs = {}
+    if l_standard_name is not None:
+        l_attrs['standard_name'] = l_standard_name
+    if l_units is not None:
+        l_attrs['units'] = l_units
+    da_L = xr.DataArray(np.array(l_valores, dtype=float), dims=('L',), attrs=l_attrs)
+    s_attrs = {'standard_name': s_standard_name} if s_standard_name else {}
+    da_S = xr.DataArray(pd.Timestamp(f'{s_periodo}-01'), attrs=s_attrs)
+    da = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                        coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S},
+                        attrs={'units': 'kg m-2 s-1'})
+    ds = xr.Dataset({'prec': da})
+    if com_target:
+        alvos = ['2005-01', '2005-02', '2005-03', '2005-04', '2005-05', '2005-06'][:len(l_valores)]
+        ds = ds.assign(target=(('L',), np.array(alvos)))
+    return ds
+
+
+class MetodoBSemanticaForecastPeriodTestCase(unittest.TestCase):
+    """Execução real #2 (Seção 4) — Método B: confirmação por semântica
+    documentada do eixo forecast_period, usada só quando não há
+    variável auxiliar de data-alvo (Método A tem precedência)."""
+
+    def test_4_s_forecast_reference_time_e_l_forecast_period_confirma_h1(self):
+        ds = _ds_metodo_b()
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'OK')
+        self.assertEqual(r['mapping_confirmation_method'],
+                          nproc.MAPPING_METHOD_FORECAST_PERIOD_SEMANTICS)
+        self.assertEqual(r['target_month'], '2005-01')
+
+    def test_5_h1_a_h6_resultam_jan_a_jun_2005(self):
+        ds = _ds_metodo_b()
+        rota = _rota_metodo_b()
+        alvos_esperados = ['2005-01', '2005-02', '2005-03', '2005-04', '2005-05', '2005-06']
+        for h, alvo in zip(range(1, 7), alvos_esperados):
+            r = nproc.avaliar_mapeamento_temporal(ds, h, pd.Period('2005-01', 'M'), rota=rota)
+            self.assertEqual(r['mapping_status'], 'OK')
+            self.assertEqual(r['target_month'], alvo)
+
+    def test_6_l_sem_unidade_months_nao_confirma(self):
+        ds = _ds_metodo_b(l_units='days')
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'UNCONFIRMED')
+        self.assertEqual(r['mapping_confirmation_method'], nproc.MAPPING_METHOD_NONE)
+
+    def test_7_l_sem_semantica_forecast_period_nao_confirma(self):
+        ds = _ds_metodo_b(l_standard_name=None)
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'UNCONFIRMED')
+
+    def test_8_origem_s_diferente_gera_mismatch(self):
+        ds = _ds_metodo_b(s_periodo='2007-03')
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'MISMATCH')
+
+    def test_9_valores_l_inesperados_geram_mismatch(self):
+        ds = _ds_metodo_b(l_valores=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'MISMATCH')
+
+    def test_10_variavel_alvo_tem_precedencia_quando_presente(self):
+        """Mesmo com toda a semântica forecast_period corretamente
+        identificável, se existir variável auxiliar (target/valid_time)
+        o Método A decide — o Método B nunca chega a ser consultado
+        (senão a semântica do eixo, correta, "confirmaria" apesar do
+        target errado — provaria que a precedência não está sendo
+        respeitada)."""
+        ds = _ds_metodo_b(com_target=True)
+        ds['target'].values[0] = '1999-12'   # corrompe só o target do lead 1
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'MISMATCH')
+        self.assertNotEqual(r['mapping_confirmation_method'],
+                             nproc.MAPPING_METHOD_FORECAST_PERIOD_SEMANTICS)
+
+    def test_11_sem_nenhuma_evidencia_objetiva_continua_unconfirmed(self):
+        ds = _ds_metodo_b(s_standard_name=None, l_standard_name=None, l_units=None)
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'UNCONFIRMED')
+        self.assertEqual(r['mapping_confirmation_method'], nproc.MAPPING_METHOD_NONE)
+
+    def test_7b_rota_sem_documentacao_nao_confirma_mesmo_com_atributos_corretos(self):
+        """Item 7 do Método B — mesmo com TODOS os atributos reais
+        corretos, sem forecast_period_semantics_documented=True na rota
+        o Método B não confirma (guardrail contra 'aceitar só pela
+        grade numérica', Seção 6)."""
+        ds = _ds_metodo_b()
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                 rota=_rota_metodo_b(documented=False))
+        self.assertEqual(r['mapping_status'], 'UNCONFIRMED')
+
+
+def _escrever_netcdf_execucao2(caminho, calendar='360'):
+    """Reproduz a estrutura real do arquivo da execução #2 (run
+    35888809240): calendar='360' (alias legado), S/L com standard_name
+    reais, 24 membros (política Harmonized), SEM variável target — o
+    caso real que precisou do Método B."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    leads_L = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5])
+    membros = np.arange(1, 25)
+    rng = np.random.RandomState(31)
+    dados = 0.5 + rng.rand(3, 3, 6, 24) * 3.0
+
+    da_S = xr.DataArray(540.0, attrs={'units': 'months since 1960-01-01', 'calendar': calendar,
+                                        'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(leads_L, dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    ds = xr.Dataset({'prec': (('X', 'Y', 'L', 'M'), dados)},
+                     coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+    ds['prec'].attrs['units'] = 'mm/day'
+    ds.to_netcdf(caminho)
+
+
+class Execucao2ReproducaoTestCase(unittest.TestCase):
+    """Reprodução ponta a ponta da execução real #2 (run 35888809240) —
+    arquivo real com calendar='360', sem variável target, mas com
+    semântica forecast_period identificável nos atributos reais — prova
+    que a correção completa (cftime + normalização de alias + Método B)
+    resolve o caso real de fato, não só em isolamento (item 9/9-#2)."""
+
+    def test_2_calendario_original_preservado_end_to_end(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = Path(tmp) / 'exec2.nc'
+            _escrever_netcdf_execucao2(caminho, calendar='360')
+
+            def baixar_ok(url, destino):
+                return (str(caminho), False)
+
+            r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_ok, abrir_fn=xr.open_dataset)
+
+            self.assertEqual(r['time_decode_mode'], nproc.TIME_DECODE_MODE_CF_DATETIME_NORMALIZED_ALIAS)
+            # calendário ORIGINAL do arquivo nunca sobrescrito — os dois
+            # ficam registrados lado a lado.
+            self.assertEqual(r['calendar_original'], '360')
+            self.assertEqual(r['calendar_normalized'], '360_day')
+            self.assertTrue(r['calendar_normalization_applied'])
+            self.assertEqual(r['calendar_observed'], '360_day')
+
+            self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
+            self.assertEqual(sorted(r['temporal_audit_df']['target_month']),
+                              ['2005-01', '2005-02', '2005-03', '2005-04', '2005-05', '2005-06'])
+            self.assertTrue((r['temporal_audit_df']['mapping_confirmation_method']
+                              == nproc.MAPPING_METHOD_FORECAST_PERIOD_SEMANTICS).all())
+
+            aprovacao = npoc.avaliar_aprovacao_poc(r)
+            self.assertEqual(aprovacao['poc_status'], 'APROVADO')
 
 
 if __name__ == '__main__':
