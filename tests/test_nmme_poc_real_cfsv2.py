@@ -457,10 +457,14 @@ class TemporalAuditTestCase(unittest.TestCase):
     def test_k_colunas_exatas(self):
         r = _executar(abrir_fn=lambda c: _ds_representacao_b())
         # mapping_confirmation_method (Seção 5, execução real #2) — qual
-        # dos dois métodos confirmou (ou não) cada lead.
+        # dos dois métodos confirmou (ou não) cada lead. init_selection_*
+        # (Seção 7, execução real #3) — auditoria da seleção de
+        # inicialização por lead.
         colunas_esperadas = {'centre', 'model_name', 'init_date', 'H_lead', 'source_L',
                               'target_month', 'mapping_status', 'evidence',
-                              'mapping_confirmation_method', 'notes'}
+                              'mapping_confirmation_method', 'init_selection_method',
+                              'init_value_requested', 'init_value_observed_on_variable',
+                              'init_axis_size_observed_on_variable', 'init_selection_status', 'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
     def test_k_uma_linha_por_lead(self):
@@ -975,6 +979,219 @@ class Execucao2ReproducaoTestCase(unittest.TestCase):
 
             aprovacao = npoc.avaliar_aprovacao_poc(r)
             self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+
+class MesParaIngridTestCase(unittest.TestCase):
+    """Execução real #3 (run 35910675855, Seção 1/2) — a sintaxe Ingrid
+    correta para seleção mensal de S usa o nome abreviado do mês
+    ('Jan', 'Dec'), nunca o número ('01', '12'). O request malformado
+    anterior não gerava erro HTTP — o servidor devolvia silenciosamente
+    o primeiro valor do eixo S global do catálogo (1982-01) em vez da
+    origem pedida (2005-01)."""
+
+    def test_1_2005_01_gera_jan_2005_nunca_01_2005(self):
+        url = ndl.montar_url_iri_cfsv2_nmme_harmonized(2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'])
+        self.assertIn('S/(Jan%202005)/VALUE/', url)
+        self.assertNotIn('01%202005', url)
+
+    def test_2_dezembro_gera_dec(self):
+        url = ndl.montar_url_iri_cfsv2_nmme_harmonized(2005, 12, SAO_BENTO['lat'], SAO_BENTO['lon'])
+        self.assertIn('S/(Dec%202005)/VALUE/', url)
+        self.assertNotIn('12%202005', url)
+
+    def test_mes_para_ingrid_jan_may_sep_dec(self):
+        self.assertEqual(ndl.mes_para_ingrid(1), 'Jan')
+        self.assertEqual(ndl.mes_para_ingrid(5), 'May')
+        self.assertEqual(ndl.mes_para_ingrid(9), 'Sep')
+        self.assertEqual(ndl.mes_para_ingrid(12), 'Dec')
+
+    def test_mes_para_ingrid_fora_da_faixa_falha(self):
+        with self.assertRaises(ValueError):
+            ndl.mes_para_ingrid(13)
+        with self.assertRaises(ValueError):
+            ndl.mes_para_ingrid(0)
+
+    def test_representacao_a_tambem_usa_sintaxe_correta(self):
+        """O mesmo bug existia no builder da Representação A (mesmo
+        padrão de código) — corrigido junto, não só na B."""
+        url = ndl.montar_url_iri_cfsv2_member_level(2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'])
+        self.assertIn('S/(Jan%202005)/VALUE/', url)
+        self.assertNotIn('01%202005', url)
+
+    def test_montar_url_iridl_generico_tambem_corrigido(self):
+        url = ndl.montar_url_iridl(CFSV2, 2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'],
+                                     variavel='prec')
+        self.assertIn('S/(Jan%202005)/VALUE/', url)
+        self.assertNotIn('01%202005', url)
+
+
+def _ds_selecao_s(modo='scalar', s_periodo='2005-01', n_valores_multiplos=3,
+                    ingrid_value_documentado_na_rota=False):
+    """Dataset sintético focado na dimensão S de 'prec', para os testes
+    de `_avaliar_selecao_inicializacao` (execução real #3, Seção 3).
+    `modo`: 'scalar' (0-d), 'singleton_dim' (dims=('S',), size=1),
+    'multiplo' (size>1 — simula o eixo não filtrado pelo bug real),
+    'ausente' (S não aparece em prec.coords — Ingrid VALUE pode ter
+    removido a dimensão)."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    membros = np.array([1, 2, 3, 4])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    rng = np.random.RandomState(41)
+
+    if modo == 'scalar':
+        da_S = xr.DataArray(pd.Timestamp(f'{s_periodo}-01'),
+                              attrs={'standard_name': 'forecast_reference_time'})
+        dados = 0.00003 + rng.rand(3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S}
+        prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'), coords=coords)
+    elif modo == 'singleton_dim':
+        da_S = xr.DataArray([pd.Timestamp(f'{s_periodo}-01')], dims=('S',),
+                              attrs={'standard_name': 'forecast_reference_time'})
+        dados = 0.00003 + rng.rand(1, 3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'S': da_S, 'X': lons, 'Y': lats, 'L': da_L, 'M': membros}
+        prec = xr.DataArray(dados, dims=('S', 'X', 'Y', 'L', 'M'), coords=coords)
+    elif modo == 'multiplo':
+        # eixo S com múltiplos valores (o primeiro é 1982-01, igual ao
+        # bug real observado) — nunca deve ser lido via flat[0].
+        datas_s = pd.date_range('1982-01-01', periods=n_valores_multiplos, freq='YS')
+        da_S = xr.DataArray(datas_s, dims=('S',), attrs={'standard_name': 'forecast_reference_time'})
+        dados = 0.00003 + rng.rand(n_valores_multiplos, 3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'S': da_S, 'X': lons, 'Y': lats, 'L': da_L, 'M': membros}
+        prec = xr.DataArray(dados, dims=('S', 'X', 'Y', 'L', 'M'), coords=coords)
+    elif modo == 'ausente':
+        dados = 0.00003 + rng.rand(3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'X': lons, 'Y': lats, 'L': da_L, 'M': membros}
+        prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'), coords=coords)
+    else:
+        raise ValueError(modo)
+
+    prec.attrs['units'] = 'kg m-2 s-1'
+    return xr.Dataset({'prec': prec})
+
+
+class SelecaoInicializacaoTestCase(unittest.TestCase):
+    """Execução real #3 (Seção 3/4/5/6-E) — leitura da origem S
+    associada à variável REAL de precipitação, nunca do eixo S global
+    do Dataset como um todo (bug real: `ds['S'].values.flat[0]` podia
+    devolver 1982-01 mesmo com a origem pedida sendo 2005-01)."""
+
+    def test_3_s_scalar_confirma(self):
+        ds = _ds_selecao_s(modo='scalar')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_SCALAR)
+        self.assertEqual(r['init_value_observed_on_variable'], '2005-01')
+        self.assertEqual(r['init_axis_size_observed_on_variable'], 1)
+
+    def test_4_s_singleton_dim_confirma(self):
+        ds = _ds_selecao_s(modo='singleton_dim')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM)
+        self.assertEqual(r['init_value_observed_on_variable'], '2005-01')
+
+    def test_5_s_multiplos_valores_reprova(self):
+        ds = _ds_selecao_s(modo='multiplo', n_valores_multiplos=3)
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE)
+        self.assertEqual(r['init_axis_size_observed_on_variable'], 3)
+        self.assertIsNone(r['init_value_observed_on_variable'])
+
+    def test_6_7_nunca_usa_flat0_do_eixo_com_multiplos_valores(self):
+        """O primeiro valor do eixo S de múltiplos valores é 1982-01 —
+        exatamente o valor incorretamente devolvido pelo bug real. A
+        correção NUNCA usa esse valor como origem observada; reprova
+        objetivamente em vez de mascarar como confirmação."""
+        ds = _ds_selecao_s(modo='multiplo', n_valores_multiplos=5)
+        primeiro_valor_do_eixo = str(ds['prec'].coords['S'].values[0])[:7]
+        self.assertEqual(primeiro_valor_do_eixo, '1982-01')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertNotEqual(r.get('init_value_observed_on_variable'), '1982-01')
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE)
+        # via avaliar_mapeamento_temporal (Método B completo) — MISMATCH,
+        # nunca um OK silencioso.
+        r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                          rota=_rota_metodo_b())
+        self.assertEqual(r_completo['mapping_status'], 'MISMATCH')
+
+    def test_8_value_documentado_confirma_quando_s_ausente(self):
+        import dataclasses
+        ds = _ds_selecao_s(modo='ausente')
+        rota_documentada = dataclasses.replace(_rota_metodo_b(),
+                                                  ingrid_value_init_selection_documented=True)
+        r = nproc._avaliar_selecao_inicializacao(ds, rota_documentada)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE)
+        self.assertEqual(r['init_selection_method'], nproc.INIT_SELECTION_METHOD_INGRID_VALUE)
+        r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                          rota=rota_documentada)
+        self.assertEqual(r_completo['mapping_status'], 'OK')
+
+    def test_8b_sem_documentacao_s_ausente_fica_unconfirmed(self):
+        """A mesma ausência de S, mas SEM
+        ingrid_value_init_selection_documented=True na rota — nunca
+        confirma por padrão."""
+        ds = _ds_selecao_s(modo='ausente')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD)
+        r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                          rota=_rota_metodo_b())
+        self.assertEqual(r_completo['mapping_status'], 'UNCONFIRMED')
+
+    def test_9_l_fora_da_grade_continua_obrigatorio(self):
+        """Regressão — a correção da seleção S não afrouxa a exigência
+        de L=0.5..5.5 do Método B."""
+        ds = _ds_selecao_s(modo='scalar')
+        ds['L'] = ds['L'].assign_attrs(units='days')   # quebra só o requisito de L
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'UNCONFIRMED')
+
+
+class Execucao3ReproducaoTestCase(unittest.TestCase):
+    """Reprodução ponta a ponta da execução real #3 (run 35910675855) —
+    com a sintaxe Ingrid corrigida (Jan 2005) e a leitura de S corrigida
+    (variável real, nunca eixo global), o mesmo cenário real (sem
+    variável target, backend IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY, 24
+    membros) deve chegar a APROVADO (item 9/9-#10)."""
+
+    def _ds_execucao3(self, n_membros=24):
+        lon_sb_360 = SAO_BENTO['lon'] % 360.0
+        lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+        lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+        l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+        membros = np.arange(1, n_membros + 1)
+        rng = np.random.RandomState(51)
+        dados = 0.5 + rng.rand(3, 3, len(l_valores), n_membros) * 3.0
+        da_S = xr.DataArray(pd.Timestamp('2005-01-01'), attrs={'standard_name': 'forecast_reference_time'})
+        da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                              attrs={'units': 'months', 'standard_name': 'forecast_period'})
+        prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                              coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+        prec.attrs['units'] = 'mm/day'
+        return xr.Dataset({'prec': prec})
+
+    def test_10_run_sintetica_equivalente_a_execucao3_chega_a_aprovado(self):
+        ds = self._ds_execucao3()
+        r = _executar(abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'], 'PROCESSADO')
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
+        self.assertTrue((r['temporal_audit_df']['init_selection_status']
+                          == nproc.INIT_SELECTION_STATUS_OK_SCALAR).all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_10b_url_gerada_na_execucao_usa_sintaxe_correta(self):
+        chamadas = []
+
+        def baixar_registra(url, destino):
+            chamadas.append(url)
+            return ('/tmp/fake-exec3.nc', False)
+
+        ds = self._ds_execucao3()
+        _executar(abrir_fn=lambda c: ds, baixar_fn=baixar_registra)
+        self.assertTrue(any('S/(Jan%202005)/VALUE/' in u for u in chamadas))
+        self.assertFalse(any('01%202005' in u for u in chamadas))
 
 
 if __name__ == '__main__':

@@ -436,6 +436,15 @@ class RotaMemberLevel:
     # `mapping_reference`.
     forecast_period_semantics_documented: bool = False
     mapping_reference: tuple = field(default_factory=tuple)
+    # Execução real #3 (Seção 5/6-E) — gate explícito, SEPARADO do
+    # anterior, para a via alternativa de confirmação de inicialização
+    # quando a operação Ingrid VALUE remove a dimensão S por completo da
+    # variável (nunca cai para o eixo S global do catálogo como
+    # substituto — Seção 3). Só True quando o operador VALUE do Ingrid
+    # (seleciona o ponto de grade mais próximo do valor pedido e remove
+    # essa dimensão) está documentado o bastante para esta rota — nunca
+    # assumido por padrão.
+    ingrid_value_init_selection_documented: bool = False
 
 
 @dataclass(frozen=True)
@@ -731,6 +740,20 @@ CATALOGO = [
                       'B, o index.tex desta rota (FLXF/PRATE) NÃO foi lido com o mesmo nível de detalhe '
                       'sobre a grade L; não promover para True sem essa citação específica (Seção 4-#7, '
                       'execução real #2).',
+                # Execução real #3 (Seção 5/6-E) — VALUE é o MESMO operador
+                # Ingrid já usado por X/Y/VALUE nesta própria URL
+                # (montar_url_iri_cfsv2_member_level); documentado
+                # publicamente como "seleciona o ponto de grade mais
+                # próximo do valor pedido e remove essa dimensão do
+                # resultado" — propriedade da LINGUAGEM Ingrid, não desta
+                # coleção específica, por isso True aqui mesmo com
+                # forecast_period_semantics_documented=False.
+                ingrid_value_init_selection_documented=True,
+                mapping_reference=(
+                    'Operador Ingrid VALUE (iridl.ldeo.columbia.edu, sintaxe pública "ingrid"): '
+                    '"select nearest grid point to value, dropping that dimension" — mesmo operador já '
+                    'usado para X/Y nesta rota (Rodada 4); propriedade do operador, não da coleção.',
+                ),
             ),
             RotaMemberLevel(
                 data_backend=SOURCE_BACKEND_IRIDL_LEGACY,
@@ -770,12 +793,19 @@ CATALOGO = [
                 # libera a TENTATIVA do Método B para esta rota
                 # específica, nunca confirma sozinho.
                 forecast_period_semantics_documented=True,
+                # Execução real #3 (Seção 5/6-E) — mesmo operador VALUE já
+                # documentado para a Representação A acima (propriedade da
+                # linguagem Ingrid, não da coleção).
+                ingrid_value_init_selection_documented=True,
                 mapping_reference=(
                     'github.com/iridl/dlentries, entries/Models/NMME/NCEP-CFSv2/HINDCAST/MONTHLY/'
                     'index.tex (mesma fonte de source_reference, Rodada 5) — S documentado como grade '
                     'mensal de inicialização (forecast_reference_time), L documentado como grade de '
                     'lead "0.5 1 9.5" em meses (forecast_period), convenção padrão S/L do IRI Data '
                     'Library.',
+                    'Operador Ingrid VALUE (iridl.ldeo.columbia.edu, sintaxe pública "ingrid"): '
+                    '"select nearest grid point to value, dropping that dimension" — mesmo operador já '
+                    'usado para X/Y nesta rota; propriedade do operador, não da coleção.',
                 ),
             ),
         ),

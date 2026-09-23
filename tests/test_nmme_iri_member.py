@@ -197,7 +197,14 @@ class RequestIriSubsetTestCase(unittest.TestCase):
         url = ndl.montar_url_iri_cfsv2_member_level(2005, 1, -6.0203, -47.9022)
         self.assertIn('X/-47.9022/VALUE', url)
         self.assertIn('Y/-6.0203/VALUE', url)
-        self.assertIn('S/(01%202005)/VALUE', url)
+        # Execução real #3 (run 35910675855, Seção 1) — sintaxe Ingrid
+        # correta para seleção mensal de S é o nome abreviado do mês
+        # ('Jan'), nunca o número ('01'); a forma numérica é a que
+        # causou o bug real (servidor devolvia silenciosamente o
+        # primeiro valor do eixo S global, 1982-01, em vez da origem
+        # pedida, sem erro HTTP).
+        self.assertIn('S/(Jan%202005)/VALUE', url)
+        self.assertNotIn('01%202005', url)
         self.assertIn('L/(0.5)/(5.5)/RANGEEDGES', url)
         self.assertIn(ndl.IRI_CFSV2_MEMBER_LEVEL_PATH, url)
 

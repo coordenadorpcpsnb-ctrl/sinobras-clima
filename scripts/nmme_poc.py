@@ -671,6 +671,8 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
     mapping_confirmation_methods = []
     forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
+    init_selection_method = init_value_observed_on_variable = None
+    init_axis_size_observed_on_variable = init_selection_status = None
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
         mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
@@ -683,6 +685,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             lead_units_observed = mapeamento['lead_units_observed']
         if lead_standard_name_observed is None:
             lead_standard_name_observed = mapeamento['lead_standard_name_observed']
+        if init_selection_method is None:
+            init_selection_method = mapeamento['init_selection_method']
+        if init_value_observed_on_variable is None:
+            init_value_observed_on_variable = mapeamento['init_value_observed_on_variable']
+        if init_axis_size_observed_on_variable is None:
+            init_axis_size_observed_on_variable = mapeamento['init_axis_size_observed_on_variable']
+        if init_selection_status is None:
+            init_selection_status = mapeamento['init_selection_status']
         L_sel = mapeamento['source_L']
         fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
                        if rota_usada.lead_dimension in ponto.dims else ponto)
@@ -708,6 +718,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'target_month': mapeamento['target_month'], 'mapping_status': mapeamento['mapping_status'],
             'evidence': mapeamento['evidence'],
             'mapping_confirmation_method': mapeamento['mapping_confirmation_method'],
+            # Seção 7 (execução real #3) — auditoria da seleção de
+            # inicialização por lead: qual método confirmou (ou não) que
+            # a variável 'prec' de fato traz a origem pedida.
+            'init_selection_method': mapeamento['init_selection_method'],
+            'init_value_requested': mapeamento['init_value_requested'],
+            'init_value_observed_on_variable': mapeamento['init_value_observed_on_variable'],
+            'init_axis_size_observed_on_variable': mapeamento['init_axis_size_observed_on_variable'],
+            'init_selection_status': mapeamento['init_selection_status'],
             'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
 
     raw_df = pd.DataFrame(raw_linhas)
@@ -815,6 +833,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'forecast_reference_time_observed': forecast_reference_time_observed,
         'lead_units_observed': lead_units_observed,
         'lead_standard_name_observed': lead_standard_name_observed,
+        # Seção 3/4/5/7 (execução real #3) — origem confirmada via a
+        # coordenada S da variável REAL (nunca do eixo S global do
+        # Dataset) ou via seleção Ingrid VALUE documentada.
+        'init_selection_method': init_selection_method,
+        'init_value_requested': _origem_str(ano, mes),
+        'init_value_observed_on_variable': init_value_observed_on_variable,
+        'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
+        'init_selection_status': init_selection_status,
         'mapping_reference': list(rota_usada.mapping_reference),
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
@@ -1029,6 +1055,16 @@ def montar_metadata(sistemas=None, resultado_poc=None):
                                                      'NAO_EXECUTADO_NESTA_TAREFA'),
         'lead_units_observed': r.get('lead_units_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'lead_standard_name_observed': r.get('lead_standard_name_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 3/4/5/7 (execução real #3) — origem confirmada via a
+        # coordenada S da variável REAL (nunca do eixo S global do
+        # Dataset) ou via seleção Ingrid VALUE documentada.
+        'init_selection_method': r.get('init_selection_method', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_value_requested': r.get('init_value_requested', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_value_observed_on_variable': r.get('init_value_observed_on_variable',
+                                                    'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_axis_size_observed_on_variable': r.get('init_axis_size_observed_on_variable',
+                                                        'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_selection_status': r.get('init_selection_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'mapping_reference': r.get('mapping_reference', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
@@ -1228,8 +1264,13 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         # mapping_confirmation_method (Seção 5, execução real #2): qual
         # dos dois métodos (variável auxiliar OU semântica documentada
         # do eixo forecast_period) confirmou este lead, se algum.
+        # init_selection_* (Seção 7, execução real #3): auditoria da
+        # seleção de inicialização por lead, lida da coordenada S da
+        # variável REAL, nunca do eixo S global do Dataset.
         'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
-        'mapping_status', 'evidence', 'mapping_confirmation_method', 'notes']))
+        'mapping_status', 'evidence', 'mapping_confirmation_method',
+        'init_selection_method', 'init_value_requested', 'init_value_observed_on_variable',
+        'init_axis_size_observed_on_variable', 'init_selection_status', 'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
         # Seção 11 (revisão pós-execução #1) — colunas de auditoria por
         # rota/tentativa: cache_path/cache_hit reais, download_status

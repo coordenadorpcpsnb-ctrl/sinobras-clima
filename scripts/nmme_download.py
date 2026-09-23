@@ -48,6 +48,28 @@ TIMEOUT_SEGUNDOS = 60
 MAX_TENTATIVAS = 3
 ESPERAS_RETRY_SEGUNDOS = [5, 15, 30]
 
+# ══════════════════════════════════════════════════════════════════════════
+# Execução real #3 (run 35910675855, Seção 1) — bug real: a seleção
+# mensal de S usava `{mes:02d}%20{ano}` (ex.: "01 2005"), mas a sintaxe
+# Ingrid/IRI Data Library para seleção mensal por nome é `S/(Jan 2005)/
+# VALUE`, não `S/(01 2005)/VALUE`. O servidor NÃO rejeitou a URL
+# malformada com erro HTTP — devolveu silenciosamente o PRIMEIRO valor
+# do eixo S global do catálogo (1982-01), completamente diferente da
+# origem pedida (2005-01). `mes_para_ingrid()` nunca depende de
+# `calendar.month_abbr`/locale do sistema operacional (que pode não
+# estar em inglês) — tabela fixa.
+# ══════════════════════════════════════════════════════════════════════════
+
+MESES_INGRID = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def mes_para_ingrid(mes):
+    """Abreviação de mês na convenção Ingrid (ex.: 'Jan', 'Dec') — nunca
+    o número '01'/'12'. Tabela fixa, independente de locale."""
+    if not (1 <= mes <= 12):
+        raise ValueError(f"mês fora da faixa 1-12: {mes!r}.")
+    return MESES_INGRID[mes - 1]
+
 
 def montar_url_iridl(sistema, ano, mes, lat, lon, variavel=None):
     """Constrói a URL de subset IRIDL (sintaxe ingrid) para 1 origem x 1
@@ -63,7 +85,7 @@ def montar_url_iridl(sistema, ano, mes, lat, lon, variavel=None):
         raise ValueError(f"{sistema.centre}/{sistema.model_name}: precip_variable não confirmado no "
                           f"catálogo — nunca adivinhar o nome da variável (Seção 11).")
     base = sistema.data_url_template.split(' ')[0].rstrip('/')
-    return f"{base}/.{variavel}/X/{lon}/VALUE/Y/{lat}/VALUE/S/({mes:02d}%20{ano})/VALUE/data.nc"
+    return f"{base}/.{variavel}/X/{lon}/VALUE/Y/{lat}/VALUE/S/({mes_para_ingrid(mes)}%20{ano})/VALUE/data.nc"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -146,7 +168,7 @@ def montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min=1, h_lead_m
     l_ini, l_fim = h_lead_para_L_ingrid(h_lead_min), h_lead_para_L_ingrid(h_lead_max)
     base = f'{IRI_CFSV2_MEMBER_LEVEL_BASE}/{IRI_CFSV2_MEMBER_LEVEL_PATH}'
     return (f"{base}/X/{lon}/VALUE/Y/{lat}/VALUE/"
-            f"S/({mes:02d}%20{ano})/VALUE/"
+            f"S/({mes_para_ingrid(mes)}%20{ano})/VALUE/"
             f"L/({l_ini})/({l_fim})/RANGEEDGES/data.nc")
 
 
@@ -195,7 +217,7 @@ def montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min=1, h_lea
     l_ini, l_fim = h_lead_para_L_ingrid(h_lead_min), h_lead_para_L_ingrid(h_lead_max)
     base = f'{IRI_CFSV2_MEMBER_LEVEL_BASE}/{IRI_CFSV2_NMME_HARMONIZED_PATH}'
     return (f"{base}/X/{lon}/VALUE/Y/{lat}/VALUE/"
-            f"S/({mes:02d}%20{ano})/VALUE/"
+            f"S/({mes_para_ingrid(mes)}%20{ano})/VALUE/"
             f"L/({l_ini})/({l_fim})/RANGEEDGES/data.nc")
 
 

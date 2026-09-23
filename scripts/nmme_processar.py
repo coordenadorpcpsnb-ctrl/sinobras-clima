@@ -262,38 +262,130 @@ STANDARD_NAME_S_FORECAST_REFERENCE_TIME = 'forecast_reference_time'
 STANDARD_NAME_L_FORECAST_PERIOD = 'forecast_period'
 LEAD_UNITS_MONTHS_ACEITAS = {'months', 'month'}
 
+# ══════════════════════════════════════════════════════════════════════════
+# Execução real #3 (run 35910675855, Seção 3/4/5) — bug real encontrado:
+# a leitura da origem observada usava ds[dim_s].values.flat[0] do eixo S
+# GLOBAL do Dataset (que pode preservar o eixo completo do catálogo-
+# fonte, 1982-2010, mesmo depois de 'prec' já ter sido recortado para 1
+# única origem) — o primeiro valor desse eixo global (1982-01) NÃO é
+# evidência de nada sobre a origem de fato usada pela variável real.
+# `_avaliar_selecao_inicializacao` corrige isso: inspeciona a coordenada
+# S tal como associada à variável REAL de precipitação
+# (rota.variable_name), nunca o eixo global do Dataset como um todo.
+# ══════════════════════════════════════════════════════════════════════════
+
+INIT_SELECTION_STATUS_OK_SCALAR = 'OK_SCALAR_COORD'
+INIT_SELECTION_STATUS_OK_SINGLETON_DIM = 'OK_SINGLETON_DIM'
+INIT_SELECTION_STATUS_OK_INGRID_VALUE = 'OK_INGRID_VALUE_DOCUMENTED'
+INIT_SELECTION_STATUS_FAIL_MULTIPLE = 'FAIL_MULTIPLE_INITIALIZATIONS'
+INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD = 'UNCONFIRMED_NO_INIT_COORD'
+
+INIT_SELECTION_METHOD_SCALAR_COORD = 'SCALAR_COORD_ON_VARIABLE'
+INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
+INIT_SELECTION_METHOD_INGRID_VALUE = 'INGRID_VALUE_DOCUMENTED'
+INIT_SELECTION_METHOD_NONE = 'NONE'
+
+
+def _avaliar_selecao_inicializacao(ds, rota):
+    """Seção 3/4/5 — nunca usa `ds[dim_s].values.flat[0]` de um eixo S
+    GLOBAL como origem observada. Inspeciona a coordenada S tal como
+    associada à variável REAL de precipitação (`rota.variable_name`):
+
+    1/2/3. S presente em `da.coords` com exatamente 1 valor (scalar ou
+       coordenada/dimensão singleton) -> lê esse único valor -> OK.
+    4. S presente em `da.coords`/`da.dims` com MAIS de 1 valor -> o
+       subset de origem não ocorreu de fato -> FAIL (contradição).
+    5. S ausente de `da.coords` por completo (Ingrid VALUE pode ter
+       removido a dimensão) -> só confirma via
+       `rota.ingrid_value_init_selection_documented=True` (operador
+       Ingrid VALUE documentado como seleção de ponto único, nunca
+       assumido por padrão); caso contrário, UNCONFIRMED — nunca cai
+       para o eixo global como substituto."""
+    dim_s = getattr(rota, 'init_dimension', None) or 'S'
+    nome_var = getattr(rota, 'variable_name', None)
+    da = ds[nome_var] if nome_var and hasattr(ds, 'variables') and nome_var in ds.variables else None
+    # audit-only — nunca usado para decidir pass/fail (Seção 6, item A-E
+    # atualizado não exige mais isso como requisito próprio).
+    standard_name_s = (da.coords[dim_s].attrs.get('standard_name')
+                        if da is not None and dim_s in getattr(da, 'coords', {}) else None)
+
+    if da is None or dim_s not in getattr(da, 'coords', {}):
+        if getattr(rota, 'ingrid_value_init_selection_documented', False):
+            return {'init_selection_method': INIT_SELECTION_METHOD_INGRID_VALUE,
+                    'init_value_observed_on_variable': None,
+                    'init_axis_size_observed_on_variable': 0,
+                    'init_selection_status': INIT_SELECTION_STATUS_OK_INGRID_VALUE,
+                    'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+        return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
+                'init_value_observed_on_variable': None,
+                'init_axis_size_observed_on_variable': 0,
+                'init_selection_status': INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD,
+                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+
+    s_coord = da.coords[dim_s]
+    tamanho = int(s_coord.size)
+    if tamanho > 1:
+        return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
+                'init_value_observed_on_variable': None,
+                'init_axis_size_observed_on_variable': tamanho,
+                'init_selection_status': INIT_SELECTION_STATUS_FAIL_MULTIPLE,
+                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+
+    try:
+        bruto = np.asarray(s_coord.values).flat[0]
+        periodo_observado = pd.Period(str(bruto)[:7], 'M')
+    except Exception:
+        return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
+                'init_value_observed_on_variable': None,
+                'init_axis_size_observed_on_variable': tamanho,
+                'init_selection_status': INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD,
+                'standard_name_s_observed': standard_name_s,
+                'init_periodo_observado': None}
+
+    if dim_s in da.dims:
+        metodo, status = INIT_SELECTION_METHOD_SINGLETON_DIM, INIT_SELECTION_STATUS_OK_SINGLETON_DIM
+    else:
+        metodo, status = INIT_SELECTION_METHOD_SCALAR_COORD, INIT_SELECTION_STATUS_OK_SCALAR
+    return {'init_selection_method': metodo,
+            'init_value_observed_on_variable': str(periodo_observado),
+            'init_axis_size_observed_on_variable': tamanho,
+            'init_selection_status': status,
+            'standard_name_s_observed': standard_name_s,
+            'init_periodo_observado': periodo_observado}
+
 
 def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date):
-    """Método B (Seção 4) — os 7 requisitos são checados de forma
+    """Método B (Seção 4/6) — os requisitos A-E são checados de forma
     INDEPENDENTE e objetiva. Distingue duas classes de falha: falta de
-    EVIDÊNCIA (standard_name/units ausentes, rota sem documentação —
-    vira UNCONFIRMED, nunca uma afirmação) de CONTRADIÇÃO objetiva (S
-    observado diverge da origem pedida, ou a grade de L observada
-    diverge da esperada — vira MISMATCH, o mesmo tratamento que o
-    Método A já dava a uma variável auxiliar discordante)."""
-    dim_s = getattr(rota, 'init_dimension', None) or 'S'
+    EVIDÊNCIA (units/standard_name ausentes, rota sem documentação, S
+    ausente da variável sem via alternativa documentada — vira
+    UNCONFIRMED, nunca uma afirmação) de CONTRADIÇÃO objetiva (S
+    observado na variável diverge da origem pedida, múltiplas
+    inicializações presentes, ou a grade de L observada diverge da
+    esperada — vira MISMATCH, o mesmo tratamento que o Método A já dava
+    a uma variável auxiliar discordante)."""
     dim_l = getattr(rota, 'lead_dimension', None) or 'L'
     insuficientes, contraditorias = [], []
 
-    # 1. S identificado como forecast_reference_time.
-    s_attrs = dict(ds[dim_s].attrs) if dim_s in getattr(ds, 'coords', {}) else {}
-    s_standard_name = s_attrs.get('standard_name')
-    if s_standard_name != STANDARD_NAME_S_FORECAST_REFERENCE_TIME:
-        insuficientes.append(f"{dim_s}.standard_name={s_standard_name!r} (esperado "
-                               f"{STANDARD_NAME_S_FORECAST_REFERENCE_TIME!r})")
-
-    # 2. Origem S selecionada confere com a origem pedida.
-    s_periodo = None
-    if dim_s in getattr(ds, 'coords', {}) or (hasattr(ds, 'variables') and dim_s in ds.variables):
-        try:
-            s_valor = np.asarray(ds[dim_s].values).flat[0]
-            s_periodo = pd.Period(str(s_valor)[:7], 'M')
-        except Exception:
-            s_periodo = None
-    if s_periodo is None:
-        insuficientes.append(f"{dim_s} não pôde ser interpretado como data")
-    elif s_periodo != init_date:
-        contraditorias.append(f"{dim_s} observado ({s_periodo}) diverge da origem pedida ({init_date})")
+    # E. Inicialização confirmada por coordenada S scalar/singleton
+    # associada a 'prec', OU seleção Ingrid VALUE documentada (Seção
+    # 3/4/5/6-E) — NUNCA pelo eixo S global do Dataset.
+    selecao_init = _avaliar_selecao_inicializacao(ds, rota)
+    status_init = selecao_init['init_selection_status']
+    periodo_observado = selecao_init['init_periodo_observado']
+    if status_init == INIT_SELECTION_STATUS_FAIL_MULTIPLE:
+        contraditorias.append(f"variável {rota.variable_name!r} tem "
+                                f"{selecao_init['init_axis_size_observed_on_variable']} valores de S "
+                                f"associados — o subset de origem não ocorreu de fato")
+    elif status_init == INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD:
+        insuficientes.append(f"S não pôde ser confirmado como associado à variável "
+                               f"{rota.variable_name!r} (nem scalar/singleton, nem via VALUE "
+                               f"documentado) — Seção 3/5")
+    elif status_init == INIT_SELECTION_STATUS_OK_INGRID_VALUE:
+        pass   # confirmado pela via documentada do operador VALUE — nada a comparar
+    elif periodo_observado != init_date:
+        contraditorias.append(f"S observado na variável {rota.variable_name!r} ({periodo_observado}) "
+                                f"diverge da origem pedida ({init_date})")
 
     # 3/4. L identificado como forecast_period/forecast lead, com
     # unidade 'months'.
@@ -340,19 +432,24 @@ def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date):
 
     if status == 'OK':
         evidencia = (f"confirmado pela semântica documentada do eixo forecast_period (Método B, Seção "
-                      f"4): {dim_s}.standard_name={s_standard_name!r} confere com a origem {init_date}, "
-                      f"{dim_l}.standard_name={l_standard_name!r}/units={l_units_observado!r}, grade "
-                      f"{valores_l} mensal confirmada, rota com forecast_period_semantics_documented="
-                      f"True.")
+                      f"4/6): inicialização confirmada via {selecao_init['init_selection_method']} "
+                      f"(status={status_init}), {dim_l}.standard_name={l_standard_name!r}/"
+                      f"units={l_units_observado!r}, grade {valores_l} mensal confirmada, rota com "
+                      f"forecast_period_semantics_documented=True.")
     else:
         motivos = contraditorias + insuficientes
         evidencia = (f"Método B (semântica forecast_period) não confirmou H{h_lead}<->L={L_val}: "
                       + '; '.join(motivos) + '.')
 
     return {'status': status, 'evidence': evidencia,
-            'forecast_reference_time_observed': s_standard_name,
+            'forecast_reference_time_observed': selecao_init.get('standard_name_s_observed'),
             'lead_units_observed': l_units_observado,
-            'lead_standard_name_observed': l_standard_name}
+            'lead_standard_name_observed': l_standard_name,
+            'init_selection_method': selecao_init['init_selection_method'],
+            'init_value_requested': str(init_date),
+            'init_value_observed_on_variable': selecao_init['init_value_observed_on_variable'],
+            'init_axis_size_observed_on_variable': selecao_init['init_axis_size_observed_on_variable'],
+            'init_selection_status': status_init}
 
 
 def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao',
@@ -366,6 +463,10 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
     mapping_status = 'UNCONFIRMED'
     mapping_confirmation_method = MAPPING_METHOD_NONE
     forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
+    init_selection_method = INIT_SELECTION_METHOD_NONE
+    init_value_observed_on_variable = None
+    init_axis_size_observed_on_variable = None
+    init_selection_status = None
 
     # Seção 2/8 — em RAW_NUMERIC_CF (decode_times=False) os valores de
     # tempo do dataset são numéricos crus, sem decodificação de
@@ -383,7 +484,10 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
                 'evidence': ' | '.join(evidencia),
                 'mapping_confirmation_method': MAPPING_METHOD_NONE,
                 'forecast_reference_time_observed': None, 'lead_units_observed': None,
-                'lead_standard_name_observed': None}
+                'lead_standard_name_observed': None,
+                'init_selection_method': INIT_SELECTION_METHOD_NONE, 'init_value_requested': str(init_date),
+                'init_value_observed_on_variable': None, 'init_axis_size_observed_on_variable': None,
+                'init_selection_status': None}
 
     l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
     texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
@@ -436,6 +540,10 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
         forecast_reference_time_observed = resultado_b['forecast_reference_time_observed']
         lead_units_observed = resultado_b['lead_units_observed']
         lead_standard_name_observed = resultado_b['lead_standard_name_observed']
+        init_selection_method = resultado_b['init_selection_method']
+        init_value_observed_on_variable = resultado_b['init_value_observed_on_variable']
+        init_axis_size_observed_on_variable = resultado_b['init_axis_size_observed_on_variable']
+        init_selection_status = resultado_b['init_selection_status']
         evidencia.append(resultado_b['evidence'])
         mapping_status = resultado_b['status']
         if mapping_status == 'OK':
@@ -446,7 +554,11 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
             'mapping_confirmation_method': mapping_confirmation_method,
             'forecast_reference_time_observed': forecast_reference_time_observed,
             'lead_units_observed': lead_units_observed,
-            'lead_standard_name_observed': lead_standard_name_observed}
+            'lead_standard_name_observed': lead_standard_name_observed,
+            'init_selection_method': init_selection_method, 'init_value_requested': str(init_date),
+            'init_value_observed_on_variable': init_value_observed_on_variable,
+            'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
+            'init_selection_status': init_selection_status}
 
 
 def contar_membros_nao_missing(valores_por_membro):
