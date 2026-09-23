@@ -350,26 +350,64 @@ def _e_erro_decode_temporal(exc):
     return 'decode_times=false' in texto or ('decode time' in texto and 'calendar' in texto)
 
 
-def abrir_dataset_com_fallback_temporal(caminho, abrir_fn):
-    """Seção 1/2 — primeira tentativa é a normal (decode_times padrão,
-    cftime instalado decodifica 360_day e outros calendários CF não-
-    padrão de primeira). Só se a falha for ESPECIFICAMENTE de
-    decodificação temporal, tenta de novo com decode_times=False e
-    devolve time_decode_mode=RAW_NUMERIC_CF — nesse modo as unidades/
-    calendário brutos da coordenada de inicialização continuam
-    disponíveis para auditoria (nmme_processar.inspecionar_metadata_
-    temporal), mas o mapeamento temporal L<->mês-alvo NUNCA é
-    considerado confirmado a partir de valores não decodificados (Seção
-    2/8 — nmme_processar.avaliar_mapeamento_temporal recusa a tentar).
-    Se a segunda tentativa também falhar, a exceção original desse
-    segundo erro propaga normalmente (vira DATASET_OPEN_ERROR de
-    verdade no chamador — não é mascarada)."""
+_INFO_CALENDAR_VAZIA = {'calendar_original': None, 'calendar_normalized': None,
+                          'calendar_normalization_applied': False}
+
+
+def abrir_dataset_com_fallback_temporal(caminho, abrir_fn, init_dimension='S'):
+    """Seção 1/2/3 (execução real #2, run 35888809240) — primeira
+    tentativa é a normal (decode_times padrão, cftime instalado
+    decodifica 360_day e outros calendários CF não-padrão de primeira).
+    Se a falha for ESPECIFICAMENTE de decodificação temporal, abre de
+    novo com decode_times=False só para INSPECIONAR o calendário bruto
+    (nunca modifica o arquivo original em disco):
+
+    - Se o calendário observado for um alias LEGADO DOCUMENTADO (Seção
+      2, ex.: '360' -> '360_day' — o caso real da execução #2), tenta
+      decodificar de novo a partir de uma CÓPIA em memória do dataset
+      raw com o atributo `calendar` normalizado
+      (`nmme_processar.normalizar_calendar_cf` + `xr.decode_cf`). Se
+      funcionar: time_decode_mode=CF_DATETIME_NORMALIZED_ALIAS.
+    - Se o calendário não for um alias conhecido, ou a normalização
+      também falhar ao decodificar, mantém RAW_NUMERIC_CF (o dataset
+      raw, sem decodificação) — nesse modo o mapeamento temporal L<->
+      mês-alvo NUNCA é considerado confirmado (Seção 2/8,
+      nmme_processar.avaliar_mapeamento_temporal recusa a tentar).
+
+    Devolve (ds, time_decode_mode, info_calendar) — info_calendar traz
+    calendar_original/calendar_normalized/calendar_normalization_applied
+    SEMPRE que uma normalização foi ao menos tentada (dict vazio caso
+    contrário — decodificação normal de primeira, nada para normalizar).
+    Se a abertura original falhar por um erro que NÃO é de decodificação
+    temporal, a exceção propaga normalmente (DATASET_OPEN_ERROR real no
+    chamador, nunca mascarada)."""
+    import xarray as xr
+
     try:
-        return abrir_fn(caminho), nproc.TIME_DECODE_MODE_CF_DATETIME
+        return abrir_fn(caminho), nproc.TIME_DECODE_MODE_CF_DATETIME, dict(_INFO_CALENDAR_VAZIA)
     except Exception as e:
         if not _e_erro_decode_temporal(e):
             raise
-        return abrir_fn(caminho, decode_times=False), nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
+        ds_raw = abrir_fn(caminho, decode_times=False)
+        calendar_original = None
+        if init_dimension and hasattr(ds_raw, 'variables') and init_dimension in ds_raw.variables:
+            calendar_original = ds_raw[init_dimension].attrs.get('calendar')
+        calendar_normalized, aplicado = nproc.normalizar_calendar_cf(calendar_original)
+        info_calendar = {'calendar_original': calendar_original,
+                          'calendar_normalized': calendar_normalized,
+                          'calendar_normalization_applied': aplicado}
+        if not aplicado:
+            return ds_raw, nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF, info_calendar
+        # Seção 3 — normaliza numa CÓPIA em memória (nunca o arquivo
+        # original): reatribui só o atributo 'calendar' da coordenada de
+        # inicialização e tenta decodificar de novo com xr.decode_cf.
+        ds_copia = ds_raw.copy(deep=False)
+        ds_copia[init_dimension] = ds_copia[init_dimension].assign_attrs(calendar=calendar_normalized)
+        try:
+            ds_decodificado = xr.decode_cf(ds_copia)
+        except Exception:
+            return ds_raw, nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF, info_calendar
+        return ds_decodificado, nproc.TIME_DECODE_MODE_CF_DATETIME_NORMALIZED_ALIAS, info_calendar
 
 
 def validar_acesso_dataset_real(ds, rota):
@@ -521,11 +559,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     access_audit_linhas = []
     ds = fatos = rota_usada = url_usada = None
     time_decode_mode_usada = calendar_observed_usada = time_units_observed_usada = ''
+    calendar_original_usada = calendar_normalized_usada = None
+    calendar_normalization_applied_usada = False
     for rota in ordem:
         url = destino = None
         cache_hit = False
         download_status = dataset_open_status = 'NAO_TENTADO'
         time_decode_mode = calendar_observed = time_units_observed = ''
+        info_calendar = dict(_INFO_CALENDAR_VAZIA)
         try:
             if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
                 raise AcessoRotaError(f"CCSR_BETA está {rota.status} — não tentado (Seção 12).")
@@ -547,7 +588,8 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
                 download_status = 'HTTP_ERROR'
                 raise HttpErrorRota(f"{type(e).__name__}: {e}") from e
             try:
-                ds_tentativa, time_decode_mode = abrir_dataset_com_fallback_temporal(caminho, abrir_fn)
+                ds_tentativa, time_decode_mode, info_calendar = abrir_dataset_com_fallback_temporal(
+                    caminho, abrir_fn, rota.init_dimension)
                 dataset_open_status = 'OK'
             except AcessoRotaError as e:
                 dataset_open_status = e.status
@@ -573,6 +615,9 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
                 'download_status': download_status, 'dataset_open_status': dataset_open_status,
                 'time_decode_mode': time_decode_mode, 'calendar_observed': calendar_observed,
                 'time_units_observed': time_units_observed,
+                'calendar_original': info_calendar['calendar_original'],
+                'calendar_normalized': info_calendar['calendar_normalized'],
+                'calendar_normalization_applied': info_calendar['calendar_normalization_applied'],
                 'motivo': f'{type(e).__name__}: {e}'})
             continue
         access_audit_linhas.append({
@@ -581,11 +626,18 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'cache_path': str(destino) if destino else '',
             'download_status': download_status, 'dataset_open_status': dataset_open_status,
             'time_decode_mode': time_decode_mode, 'calendar_observed': calendar_observed,
-            'time_units_observed': time_units_observed, 'motivo': ''})
+            'time_units_observed': time_units_observed,
+            'calendar_original': info_calendar['calendar_original'],
+            'calendar_normalized': info_calendar['calendar_normalized'],
+            'calendar_normalization_applied': info_calendar['calendar_normalization_applied'],
+            'motivo': ''})
         ds, fatos, rota_usada, url_usada = ds_tentativa, fatos_tentativa, rota, url
         time_decode_mode_usada = time_decode_mode
         calendar_observed_usada = calendar_observed
         time_units_observed_usada = time_units_observed
+        calendar_original_usada = info_calendar['calendar_original']
+        calendar_normalized_usada = info_calendar['calendar_normalized']
+        calendar_normalization_applied_usada = info_calendar['calendar_normalization_applied']
         break
 
     access_audit_df = pd.DataFrame(access_audit_linhas)
@@ -617,10 +669,20 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
 
     raw_linhas, temporal_linhas = [], []
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
+    mapping_confirmation_methods = []
+    forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
         mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
-                                                          time_decode_mode=time_decode_mode_usada)
+                                                          time_decode_mode=time_decode_mode_usada,
+                                                          rota=rota_usada)
+        mapping_confirmation_methods.append(mapeamento['mapping_confirmation_method'])
+        if forecast_reference_time_observed is None:
+            forecast_reference_time_observed = mapeamento['forecast_reference_time_observed']
+        if lead_units_observed is None:
+            lead_units_observed = mapeamento['lead_units_observed']
+        if lead_standard_name_observed is None:
+            lead_standard_name_observed = mapeamento['lead_standard_name_observed']
         L_sel = mapeamento['source_L']
         fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
                        if rota_usada.lead_dimension in ponto.dims else ponto)
@@ -645,6 +707,7 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'H_lead': int(lead), 'source_L': mapeamento['source_L'],
             'target_month': mapeamento['target_month'], 'mapping_status': mapeamento['mapping_status'],
             'evidence': mapeamento['evidence'],
+            'mapping_confirmation_method': mapeamento['mapping_confirmation_method'],
             'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
 
     raw_df = pd.DataFrame(raw_linhas)
@@ -686,6 +749,17 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
                           else [selected_lon])
     longitude_convention = nproc.detectar_convencao_longitude_observada(valores_lon_fonte)
 
+    # Seção 5 (execução real #2) — método de confirmação temporal
+    # AGREGADO: quando todos os leads usaram o mesmo método, reporta
+    # esse método; 'MIXED' se divergiram entre si (nunca esperado hoje,
+    # já que Método A/B é decidido pela mesma presença/ausência de
+    # variável auxiliar em TODOS os leads do mesmo dataset — mas nunca
+    # assumido silenciosamente).
+    metodos_unicos = set(mapping_confirmation_methods)
+    mapping_confirmation_method_geral = (metodos_unicos.pop() if len(metodos_unicos) == 1
+                                           else ('MIXED' if len(metodos_unicos) > 1
+                                                 else nproc.MAPPING_METHOD_NONE))
+
     return {
         **resultado_base,
         'poc_status': 'PROCESSADO', 'backend_used': rota_usada.data_backend,
@@ -725,6 +799,23 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'calendar_observed': calendar_observed_usada,
         'time_units_observed': time_units_observed_usada,
         'download_status': 'OK', 'dataset_open_status': 'OK',
+        # Seção 2/5 (execução real #2, run 35888809240) — calendário
+        # ORIGINAL do arquivo vs. NORMALIZADO (alias legado documentado,
+        # ex.: '360' -> '360_day') — nunca sobrescreve a informação
+        # original, os dois ficam auditáveis lado a lado.
+        'calendar_original': calendar_original_usada,
+        'calendar_normalized': calendar_normalized_usada,
+        'calendar_normalization_applied': calendar_normalization_applied_usada,
+        # Seção 4/5 — método de confirmação temporal (Método A por
+        # variável auxiliar OU Método B por semântica documentada do
+        # eixo forecast_period) e os fatos empíricos que o Método B
+        # inspeciona, agregados pela primeira ocorrência não-nula entre
+        # os leads (mesmo dataset, mesmos atributos S/L em todos eles).
+        'mapping_confirmation_method': mapping_confirmation_method_geral,
+        'forecast_reference_time_observed': forecast_reference_time_observed,
+        'lead_units_observed': lead_units_observed,
+        'lead_standard_name_observed': lead_standard_name_observed,
+        'mapping_reference': list(rota_usada.mapping_reference),
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
         'n_raw_expected': n_raw_expected, 'n_raw': len(raw_df), 'raw_completo': raw_completo,
@@ -925,16 +1016,38 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'time_units_observed': r.get('time_units_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'download_status': r.get('download_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'dataset_open_status': r.get('dataset_open_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 2/5 (execução real #2, run 35888809240) — calendário
+        # original vs. normalizado (alias legado documentado), método de
+        # confirmação temporal (variável auxiliar OU semântica
+        # documentada do eixo forecast_period) e os fatos que o embasam.
+        'calendar_original': r.get('calendar_original', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'calendar_normalized': r.get('calendar_normalized', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'calendar_normalization_applied': r.get('calendar_normalization_applied',
+                                                   'NAO_EXECUTADO_NESTA_TAREFA'),
+        'mapping_confirmation_method': r.get('mapping_confirmation_method', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'forecast_reference_time_observed': r.get('forecast_reference_time_observed',
+                                                     'NAO_EXECUTADO_NESTA_TAREFA'),
+        'lead_units_observed': r.get('lead_units_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'lead_standard_name_observed': r.get('lead_standard_name_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'mapping_reference': r.get('mapping_reference', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
-        'nota': 'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. '
-                'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S. '
+        # Seção 8 (execução real #2) — a nota não pode mais dizer "nenhum
+        # download real ocorreu" quando um POC real de fato rodou
+        # (requests_realizados>0); nesse caso a nota abre com a frase
+        # correta e só o restante (contexto de catálogo, ECMWF, etc.)
+        # continua igual.
+        'nota': (('POC real executado; nenhuma avaliação científica de skill realizada (Seção '
+                   '18/35-S — este módulo nunca calcula skill, nunca usa CHIRPS). '
+                   if r.get('requests_realizados', 0) > 0 else
+                   'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. ')
+                + 'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S. '
                 'n_models_poc_executable=0 continua honesto (nenhum subset real foi de fato aberto). '
                 'n_models_poc_ready_for_real_test=1 (CFSv2) — "pronto para testar" não é "já '
                 'confirmado" (Seção 4). data_backend_used reflete a escolha operacional atual (Seção '
                 f'6, Rodada 5) — IRIDL_LEGACY como fallback documentado enquanto forecast.ccsr '
                 f'permanecer {ncat.ROUTE_STATUS_DISCOVERY_REQUIRED} (Seção 12); desligamento do IRIDL '
-                f'legado esperado até {ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN} (aproximado).',
+                f'legado esperado até {ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN} (aproximado).'),
     }
 
 
@@ -1112,16 +1225,23 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         'source_url', 'source_type']))
     temporal_df = r.get('temporal_audit_df', pd.DataFrame(columns=[
         # Seção 6, Fase 2C.1b — colunas exatas pedidas para o POC real.
+        # mapping_confirmation_method (Seção 5, execução real #2): qual
+        # dos dois métodos (variável auxiliar OU semântica documentada
+        # do eixo forecast_period) confirmou este lead, se algum.
         'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
-        'mapping_status', 'evidence', 'notes']))
+        'mapping_status', 'evidence', 'mapping_confirmation_method', 'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
         # Seção 11 (revisão pós-execução #1) — colunas de auditoria por
         # rota/tentativa: cache_path/cache_hit reais, download_status
         # distinto de dataset_open_status, modo de decodificação
-        # temporal e calendário/unidades observados.
+        # temporal e calendário/unidades observados. calendar_original/
+        # calendar_normalized/calendar_normalization_applied (Seção 2,
+        # execução real #2): alias de calendário legado detectado e
+        # normalizado, quando aplicável.
         'backend', 'dataset_representation', 'source_url', 'status', 'cache_hit', 'cache_path',
         'download_status', 'dataset_open_status', 'time_decode_mode', 'calendar_observed',
-        'time_units_observed', 'motivo']))
+        'time_units_observed', 'calendar_original', 'calendar_normalized',
+        'calendar_normalization_applied', 'motivo']))
     raw_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_raw.csv', index=False)
     temporal_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_temporal_audit.csv', index=False)
     access_audit_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_access_audit.csv', index=False)

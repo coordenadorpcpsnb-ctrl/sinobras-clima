@@ -188,6 +188,35 @@ NOMES_VARIAVEL_ALVO_CANDIDATOS = ('target', 'valid_time', 'target_month', 'forec
 
 TIME_DECODE_MODE_CF_DATETIME = 'CF_DATETIME'
 TIME_DECODE_MODE_RAW_NUMERIC_CF = 'RAW_NUMERIC_CF'
+# Execução real #2 (run 35888809240) — o dataset real trouxe
+# calendar='360' (sem sufixo), alias legado da convenção CF pré-
+# padronização ("all years are 360 days divided into 30 day months");
+# o nome padronizado moderno é '360_day'. TIME_DECODE_MODE_CF_DATETIME_
+# NORMALIZED_ALIAS marca quando a decodificação só funcionou depois de
+# normalizar esse alias numa CÓPIA em memória (nunca no arquivo
+# original) — distinto de CF_DATETIME (decodificou de primeira, sem
+# nenhuma normalização) e de RAW_NUMERIC_CF (nem a normalização
+# resolveu, ou o calendário não é um alias conhecido).
+TIME_DECODE_MODE_CF_DATETIME_NORMALIZED_ALIAS = 'CF_DATETIME_NORMALIZED_ALIAS'
+
+# Seção 2 (revisão temporal) — SÓ aliases documentados e evidenciados
+# contra um caso real (nunca "por analogia"). '360' -> '360_day' é a
+# única correspondência com evidência concreta (execução #2, run
+# 35888809240) até agora; não adicionar outra entrada sem o mesmo nível
+# de evidência.
+CALENDAR_ALIASES_CF = {
+    '360': '360_day',
+}
+
+
+def normalizar_calendar_cf(valor):
+    """Seção 2 — traduz um alias de calendário CF LEGADO e DOCUMENTADO
+    para o nome padronizado moderno; nunca inventa correspondência para
+    um valor fora de `CALENDAR_ALIASES_CF`. Devolve
+    (calendar_normalized, calendar_normalization_applied)."""
+    if valor in CALENDAR_ALIASES_CF:
+        return CALENDAR_ALIASES_CF[valor], True
+    return valor, False
 
 
 def inspecionar_metadata_temporal(ds, init_dimension):
@@ -213,8 +242,121 @@ def inspecionar_metadata_temporal(ds, init_dimension):
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Execução real #2 (Seção 4) — Método B de confirmação temporal: semântica
+# CF/IRI documentada da coordenada forecast_period, usada só quando NÃO
+# há variável auxiliar de data-alvo (Método A tem precedência — Seção
+# 4, teste #10). Isso NÃO é inferência livre a partir do padrão
+# numérico de L: os 7 requisitos exigem identificação objetiva via
+# atributos REAIS do dataset (standard_name/units) MAIS uma rota cujo
+# catálogo já documenta essa semântica (`forecast_period_semantics_
+# documented`, nmme_catalogo.RotaMemberLevel) — nunca "L é 0.5,1.5..."
+# sozinho (Seção 6).
+# ══════════════════════════════════════════════════════════════════════════
+
+MAPPING_METHOD_TARGET_VARIABLE = 'CONFIRMED_BY_TARGET_VARIABLE'
+MAPPING_METHOD_FORECAST_PERIOD_SEMANTICS = 'CONFIRMED_BY_FORECAST_PERIOD_SEMANTICS'
+MAPPING_METHOD_NONE = 'NONE'
+
+STANDARD_NAME_S_FORECAST_REFERENCE_TIME = 'forecast_reference_time'
+STANDARD_NAME_L_FORECAST_PERIOD = 'forecast_period'
+LEAD_UNITS_MONTHS_ACEITAS = {'months', 'month'}
+
+
+def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date):
+    """Método B (Seção 4) — os 7 requisitos são checados de forma
+    INDEPENDENTE e objetiva. Distingue duas classes de falha: falta de
+    EVIDÊNCIA (standard_name/units ausentes, rota sem documentação —
+    vira UNCONFIRMED, nunca uma afirmação) de CONTRADIÇÃO objetiva (S
+    observado diverge da origem pedida, ou a grade de L observada
+    diverge da esperada — vira MISMATCH, o mesmo tratamento que o
+    Método A já dava a uma variável auxiliar discordante)."""
+    dim_s = getattr(rota, 'init_dimension', None) or 'S'
+    dim_l = getattr(rota, 'lead_dimension', None) or 'L'
+    insuficientes, contraditorias = [], []
+
+    # 1. S identificado como forecast_reference_time.
+    s_attrs = dict(ds[dim_s].attrs) if dim_s in getattr(ds, 'coords', {}) else {}
+    s_standard_name = s_attrs.get('standard_name')
+    if s_standard_name != STANDARD_NAME_S_FORECAST_REFERENCE_TIME:
+        insuficientes.append(f"{dim_s}.standard_name={s_standard_name!r} (esperado "
+                               f"{STANDARD_NAME_S_FORECAST_REFERENCE_TIME!r})")
+
+    # 2. Origem S selecionada confere com a origem pedida.
+    s_periodo = None
+    if dim_s in getattr(ds, 'coords', {}) or (hasattr(ds, 'variables') and dim_s in ds.variables):
+        try:
+            s_valor = np.asarray(ds[dim_s].values).flat[0]
+            s_periodo = pd.Period(str(s_valor)[:7], 'M')
+        except Exception:
+            s_periodo = None
+    if s_periodo is None:
+        insuficientes.append(f"{dim_s} não pôde ser interpretado como data")
+    elif s_periodo != init_date:
+        contraditorias.append(f"{dim_s} observado ({s_periodo}) diverge da origem pedida ({init_date})")
+
+    # 3/4. L identificado como forecast_period/forecast lead, com
+    # unidade 'months'.
+    l_attrs = dict(ds[dim_l].attrs) if dim_l in getattr(ds, 'coords', {}) else {}
+    l_standard_name = l_attrs.get('standard_name')
+    texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
+    l_identificado = (l_standard_name == STANDARD_NAME_L_FORECAST_PERIOD
+                       or any(t in texto_l for t in TERMOS_CONFIRMATORIOS_L))
+    if not l_identificado:
+        insuficientes.append(f"{dim_l}.standard_name={l_standard_name!r}/attrs={l_attrs!r} não "
+                               f"identifica forecast_period/forecast lead")
+    l_units_observado = l_attrs.get('units')
+    if str(l_units_observado).strip().lower() not in LEAD_UNITS_MONTHS_ACEITAS:
+        insuficientes.append(f"{dim_l}.units={l_units_observado!r} (esperado 'months')")
+
+    # 5/6. Valores de L observados seguem a grade 0.5,1.5,2.5,... —
+    # espaçamento de 1 mês já embutido na própria checagem da grade
+    # (dataset mensal).
+    try:
+        valores_l = sorted(float(v) for v in ds[dim_l].values)
+    except Exception:
+        valores_l = []
+    grade_esperada = [i + 0.5 for i in range(len(valores_l))]
+    if not valores_l:
+        insuficientes.append(f"não foi possível ler os valores observados de {dim_l}")
+    elif valores_l != grade_esperada:
+        contraditorias.append(f"grade {dim_l} observada {valores_l} diverge da sequência "
+                                f"0.5,1.5,2.5,... esperada")
+
+    # 7. Documentação oficial da coleção IRI/NMME desta ROTA registra
+    # essa semântica (nunca aceito por padrão — precisa estar marcado
+    # explicitamente no catálogo, com citação em rota.mapping_reference).
+    doc_ok = bool(getattr(rota, 'forecast_period_semantics_documented', False))
+    if not doc_ok:
+        insuficientes.append("rota sem forecast_period_semantics_documented=True no catálogo — "
+                               "sem citação de documentação oficial da coleção (Seção 4-#7)")
+
+    if contraditorias:
+        status = 'MISMATCH'
+    elif insuficientes:
+        status = 'UNCONFIRMED'
+    else:
+        status = 'OK'
+
+    if status == 'OK':
+        evidencia = (f"confirmado pela semântica documentada do eixo forecast_period (Método B, Seção "
+                      f"4): {dim_s}.standard_name={s_standard_name!r} confere com a origem {init_date}, "
+                      f"{dim_l}.standard_name={l_standard_name!r}/units={l_units_observado!r}, grade "
+                      f"{valores_l} mensal confirmada, rota com forecast_period_semantics_documented="
+                      f"True.")
+    else:
+        motivos = contraditorias + insuficientes
+        evidencia = (f"Método B (semântica forecast_period) não confirmou H{h_lead}<->L={L_val}: "
+                      + '; '.join(motivos) + '.')
+
+    return {'status': status, 'evidence': evidencia,
+            'forecast_reference_time_observed': s_standard_name,
+            'lead_units_observed': l_units_observado,
+            'lead_standard_name_observed': l_standard_name}
+
+
 def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao',
-                                  time_decode_mode=None):
+                                  time_decode_mode=None, rota=None):
     sys.path.insert(0, str(Path(__file__).parent))
     import nmme_download as ndl
     L_val = ndl.h_lead_para_L_ingrid(h_lead)
@@ -222,6 +364,8 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
 
     evidencia = []
     mapping_status = 'UNCONFIRMED'
+    mapping_confirmation_method = MAPPING_METHOD_NONE
+    forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
 
     # Seção 2/8 — em RAW_NUMERIC_CF (decode_times=False) os valores de
     # tempo do dataset são numéricos crus, sem decodificação de
@@ -236,7 +380,10 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
                           "target_month a partir deles. Mapeamento permanece UNCONFIRMED por "
                           "desenho, nunca afrouxado (Seção 2/8).")
         return {'source_L': L_val, 'target_month': str(target_hipotese), 'mapping_status': 'UNCONFIRMED',
-                'evidence': ' | '.join(evidencia)}
+                'evidence': ' | '.join(evidencia),
+                'mapping_confirmation_method': MAPPING_METHOD_NONE,
+                'forecast_reference_time_observed': None, 'lead_units_observed': None,
+                'lead_standard_name_observed': None}
 
     l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
     texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
@@ -253,6 +400,10 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
             break
 
     if var_alvo is not None:
+        # Método A — variável auxiliar tem PRECEDÊNCIA sobre o Método B
+        # sempre que presente (Seção 4, teste #10): nunca consultamos a
+        # semântica do eixo quando já existe uma variável de data-alvo
+        # explícita para checar diretamente.
         try:
             da_alvo = ds[var_alvo]
             # Seleciona o valor NO L do lead atual, nunca o primeiro do
@@ -269,6 +420,7 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
         else:
             if alvo_real == target_hipotese:
                 mapping_status = 'OK'
+                mapping_confirmation_method = MAPPING_METHOD_TARGET_VARIABLE
                 evidencia.append(f"variável auxiliar {var_alvo!r} do dataset confirma "
                                   f"target_month={alvo_real}, igual à hipótese H{h_lead}<->L={L_val}.")
             else:
@@ -278,12 +430,23 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
                                   f"— hipótese H{h_lead}<->L={L_val} contradita pelos metadados.")
     else:
         evidencia.append(f"nenhuma variável auxiliar de data-alvo ({NOMES_VARIAVEL_ALVO_CANDIDATOS}) "
-                          f"encontrada no dataset aberto — não foi possível confirmar a semântica "
-                          f"L<->mês-alvo a partir dos metadados; hipótese H{h_lead}<->L={L_val} "
-                          f"permanece HIPÓTESE, não fato (Seção 6).")
+                          f"encontrada no dataset aberto — tentando Método B (semântica documentada "
+                          f"do eixo forecast_period, Seção 4).")
+        resultado_b = _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date)
+        forecast_reference_time_observed = resultado_b['forecast_reference_time_observed']
+        lead_units_observed = resultado_b['lead_units_observed']
+        lead_standard_name_observed = resultado_b['lead_standard_name_observed']
+        evidencia.append(resultado_b['evidence'])
+        mapping_status = resultado_b['status']
+        if mapping_status == 'OK':
+            mapping_confirmation_method = MAPPING_METHOD_FORECAST_PERIOD_SEMANTICS
 
     return {'source_L': L_val, 'target_month': str(target_hipotese), 'mapping_status': mapping_status,
-            'evidence': ' | '.join(evidencia)}
+            'evidence': ' | '.join(evidencia),
+            'mapping_confirmation_method': mapping_confirmation_method,
+            'forecast_reference_time_observed': forecast_reference_time_observed,
+            'lead_units_observed': lead_units_observed,
+            'lead_standard_name_observed': lead_standard_name_observed}
 
 
 def contar_membros_nao_missing(valores_por_membro):
