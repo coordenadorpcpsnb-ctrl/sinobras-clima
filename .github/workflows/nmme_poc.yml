@@ -1,14 +1,13 @@
-name: NMME Catálogo + POC (Fase 2C.1)
+name: NMME Catálogo + POC (Fase 2C.1/2C.1b)
 
-# Fase 2C.1 — catálogo auditável + infraestrutura do POC controlado do
-# NMME (North American Multi-Model Ensemble), fonte dinâmica sazonal
-# INDEPENDENTE do C3S (Fases 2A-2B). ECMWF deliberadamente excluído
-# (Seção 5) — ver scripts/nmme_catalogo.py.
-#
-# Este workflow só roda infraestrutura (catálogo/plano) — NÃO executa o
-# POC real (download de verdade) nesta entrega (Seção 38/50). Nenhum
-# resultado desta fase é conclusão científica (Seção 18/35-S — o POC
-# nunca calcula skill) nem promove nenhum sistema para produção.
+# Fase 2C.1 — catálogo auditável do NMME (North American Multi-Model
+# Ensemble), fonte dinâmica sazonal INDEPENDENTE do C3S (Fases 2A-2B).
+# ECMWF deliberadamente excluído (Seção 5) — ver scripts/nmme_catalogo.py.
+# Fase 2C.1b — primeiro POC REAL, só CFSv2 (scripts/nmme_poc.py::
+# executar_poc_real_cfsv2), origem 2005-01, H1-H6, todos os membros, 1
+# ponto (São Bento do Tocantins). Nenhum resultado desta fase é
+# conclusão científica (Seção 18/35-S — o POC nunca calcula skill,
+# nunca usa CHIRPS) nem promove nenhum sistema para produção.
 #
 # GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
 # executar_poc_real=false — clicar em "Run workflow" sem mexer em nada
@@ -16,17 +15,19 @@ name: NMME Catálogo + POC (Fase 2C.1)
 # mostra catálogo/plano. NMME não exige credencial conhecida (Seção 29
 # — fontes públicas oficiais).
 #
-# Rodada 4 (correção pós-revisão, Seção 13): `--executar-poc-real` agora
-# passa pelo guardrail (scripts/nmme_poc.py::validar_execucao_poc_possivel)
-# quando pelo menos 1 sistema tem data_access_status em {CONFIRMED,
-# POC_READY_DOCUMENTED} — hoje é o caso de 1 sistema (CFSv2, Rota B/IRI
-# member-level). Isso NÃO significa que este workflow baixa dado real
-# nesta entrega: scripts/nmme_poc.py::main() ainda FALHA explicitamente
-# com SystemExit("não implementado") logo depois do guardrail passar —
-# o download real em si segue fora do escopo desta fase (Seção 38/50).
-# `executar_poc_real`/`confirm_poc_real` ficam mantidos como guardrail
-# de paridade com os workflows C3S, prontos para quando a implementação
-# real do download existir.
+# Fase 2C.1b (Seção 14): `--executar-poc-real` agora FUNCIONA DE VERDADE
+# — passa pelo guardrail (validar_execucao_poc_possivel, exige pelo
+# menos 1 sistema com data_access_status em {CONFIRMED,
+# POC_READY_DOCUMENTED}, hoje só CFSv2) e então chama
+# executar_poc_real_cfsv2(), que baixa um subset real pequeno (1
+# origem/H1-H6/1 ponto/todos os membros — nunca o globo nem a série
+# completa). Prioriza CCSR_BETA se documentado (hoje nunca é — Seção
+# 12, nunca inventa endpoint), cai para IRIDL_LEGACY com fallback
+# registrado explicitamente (Seção 2/3/6). O job só aprova/publica como
+# sucesso quando scripts/nmme_poc.py::avaliar_aprovacao_poc devolve
+# APROVADO (Seção 11) — inclui o mapeamento temporal L<->mês-alvo
+# CONFIRMADO a partir dos metadados do próprio arquivo, nunca assumido
+# (Seção 6).
 
 on:
   workflow_dispatch:
@@ -36,11 +37,11 @@ on:
         required: true
         default: 'true'
       executar_poc_real:
-        description: 'NÃO IMPLEMENTADO nesta entrega (Seção 38/50) — mesmo com confirmação, scripts/nmme_poc.py falha explicitamente.'
+        description: 'true = roda o primeiro POC real (Fase 2C.1b) — só CFSv2, origem 2005-01, H1-H6, sem skill/CHIRPS. Acessa a rede de verdade.'
         required: true
         default: 'false'
       confirm_poc_real:
-        description: 'Só necessário com dry_run_plan=false e executar_poc_real=true: digite EXECUTAR_NMME_POC para liberar (ver aviso acima — ainda assim não implementado)'
+        description: 'Só necessário com dry_run_plan=false e executar_poc_real=true: digite EXECUTAR_NMME_POC para liberar'
         required: false
         default: ''
 
@@ -72,14 +73,11 @@ jobs:
             {
               echo "## ❌ POC real bloqueado"
               echo ""
-              echo "Rodar o POC real (download de verdade) exige preencher o input"
-              echo "**confirm_poc_real** com o texto exato \`EXECUTAR_NMME_POC\`."
+              echo "Rodar o POC real (download de verdade, Fase 2C.1b) exige preencher o"
+              echo "input **confirm_poc_real** com o texto exato \`EXECUTAR_NMME_POC\`."
               echo ""
-              echo "AVISO: mesmo com a confirmação certa, esta entrega (Fase 2C.1) não"
-              echo "implementa o download real — scripts/nmme_poc.py::main() falha"
-              echo "explicitamente com --executar-poc-real (Seção 38/50). O default"
-              echo "(dry_run_plan=true) nunca acessa a rede — só valida código, roda"
-              echo "testes e mostra o catálogo/plano do POC."
+              echo "O default (dry_run_plan=true) nunca acessa a rede — só valida código,"
+              echo "roda testes e mostra o catálogo/plano do POC."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -107,7 +105,7 @@ jobs:
       - name: Mostrar catálogo e plano do POC (dry-run, nunca acessa a rede NMME)
         run: python scripts/nmme_poc.py --dry-run-plan
 
-      - name: Rodar POC real (NÃO IMPLEMENTADO nesta entrega — Seção 38/50)
+      - name: Rodar POC real (Fase 2C.1b — só CFSv2, origem 2005-01, H1-H6, sem skill/CHIRPS)
         if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
         run: python scripts/nmme_poc.py --executar-poc-real
 
@@ -121,6 +119,7 @@ jobs:
             artifacts/nmme_poc/nmme_common_period.json
             artifacts/nmme_poc/nmme_poc_raw.csv
             artifacts/nmme_poc/nmme_poc_temporal_audit.csv
+            artifacts/nmme_poc/nmme_poc_access_audit.csv
             artifacts/nmme_poc/metadata.json
             artifacts/nmme_poc/RELATORIO.md
           retention-days: 30

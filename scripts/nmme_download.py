@@ -152,40 +152,118 @@ def rotas_por_backend(sistema, backend):
     return [r for r in sistema.member_level_routes if r.data_backend == backend]
 
 
-def escolher_backend_member_level(sistema):
-    """Preferência operacional (Seção 6, Rodada 5 — correção final):
-    1) CCSR_BETA se documentado o bastante (status != DISCOVERY_REQUIRED);
-    2) IRIDL_LEGACY como fallback TEMPORÁRIO. Nunca silencioso — sempre
-    devolve `fallback_ocorreu` + `motivo` explícito (Seção 11-G:
-    'se CCSR falhar e IRIDL for usado, isso deve ser registrado')."""
+# ══════════════════════════════════════════════════════════════════════════
+# Fase 2C.1b (POC real do CFSv2) — Representação B: NMME_HARMONIZED_MONTHLY
+# (`SOURCES/.Models/.NMME/.NCEP-CFSv2/.HINDCAST/.MONTHLY/.prec/`), preferida
+# para o primeiro POC real (Seção 3: M=24, grade regular 1°, variável
+# "prec", mais próxima da amostra NMME harmonizada). EMPIRICALLY_CONFIRMED
+# ao nível de definição de catálogo (Rodada 5/nmme_catalogo.py) — o
+# servidor real (iridl.ldeo.columbia.edu) continua não testado por este
+# módulo até o POC real de fato rodar.
+# ══════════════════════════════════════════════════════════════════════════
+
+IRI_CFSV2_NMME_HARMONIZED_PATH = 'SOURCES/.Models/.NMME/.NCEP-CFSv2/.HINDCAST/.MONTHLY/.prec'
+
+# S grid nativo da Representação B (EMPIRICALLY_CONFIRMED, Rodada 5) —
+# 1/jan/1982 a 1/dez/2010, mensal — DISTINTO do S nativo da Representação
+# A (S_NATIVO_INICIO/FIM acima).
+S_NATIVO_REPR_B_INICIO = (1982, 1)
+S_NATIVO_REPR_B_FIM = (2010, 12)
+
+
+def origem_dentro_do_nativo_representacao_b(ano, mes):
+    ini = pd_period(*S_NATIVO_REPR_B_INICIO)
+    fim = pd_period(*S_NATIVO_REPR_B_FIM)
+    alvo = pd_period(ano, mes)
+    return ini <= alvo <= fim
+
+
+def montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min=1, h_lead_max=6):
+    """Monta a URL de subset IRIDL para a Representação B (NMME
+    harmonized/monthly) — mesma filosofia de
+    montar_url_iri_cfsv2_member_level (Rota A): X/Y por ponto, S por
+    origem única, L por faixa pequena, M irrestrito (queremos todos os
+    membros). Levanta ValueError se a origem estiver fora do S grid
+    nativo desta representação (Seção 15-C aplicada à Representação B)."""
+    if not origem_dentro_do_nativo_representacao_b(ano, mes):
+        raise ValueError(f"origem {ano:04d}-{mes:02d} fora do S grid nativo da Representação B "
+                          f"({S_NATIVO_REPR_B_INICIO[0]}-{S_NATIVO_REPR_B_INICIO[1]:02d} a "
+                          f"{S_NATIVO_REPR_B_FIM[0]}-{S_NATIVO_REPR_B_FIM[1]:02d}) — nunca montar "
+                          f"request para período que o catálogo-fonte não documenta.")
+    l_ini, l_fim = h_lead_para_L_ingrid(h_lead_min), h_lead_para_L_ingrid(h_lead_max)
+    base = f'{IRI_CFSV2_MEMBER_LEVEL_BASE}/{IRI_CFSV2_NMME_HARMONIZED_PATH}'
+    return (f"{base}/X/{lon}/VALUE/Y/{lat}/VALUE/"
+            f"S/({mes:02d}%20{ano})/VALUE/"
+            f"L/({l_ini})/({l_fim})/RANGEEDGES/data.nc")
+
+
+def ordem_tentativa_member_level(sistema):
+    """Ordem de tentativa para o POC real (Seção 2/3, Fase 2C.1b):
+    1) CCSR_BETA se documentado o bastante (hoje nunca é — Seção 12);
+    2) IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY (Representação B, PREFERIDA
+       — M=24, grade regular, mais próxima do NMME harmonizado);
+    3) IRIDL_LEGACY/RAW_NATIVE_ENSEMBLE (Representação A, fallback se B
+       falhar por acesso — Seção 3, nunca silencioso).
+    Devolve a lista ordenada de RotaMemberLevel prontas; levanta
+    RuntimeError se nenhuma rota estiver pronta (Seção 5)."""
     ccsr_prontas = [r for r in rotas_por_backend(sistema, ncat.SOURCE_BACKEND_CCSR_BETA)
                      if r.status != ncat.ROUTE_STATUS_DISCOVERY_REQUIRED]
-    if ccsr_prontas:
-        return {'rota': ccsr_prontas[0], 'fallback_ocorreu': False,
-                'motivo': 'CCSR_BETA documentado o bastante — preferência operacional (Seção 6).'}
     legacy_prontas = [r for r in rotas_por_backend(sistema, ncat.SOURCE_BACKEND_IRIDL_LEGACY)
                         if r.status == ncat.ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY]
-    if legacy_prontas:
-        ccsr_quaisquer = rotas_por_backend(sistema, ncat.SOURCE_BACKEND_CCSR_BETA)
-        motivo_ccsr = ccsr_quaisquer[0].status if ccsr_quaisquer else 'não registrado'
-        return {'rota': legacy_prontas[0], 'fallback_ocorreu': True,
-                'motivo': f'CCSR_BETA={motivo_ccsr} (endpoint não confirmado) — usando IRIDL_LEGACY '
-                          f'como fallback temporário (Seção 6), nunca silencioso — ver source_'
-                          f'continuity_risk={legacy_prontas[0].source_continuity_risk} '
-                          f'(desligamento esperado {ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN}).'}
-    raise RuntimeError(f"{sistema.centre}/{sistema.model_name}: nenhuma rota member-level pronta "
-                        f"(nem CCSR_BETA nem IRIDL_LEGACY) — Seção 5.")
+    legacy_b = [r for r in legacy_prontas if r.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY]
+    legacy_a = [r for r in legacy_prontas if r.dataset_representation == ncat.REPR_RAW_NATIVE_ENSEMBLE]
+    outras_legacy = [r for r in legacy_prontas if r not in legacy_b and r not in legacy_a]
+    ordem = ccsr_prontas + legacy_b + legacy_a + outras_legacy
+    if not ordem:
+        raise RuntimeError(f"{sistema.centre}/{sistema.model_name}: nenhuma rota member-level pronta "
+                            f"(nem CCSR_BETA nem IRIDL_LEGACY) — Seção 5.")
+    return ordem
+
+
+def escolher_backend_member_level(sistema):
+    """Preferência operacional (Seção 6, Rodada 5; ordem de
+    representação refinada na Seção 2/3 da Fase 2C.1b — ver
+    ordem_tentativa_member_level). Nunca silencioso — sempre devolve
+    `fallback_ocorreu` + `motivo` explícito (Seção 11-G: 'se CCSR
+    falhar e IRIDL for usado, isso deve ser registrado')."""
+    rota = ordem_tentativa_member_level(sistema)[0]
+    fallback_ocorreu = rota.data_backend != ncat.SOURCE_BACKEND_CCSR_BETA
+    if not fallback_ocorreu:
+        return {'rota': rota, 'fallback_ocorreu': False,
+                'motivo': 'CCSR_BETA documentado o bastante — preferência operacional (Seção 6).'}
+    ccsr_quaisquer = rotas_por_backend(sistema, ncat.SOURCE_BACKEND_CCSR_BETA)
+    motivo_ccsr = ccsr_quaisquer[0].status if ccsr_quaisquer else 'não registrado'
+    return {'rota': rota, 'fallback_ocorreu': True,
+            'motivo': f'CCSR_BETA={motivo_ccsr} (endpoint não confirmado/pronto) — usando IRIDL_LEGACY/'
+                      f'{rota.dataset_representation} como fallback temporário (Seção 6), nunca '
+                      f'silencioso — ver source_continuity_risk={rota.source_continuity_risk} '
+                      f'(desligamento esperado {ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN}).'}
+
+
+def montar_url_para_rota(rota, ano, mes, lat, lon, h_lead_min=1, h_lead_max=6):
+    """Constrói a URL para UMA rota específica já escolhida (Seção
+    4/11-D) — IRIDL_LEGACY e CCSR_BETA NUNCA compartilham o mesmo
+    builder, e nenhum nome de variável é convertido implicitamente
+    entre backends (Seção 11-E: PRATE do legado nunca vira "pr" do
+    CCSR por conta própria — cada rota carrega o SEU variable_name,
+    lido do catálogo)."""
+    if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
+        raise NotImplementedError(f"backend CCSR_BETA está {rota.status} — endpoint não confirmado, "
+                                    f"nunca montar URL por tentativa de padrão (Seção 12).")
+    if rota.data_backend == ncat.SOURCE_BACKEND_IRIDL_LEGACY:
+        if rota.dataset_representation == ncat.REPR_RAW_NATIVE_ENSEMBLE:
+            return montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min, h_lead_max)
+        if rota.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY:
+            return montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min, h_lead_max)
+        raise ValueError(f"representação sem builder: {rota.dataset_representation!r}.")
+    raise ValueError(f"backend desconhecido: {rota.data_backend!r}.")
 
 
 def montar_url_member_level(sistema, ano, mes, lat, lon, h_lead_min=1, h_lead_max=6, backend=None):
-    """Dispatcher de backend (Seção 4/11-D) — IRIDL_LEGACY e CCSR_BETA
-    NUNCA compartilham automaticamente o mesmo URL builder, e nenhum
-    nome de variável é convertido implicitamente entre backends (Seção
-    11-E: PRATE do legado nunca vira "pr" do CCSR por conta própria —
-    cada rota carrega o SEU variable_name, lido do catálogo). `backend`
-    None usa escolher_backend_member_level (com fallback registrado);
-    um backend explícito pula a escolha automática mas ainda documenta
-    a decisão no retorno."""
+    """Dispatcher de backend (Seção 4/11-D). `backend` None usa
+    escolher_backend_member_level (com fallback registrado); um
+    backend explícito pula a escolha automática mas ainda documenta a
+    decisão no retorno."""
     if backend is None:
         escolha = escolher_backend_member_level(sistema)
     else:
@@ -196,25 +274,9 @@ def montar_url_member_level(sistema, ano, mes, lat, lon, h_lead_min=1, h_lead_ma
                               f"backend={backend!r}.")
         escolha = {'rota': candidatas[0], 'fallback_ocorreu': False,
                    'motivo': f'backend={backend!r} pedido explicitamente (sem escolha automática).'}
-    rota = escolha['rota']
-
-    if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
-        raise NotImplementedError(f"{sistema.centre}/{sistema.model_name}: backend CCSR_BETA está "
-                                    f"{rota.status} — endpoint não confirmado, nunca montar URL por "
-                                    f"tentativa de padrão (Seção 12).")
-    if rota.data_backend == ncat.SOURCE_BACKEND_IRIDL_LEGACY:
-        if rota.dataset_representation == ncat.REPR_RAW_NATIVE_ENSEMBLE:
-            url = montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min, h_lead_max)
-        elif rota.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY:
-            raise NotImplementedError(f"{sistema.centre}/{sistema.model_name}: builder para a "
-                                        f"Representação B (NMME_HARMONIZED_MONTHLY) não foi "
-                                        f"implementado nesta rodada (Seção 9/16) — usar backend="
-                                        f"IRIDL_LEGACY com a Representação A (padrão).")
-        else:
-            raise ValueError(f"representação desconhecida: {rota.dataset_representation!r}.")
-        return {'url': url, 'rota': rota, 'fallback_ocorreu': escolha['fallback_ocorreu'],
-                'motivo_escolha': escolha['motivo']}
-    raise ValueError(f"backend desconhecido: {rota.data_backend!r}.")
+    url = montar_url_para_rota(escolha['rota'], ano, mes, lat, lon, h_lead_min, h_lead_max)
+    return {'url': url, 'rota': escolha['rota'], 'fallback_ocorreu': escolha['fallback_ocorreu'],
+            'motivo_escolha': escolha['motivo']}
 
 
 def verificar_acesso():

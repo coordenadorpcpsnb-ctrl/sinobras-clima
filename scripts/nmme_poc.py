@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-nmme_poc.py — Fase 2C.1: orquestração do catálogo + POC controlado do
-NMME (fonte dinâmica sazonal independente do C3S, Fase 2C). Esta
-entrega é só INFRAESTRUTURA (Seção 38/50): monta catálogo, plano de
-requests, artifacts documentais — o POC real (download de verdade) só
-roda depois de revisão humana, fora desta tarefa.
+nmme_poc.py — Fase 2C.1/2C.1b: orquestração do catálogo + POC do NMME
+(fonte dinâmica sazonal independente do C3S, Fase 2C). `--dry-run-plan`
+continua só INFRAESTRUTURA (Seção 38/50, nunca acessa rede).
+`--executar-poc-real` (Fase 2C.1b) agora está IMPLEMENTADO de verdade
+(executar_poc_real_cfsv2) — só para CFSv2, origem 2005-01, H1-H6 — mas
+NÃO foi executado contra a rede real nesta tarefa (Seção 17: implementar
+sem rodar); a primeira execução real fica para revisão humana, fora
+desta tarefa.
 
 O POC NÃO calcula skill (Seção 18/35-S) — só valida acesso, modelo/
 versão corretos, membros, variável, unidade, grade, leads, target
@@ -45,8 +48,8 @@ POC_ORIGEM = (2005, 1)       # Seção 7, Rodada 4 — dentro do S grid nativo d
 
 ARTIFACT_FILENAMES = [
     'nmme_model_catalog.csv', 'nmme_common_period.json', 'nmme_poc_raw.csv',
-    'nmme_poc_temporal_audit.csv', 'metadata.json', 'RELATORIO.md',
-]
+    'nmme_poc_temporal_audit.csv', 'nmme_poc_access_audit.csv', 'metadata.json', 'RELATORIO.md',
+]   # Seção 12, Fase 2C.1b: nunca inclui NetCDF/GRIB bruto — só CSV/JSON/MD.
 
 
 def _origem_str(ano, mes):
@@ -271,6 +274,407 @@ def processar_origem_modelo(sistema, ano, mes, ds, esquema_temporal='lead1_igual
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Fase 2C.1b — primeiro POC REAL, só CFSv2 (Seção 1-11). Implementado
+# nesta tarefa mas NÃO executado contra a rede real (Seção 17) — testado
+# só com baixar_fn/abrir_fn injetados; nenhum teste desta base de código
+# toca requests/xarray reais para esta função.
+# ══════════════════════════════════════════════════════════════════════════
+
+GRID_DISTANCE_MAX_KM = 200.0   # sanidade de grade (Seção 9) — bem maior que a diagonal de uma célula
+                                # 1° (~157km) ou da grade Gaussiana ~0,9375° (~147km), nunca um limite
+                                # de skill/qualidade — só detecta erro grosseiro de seleção de ponto.
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão final pré-execução (Seção 6) — access_audit não pode chamar
+# TUDO de SERVICE_UNAVAILABLE. Cada estágio do acesso levanta um tipo
+# específico (todos com um atributo .status), e o loop principal usa
+# esse atributo para classificar a linha do audit — nunca um "qualquer
+# exceção vira indisponibilidade de serviço" genérico.
+# ══════════════════════════════════════════════════════════════════════════
+
+class AcessoRotaError(RuntimeError):
+    """Base — status default é SERVICE_UNAVAILABLE para qualquer
+    exceção que NÃO seja uma das subclasses tipadas abaixo (ex.: erro
+    inesperado, timeout genérico do baixar_fn)."""
+    status = 'SERVICE_UNAVAILABLE'
+
+
+class HttpErrorRota(AcessoRotaError):
+    status = 'HTTP_ERROR'
+
+
+class DatasetOpenErrorRota(AcessoRotaError):
+    status = 'DATASET_OPEN_ERROR'
+
+
+class FormatoInvalidoRota(AcessoRotaError):
+    status = 'FORMAT_INVALID'
+
+
+class VariavelInvalidaRota(AcessoRotaError):
+    status = 'VARIABLE_INVALID'
+
+
+class UnidadeInvalidaRota(AcessoRotaError):
+    status = 'UNITS_INVALID'
+
+
+class DimensoesInvalidasRota(AcessoRotaError):
+    status = 'DIMS_INVALID'
+
+
+def validar_acesso_dataset_real(ds, rota):
+    """Seção 5/6 — validação EMPÍRICA do dataset aberto de verdade
+    contra o que a rota documentava: formato utilizável, variável
+    existe, tem 'units' RECONHECIDA pelo conversor, as 5 dimensões
+    (S/M/L/X/Y, pelos nomes registrados na rota) estão presentes. Cada
+    falha levanta um tipo ESPECÍFICO (Seção 6) — nunca um RuntimeError
+    genérico que o access_audit só saberia rotular como
+    SERVICE_UNAVAILABLE."""
+    try:
+        nomes_disponiveis = list(ds.data_vars)
+    except Exception as e:
+        raise FormatoInvalidoRota(f"dataset aberto não tem a estrutura esperada (sem data_vars "
+                                    f"utilizável) — {type(e).__name__}: {e}.") from e
+    var_encontrada = next((c for c in (rota.variable_name, rota.variable_name.lower(),
+                                        rota.variable_name.upper()) if c in nomes_disponiveis), None)
+    if var_encontrada is None:
+        raise VariavelInvalidaRota(f"variável {rota.variable_name!r} (documentada no catálogo para "
+                                     f"esta rota) não encontrada no dataset real — disponíveis: "
+                                     f"{nomes_disponiveis} (Seção 5).")
+    da = ds[var_encontrada]
+    units_observado = da.attrs.get('units')
+    if not units_observado:
+        raise UnidadeInvalidaRota(f"variável {var_encontrada!r} sem atributo 'units' no dataset real "
+                                    f"— FALHANDO em vez de assumir (Seção 5/8).")
+    dims_esperadas = {rota.member_dimension, rota.lead_dimension, rota.init_dimension,
+                      rota.lat_dimension, rota.lon_dimension}
+    presentes = set(da.dims) | set(ds.coords) | set(ds.variables)
+    dims_faltando = dims_esperadas - presentes
+    if dims_faltando:
+        raise DimensoesInvalidasRota(f"dimensões esperadas {sorted(dims_esperadas)} não encontradas "
+                                       f"no dataset real (faltando {sorted(dims_faltando)}, "
+                                       f"disponíveis {sorted(presentes)}) — Seção 5.")
+    # Seção 8 — só aceita unidade explicitamente reconhecida pelo
+    # conversor; checado aqui (não só na conversão por lead) para que
+    # uma unidade não reconhecida acione o MESMO fallback de rota que
+    # qualquer outro problema de acesso/formato (Seção 3), em vez de
+    # derrubar o processamento no meio de um lead.
+    unidades_reconhecidas = ({u.lower() for u in nproc.UNIDADES_MM_DIA_ACEITAS} |
+                              {u.lower() for u in nproc.UNIDADES_KG_M2_S_ACEITAS})
+    if str(units_observado).strip().lower() not in unidades_reconhecidas:
+        raise UnidadeInvalidaRota(f"unidade {units_observado!r} da variável {var_encontrada!r} não é "
+                                    f"reconhecida pelo conversor (Seção 8) — aceitas: mm/day-like ou "
+                                    f"kg m-2 s-1-like.")
+    return {'variable_observed': var_encontrada, 'units_observed': units_observado,
+            'dims_observed': sorted(set(da.dims))}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão final pré-execução (Seção 2) — política de validação de
+# membros POR REPRESENTAÇÃO, nunca genérica. Substitui o antigo
+# 'raw_df.member.nunique() > 0' (permissivo demais) e o
+# raw_completo tautológico (RAW era construído dos próprios membros
+# contados, então len(raw)==soma(contados) é verdade por construção e
+# nunca prova completude do ensemble).
+# ══════════════════════════════════════════════════════════════════════════
+
+MEMBERS_POLICY_HARMONIZED = 'HARMONIZED_EXACT_24'
+MEMBERS_POLICY_RAW_NATIVE = 'RAW_NATIVE_RANGE_24_28'
+MEMBERS_POLICY_UNDEFINED = 'UNDEFINED_EXACT_AXIS'
+
+MEMBERS_STATUS_OK = 'OK'
+MEMBERS_STATUS_FAIL = 'FAIL'
+
+
+def validar_membros_poc(rota, member_ids_axis, member_count_non_missing_por_lead,
+                          member_ids_non_missing_by_lead):
+    """Seção 2/3 (revisão final) — barreira de completude do ensemble
+    INDEPENDENTE da contagem de linhas RAW: valida o eixo M observado
+    contra o documentado e a contagem por lead contra a política da
+    REPRESENTAÇÃO, antes de qualquer cálculo de n_raw_expected (Seção
+    1 — 'primeiro validamos a completude mínima esperada da fonte;
+    depois contamos linhas').
+
+    NMME_HARMONIZED_MONTHLY: eixo esperado=documentado=24; eixo
+    observado deve ser EXATAMENTE 24; cada lead deve ter EXATAMENTE 24
+    membros não-missing — qualquer lead abaixo disso reprova.
+
+    RAW_NATIVE_ENSEMBLE: eixo esperado=documentado=28; eixo observado
+    deve ser EXATAMENTE 28; cada lead deve ter entre 24 e 28
+    (inclusive) membros não-missing — nunca abaixo de 24, nunca exige
+    28 fixo (Seção 7: 'historicamente podem existir 24-28 membros
+    efetivos')."""
+    axis_expected = rota.member_axis_size
+    axis_observed = len(member_ids_axis)
+
+    if rota.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY:
+        policy = MEMBERS_POLICY_HARMONIZED
+        axis_ok = axis_observed == axis_expected == 24
+        por_lead_ok = [n == 24 for n in member_count_non_missing_por_lead]
+    elif rota.dataset_representation == ncat.REPR_RAW_NATIVE_ENSEMBLE:
+        policy = MEMBERS_POLICY_RAW_NATIVE
+        axis_ok = axis_observed == axis_expected == 28
+        por_lead_ok = [24 <= n <= 28 for n in member_count_non_missing_por_lead]
+    else:
+        # Sem política específica documentada (ex.: uma futura rota
+        # CCSR) — default conservador: exige igualdade exata com o
+        # eixo declarado no catálogo em cada lead, nunca inventa uma
+        # faixa de tolerância sem base documental.
+        policy = MEMBERS_POLICY_UNDEFINED
+        axis_ok = axis_observed == axis_expected
+        por_lead_ok = [n == axis_expected for n in member_count_non_missing_por_lead]
+
+    status = (MEMBERS_STATUS_OK if axis_ok and por_lead_ok and all(por_lead_ok)
+              else MEMBERS_STATUS_FAIL)
+
+    return {
+        'member_axis_size_expected': axis_expected,
+        'member_axis_size_observed': axis_observed,
+        'member_count_non_missing_por_lead': list(member_count_non_missing_por_lead),
+        'member_ids_axis': list(member_ids_axis),
+        'member_ids_non_missing_by_lead': list(member_ids_non_missing_by_lead),
+        'members_expected_policy': policy,
+        'members_axis_size_ok': bool(axis_ok),
+        'members_count_per_lead_ok': list(por_lead_ok),
+        'members_status': status,
+    }
+
+
+def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO, sistema=None,
+                              esquema_temporal='lead1_igual_mes_inicializacao',
+                              baixar_fn=None, abrir_fn=None):
+    """Seção 1-11 (Fase 2C.1b) — primeiro POC REAL, só CFSv2, origem
+    2005-01, H1-H6. Tenta as rotas na ordem de
+    nmme_download.ordem_tentativa_member_level (CCSR se pronta;
+    Representação B preferida; Representação A como fallback explícito
+    se B falhar por acesso — Seção 2/3, NUNCA silencioso). Nunca
+    calcula skill, nunca usa CHIRPS, nunca baixa série histórica
+    completa nem o globo (Seção 4). Devolve um dict de resultado —
+    nunca levanta por SERVICE_UNAVAILABLE (Seção 15: reprova o acesso
+    explicitamente em vez de propagar uma exceção não tratada)."""
+    from _c3s_utils import MUNICIPIOS
+    import numpy as np
+
+    sistema = sistema or ncat.sistema_por_nome('NOAA_NCEP', 'CFSv2')
+    baixar_fn = baixar_fn or ndl.baixar_arquivo
+    if abrir_fn is None:
+        import xarray as xr
+        abrir_fn = xr.open_dataset
+    ano, mes = origem
+    info_muni = MUNICIPIOS[municipio]
+    lat, lon = info_muni['lat'], info_muni['lon']
+
+    ordem = ndl.ordem_tentativa_member_level(sistema)
+    backend_requested = ordem[0].data_backend
+    representation_requested = ordem[0].dataset_representation
+
+    access_audit_linhas = []
+    ds = fatos = rota_usada = url_usada = None
+    for rota in ordem:
+        url = None
+        try:
+            if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
+                raise AcessoRotaError(f"CCSR_BETA está {rota.status} — não tentado (Seção 12).")
+            url = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1])
+            destino = ndl.caminho_cache(sistema, ano, mes)
+            try:
+                caminho, cache_hit = baixar_fn(url, destino)
+            except AcessoRotaError:
+                raise
+            except Exception as e:
+                raise HttpErrorRota(f"{type(e).__name__}: {e}") from e
+            try:
+                ds_tentativa = abrir_fn(caminho)
+            except AcessoRotaError:
+                raise
+            except Exception as e:
+                raise DatasetOpenErrorRota(f"{type(e).__name__}: {e}") from e
+            fatos_tentativa = validar_acesso_dataset_real(ds_tentativa, rota)
+        except Exception as e:
+            status = getattr(e, 'status', 'SERVICE_UNAVAILABLE')
+            access_audit_linhas.append({
+                'backend': rota.data_backend, 'dataset_representation': rota.dataset_representation,
+                'source_url': url or '', 'status': status, 'cache_hit': False,
+                'motivo': f'{type(e).__name__}: {e}'})
+            continue
+        access_audit_linhas.append({
+            'backend': rota.data_backend, 'dataset_representation': rota.dataset_representation,
+            'source_url': url, 'status': 'OK', 'cache_hit': cache_hit, 'motivo': ''})
+        ds, fatos, rota_usada, url_usada = ds_tentativa, fatos_tentativa, rota, url
+        break
+
+    access_audit_df = pd.DataFrame(access_audit_linhas)
+    resultado_base = {
+        'backend_requested': backend_requested, 'dataset_representation_requested': representation_requested,
+        'access_audit_df': access_audit_df, 'model': f'{sistema.centre}/{sistema.model_name}',
+        'init_date': _origem_str(ano, mes), 'lead_values_requested': list(leads),
+    }
+
+    if rota_usada is None:
+        return {**resultado_base, 'poc_status': 'REPROVADO_ACESSO', 'backend_used': None,
+                'dataset_representation_used': None, 'backend_fallback_ocorreu': len(ordem) > 1,
+                'fallback_reason': 'SERVICE_UNAVAILABLE em todas as rotas tentadas — nunca contornado '
+                                    'com scraping ou URL inventada (Seção 15).',
+                'representation_changed': False, 'raw_df': pd.DataFrame(),
+                'temporal_audit_df': pd.DataFrame(), 'checklist': {}}
+
+    init_date = pd.Period(f'{ano}-{mes:02d}', 'M')
+    var_encontrada, units_observado = fatos['variable_observed'], fatos['units_observed']
+    da = ds[var_encontrada]
+
+    ponto = da.sel({rota_usada.lon_dimension: lon, rota_usada.lat_dimension: lat}, method='nearest')
+    selected_lon = float(ponto[rota_usada.lon_dimension].item())
+    selected_lat = float(ponto[rota_usada.lat_dimension].item())
+    dist_km = nproc.distancia_km_aprox(lat, lon, selected_lat, selected_lon)
+
+    membros_eixo = (list(ponto[rota_usada.member_dimension].values)
+                     if rota_usada.member_dimension in ponto.dims else [0])
+
+    raw_linhas, temporal_linhas = [], []
+    n_validos_por_lead, ids_nao_missing_por_lead = [], []
+    for lead in leads:
+        target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
+        mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal)
+        L_sel = mapeamento['source_L']
+        fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
+                       if rota_usada.lead_dimension in ponto.dims else ponto)
+        valores_brutos = []
+        for m in membros_eixo:
+            fatia = (fatia_lead.sel({rota_usada.member_dimension: m})
+                      if rota_usada.member_dimension in fatia_lead.dims else fatia_lead)
+            valores_brutos.append(float(fatia.item()))
+        n_validos_por_lead.append(nproc.contar_membros_nao_missing(valores_brutos))
+        ids_nao_missing_por_lead.append([m for m, v in zip(membros_eixo, valores_brutos)
+                                          if not np.isnan(v)])
+        for m, valor_bruto in zip(membros_eixo, valores_brutos):
+            if np.isnan(valor_bruto):
+                continue   # membro missing nesta origem/lead — nunca vira linha RAW (Seção 7)
+            conv = nproc.converter_precip_para_mm_mes(valor_bruto, units_observado, target_month)
+            raw_linhas.append(nproc.montar_linha_raw(
+                sistema, init_date, target_month, lead, m, conv['forecast_prec_mm_month'],
+                lat, lon, selected_lat, selected_lon, var_encontrada, conv['units_original'],
+                conv['conversion_applied'], url_usada, f'NetCDF/{rota_usada.data_backend}'))
+        temporal_linhas.append({
+            'centre': sistema.centre, 'model_name': sistema.model_name, 'init_date': str(init_date),
+            'H_lead': int(lead), 'source_L': mapeamento['source_L'],
+            'target_month': mapeamento['target_month'], 'mapping_status': mapeamento['mapping_status'],
+            'evidence': mapeamento['evidence'],
+            'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
+
+    raw_df = pd.DataFrame(raw_linhas)
+    if len(raw_df):
+        nproc.validar_raw(raw_df['forecast_prec_mm'].to_numpy(dtype=float))
+    temporal_audit_df = pd.DataFrame(temporal_linhas)
+
+    # Seção 2/3 — barreira de completude do ensemble INDEPENDENTE da
+    # contagem de linhas RAW (primeiro valida a política da
+    # representação; só DEPOIS calcula n_raw_expected — nunca o
+    # contrário, senão a igualdade vira tautologia, Seção 1).
+    validacao_membros = validar_membros_poc(rota_usada, membros_eixo, n_validos_por_lead,
+                                              ids_nao_missing_por_lead)
+    if rota_usada.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY:
+        # Seção 1 — DERIVADO de member_axis_size x leads, nunca 144 hardcoded.
+        n_raw_expected = rota_usada.member_axis_size * len(leads)
+    else:
+        # Representação A (e qualquer outra sem política HARMONIZED): soma
+        # das contagens observadas — só é uma afirmação de completude
+        # porque validacao_membros já checou independentemente que cada
+        # contagem está dentro da faixa aceita pela política (Seção 1).
+        n_raw_expected = sum(n_validos_por_lead)
+    raw_completo = len(raw_df) == n_raw_expected
+
+    # Seção 4 — grade DOCUMENTADA (catálogo) nunca chamada de observada;
+    # a forma OBSERVADA vem do subset de fato aberto (tipicamente 1x1,
+    # já que o request recorta a 1 ponto).
+    grid_shape_documented = rota_usada.grid_shape
+    tam_x = ponto.sizes.get(rota_usada.lon_dimension, 1)
+    tam_y = ponto.sizes.get(rota_usada.lat_dimension, 1)
+    subset_grid_shape_observed = f'{tam_x}x{tam_y}'
+
+    # Seção 5 — convenção de longitude detectada a partir da coordenada
+    # REAL do dataset aberto (grade inteira, antes do recorte por
+    # ponto, quando disponível) — nunca inventada quando o subset já
+    # veio recortado a um único valor ambíguo.
+    lon_dim = rota_usada.lon_dimension
+    valores_lon_fonte = (da.coords[lon_dim].values if lon_dim in da.coords
+                          else [selected_lon])
+    longitude_convention = nproc.detectar_convencao_longitude_observada(valores_lon_fonte)
+
+    return {
+        **resultado_base,
+        'poc_status': 'PROCESSADO', 'backend_used': rota_usada.data_backend,
+        'dataset_representation_used': rota_usada.dataset_representation,
+        'backend_fallback_ocorreu': rota_usada.data_backend != backend_requested
+                                     or rota_usada.dataset_representation != representation_requested,
+        'fallback_reason': ('' if rota_usada.dataset_representation == representation_requested
+                             else f'Representação {representation_requested} falhou por acesso — '
+                                  f'trocada para {rota_usada.dataset_representation} (Seção 3, '
+                                  f'nunca silencioso).'),
+        'representation_changed': rota_usada.dataset_representation != representation_requested,
+        'source_url': url_usada, 'source_lead_values_observed': sorted(set(
+            row['source_L'] for row in temporal_linhas)),
+        'member_axis_size': rota_usada.member_axis_size,
+        'member_count_non_missing': (n_validos_por_lead[0] if n_validos_por_lead else 0),
+        'member_count_non_missing_por_lead': n_validos_por_lead,
+        'member_ids_axis': list(membros_eixo),
+        'member_ids_non_missing_by_lead': ids_nao_missing_por_lead,
+        'members_expected_policy': validacao_membros['members_expected_policy'],
+        'members_axis_size_ok': validacao_membros['members_axis_size_ok'],
+        'members_count_per_lead_ok': validacao_membros['members_count_per_lead_ok'],
+        'members_status': validacao_membros['members_status'],
+        'units_observed': units_observado, 'variable_observed': var_encontrada,
+        'selected_lat': selected_lat, 'selected_lon': selected_lon, 'grid_distance_km': round(dist_km, 2),
+        'grid_shape_documented': grid_shape_documented,
+        'subset_grid_shape_observed': subset_grid_shape_observed,
+        'longitude_convention': longitude_convention,
+        'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
+                                     else 'UNCONFIRMED'),
+        'n_raw_expected': n_raw_expected, 'n_raw': len(raw_df), 'raw_completo': raw_completo,
+        'requests_realizados': 1,
+        'raw_df': raw_df, 'temporal_audit_df': temporal_audit_df,
+    }
+
+
+def avaliar_aprovacao_poc(resultado):
+    """Seção 11 — guardrail de aprovação do POC real. Só aprova se
+    TODOS os critérios listados passarem; qualquer falha vira
+    REPROVADO_<motivo> explícito, nunca um APROVADO silencioso."""
+    import numpy as np
+    if resultado.get('poc_status') == 'REPROVADO_ACESSO':
+        return {'poc_status': 'REPROVADO_ACESSO',
+                'checklist': {'download_bem_sucedido': False}}
+
+    raw_df, temporal_df = resultado['raw_df'], resultado['temporal_audit_df']
+    checklist = {
+        'download_bem_sucedido': True,
+        'um_modelo': True,    # por construção — a função só processa 1 sistema por chamada
+        'uma_origem': True,   # idem — 1 origem por chamada
+        'h1_a_h6_presentes': bool(len(temporal_df)) and set(temporal_df['H_lead']) == {1, 2, 3, 4, 5, 6},
+        'members_status_ok': resultado.get('members_status') == MEMBERS_STATUS_OK,
+        'member_axis_size_ok': bool(resultado.get('members_axis_size_ok', False)),
+        'member_count_per_lead_ok': (bool(resultado.get('members_count_per_lead_ok'))
+                                      and all(resultado.get('members_count_per_lead_ok', []))),
+        'sem_duplicata': bool(len(raw_df)) and not raw_df.duplicated(subset=['lead', 'member']).any(),
+        'valores_finitos': bool(len(raw_df)) and bool(np.isfinite(raw_df['forecast_prec_mm']).all()),
+        'precipitacao_nao_negativa': bool(len(raw_df)) and bool((raw_df['forecast_prec_mm'] >= 0).all()),
+        'unidade_confirmada': bool(len(raw_df)) and bool(raw_df['units_original'].notna().all()),
+        'grade_confirmada': (bool(len(raw_df))
+                              and bool((raw_df['grid_distance_km'] < GRID_DISTANCE_MAX_KM).all())),
+        'temporal_mapping_confirmado': (bool(len(temporal_df))
+                                          and bool((temporal_df['mapping_status'] == 'OK').all())),
+        'raw_completo': bool(resultado.get('raw_completo', False)),
+        'nenhum_skill_calculado': True,   # estrutural — este módulo nunca importa métricas de skill
+    }
+    reprovados = [k for k, v in checklist.items() if not v]
+    if reprovados:
+        return {'poc_status': f'REPROVADO_{reprovados[0].upper()}', 'motivos_reprovacao': reprovados,
+                'checklist': checklist}
+    return {'poc_status': 'APROVADO', 'checklist': checklist}
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Catálogo + metadata + relatório (Seção 32-34) — sempre gerável, nunca
 # acessa a rede.
 # ══════════════════════════════════════════════════════════════════════════
@@ -319,6 +723,19 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         backend_fallback_ocorreu = False
         backend_fallback_motivo = 'Nenhum sistema com member_level_routes no conjunto avaliado.'
 
+    # Seção 13, Fase 2C.1b — quando um resultado_poc REAL é passado
+    # (executar_poc_real_cfsv2 já rodou), os campos empíricos observados
+    # substituem a decisão catalog-driven acima (que só descreve o que
+    # SERIA usado antes de qualquer tentativa real).
+    if 'backend_used' in r:
+        data_backend_used = r.get('backend_used') or data_backend_used
+        dataset_representation = r.get('dataset_representation_used') or dataset_representation
+        legacy_or_current = ('legacy' if data_backend_used == ncat.SOURCE_BACKEND_IRIDL_LEGACY
+                              else ('current' if data_backend_used == ncat.SOURCE_BACKEND_CCSR_BETA
+                                    else legacy_or_current))
+        backend_fallback_ocorreu = r.get('backend_fallback_ocorreu', backend_fallback_ocorreu)
+        backend_fallback_motivo = r.get('fallback_reason') or backend_fallback_motivo
+
     return {
         'fase': '2C.1', 'purpose': 'infrastructure_validation',
         'scientific_evaluation_applicable': False,
@@ -364,12 +781,42 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'service_status': service_status,
         'backend_fallback_ocorreu': backend_fallback_ocorreu,
         'backend_fallback_motivo': backend_fallback_motivo,
-        'member_axis_observed': r.get('member_axis_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'member_axis_observed': r.get('member_axis_size', r.get('member_axis_observed',
+                                                                   'NAO_EXECUTADO_NESTA_TAREFA')),
         'member_count_non_missing': r.get('member_count_non_missing', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        'lead_axis_observed': r.get('lead_axis_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 3 (revisão final) — auditabilidade por ID de membro: quais
+        # posições do eixo M existem vs. quais têm valor não-missing por lead
+        # (para detectar buracos, ex.: M=[1..24] vs. M=[1,2,3,5,...]).
+        'member_ids_axis': r.get('member_ids_axis', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'member_ids_non_missing_by_lead': r.get('member_ids_non_missing_by_lead',
+                                                  'NAO_EXECUTADO_NESTA_TAREFA'),
+        'members_expected_policy': r.get('members_expected_policy', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'members_axis_size_ok': r.get('members_axis_size_ok', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'members_count_per_lead_ok': r.get('members_count_per_lead_ok', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'members_status': r.get('members_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'lead_axis_observed': r.get('source_lead_values_observed', r.get('lead_axis_observed',
+                                                                            'NAO_EXECUTADO_NESTA_TAREFA')),
         'variable_observed': r.get('variable_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'units_observed': r.get('units_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'legacy_service_expected_shutdown': ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN,
+        # Seção 13, Fase 2C.1b — campos restantes específicos do POC real.
+        'backend_requested': r.get('backend_requested', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'fallback_reason': r.get('fallback_reason', backend_fallback_motivo),
+        'source_url': r.get('source_url', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'model': r.get('model', 'NOAA_NCEP/CFSv2'),
+        'init_date': r.get('init_date', _origem_str(*POC_ORIGEM)),
+        'lead_values_requested': r.get('lead_values_requested', list(LEADS)),
+        'selected_lat': r.get('selected_lat', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'selected_lon': r.get('selected_lon', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'grid_distance_km': r.get('grid_distance_km', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 4/5 (revisão final) — grade DOCUMENTADA (catálogo/fonte) nunca
+        # rotulada como observada; grade OBSERVADA é a do subset real aberto
+        # (tipicamente "1x1" para um único ponto). Convenção de longitude só é
+        # afirmada quando de fato desambiguável a partir do dado real.
+        'grid_shape_documented': r.get('grid_shape_documented', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'subset_grid_shape_observed': r.get('subset_grid_shape_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'longitude_convention': r.get('longitude_convention', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
         'nota': 'Nenhum download real ocorreu nesta tarefa (Seção 38/50) — infraestrutura só. '
                 'ECMWF deliberadamente excluído (Seção 5): fonte precisa ser independente do C3S. '
@@ -555,10 +1002,14 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         'grid_distance_km', 'variable_original', 'units_original', 'conversion_applied',
         'source_url', 'source_type']))
     temporal_df = r.get('temporal_audit_df', pd.DataFrame(columns=[
-        'centre', 'model_name', 'init_date', 'lead', 'target_month', 'initialization_reference',
-        'source_time_coordinate', 'source_lead_coordinate', 'mapping_status', 'notes']))
+        # Seção 6, Fase 2C.1b — colunas exatas pedidas para o POC real.
+        'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
+        'mapping_status', 'evidence', 'notes']))
+    access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
+        'backend', 'dataset_representation', 'source_url', 'status', 'cache_hit', 'motivo']))
     raw_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_raw.csv', index=False)
     temporal_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_temporal_audit.csv', index=False)
+    access_audit_df.to_csv(ARTIFACTS_DIR / 'nmme_poc_access_audit.csv', index=False)
 
     metadata = montar_metadata(sistemas, resultado_poc)
     (ARTIFACTS_DIR / 'metadata.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False, default=str))
@@ -579,19 +1030,35 @@ def main():
     ap.add_argument('--dry-run-plan', action='store_true',
                      help='Nunca acessa a rede NMME — só mostra catálogo/plano do POC.')
     ap.add_argument('--executar-poc-real', action='store_true',
-                     help='NÃO IMPLEMENTADO nesta entrega (Seção 38/50) — falha explicitamente.')
+                     help='Roda o primeiro POC real (Fase 2C.1b) — só CFSv2, origem 2005-01, H1-H6, '
+                          'todos os membros, sem skill/CHIRPS. Acessa a rede de verdade.')
     args = ap.parse_args()
 
     if args.executar_poc_real:
         # Seção 13 — mesmo antes de qualquer outra coisa, o POC real
-        # nunca pode seguir sem pelo menos 1 sistema executável (nunca
-        # inventa acesso). Esta checagem já fica ativa agora, mesmo com
-        # a execução real ainda não implementada nesta entrega, para
-        # que a regra esteja pronta/testada quando for implementada.
+        # nunca pode seguir sem pelo menos 1 sistema pronto para teste
+        # (nunca inventa acesso).
         validar_execucao_poc_possivel()
-        raise SystemExit("--executar-poc-real não está implementado nesta entrega (Fase 2C.1, Seção "
-                          "38/50 — só infraestrutura). Requer revisão humana e uma tarefa separada "
-                          "antes de qualquer download real.")
+        print("=== NMME POC REAL (Fase 2C.1b) — CFSv2, origem "
+              f"{_origem_str(*POC_ORIGEM)}, H1-H6 ===")
+        resultado = executar_poc_real_cfsv2()
+        aprovacao = avaliar_aprovacao_poc(resultado)
+        resultado['poc_status'] = aprovacao['poc_status']
+        resultado['checklist'] = aprovacao['checklist']
+        escrever_catalogo()
+        escrever_saidas(resultado_poc=resultado)
+        print(f"\nbackend_used={resultado.get('backend_used')} "
+              f"dataset_representation_used={resultado.get('dataset_representation_used')} "
+              f"backend_fallback_ocorreu={resultado.get('backend_fallback_ocorreu')}")
+        print(f"poc_status={aprovacao['poc_status']}")
+        for chave, valor in aprovacao['checklist'].items():
+            print(f"  - {chave}: {valor}")
+        if aprovacao['poc_status'] != 'APROVADO':
+            raise SystemExit(f"POC real REPROVADO ({aprovacao['poc_status']}) — ver "
+                              f"artifacts/nmme_poc/nmme_poc_access_audit.csv e "
+                              f"nmme_poc_temporal_audit.csv para o motivo (Seção 11).")
+        print("\n✅ POC real do CFSv2 APROVADO — ver artifacts/nmme_poc/RELATORIO.md")
+        return
 
     escrever_catalogo()
     imprimir_plano(plano_poc())

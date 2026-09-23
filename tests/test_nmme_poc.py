@@ -387,21 +387,29 @@ class DryRunPlanTestCase(unittest.TestCase):
                 npoc.main()
         self.assertIn('CONFIRMED, POC_READY_DOCUMENTED', str(e.exception))
 
-    def test_executar_poc_real_falha_como_nao_implementado_com_catalogo_real(self):
-        """Desde a Rodada 4, o catálogo REAL já tem CFSv2
-        POC_READY_DOCUMENTED — o guardrail da Seção 13 passa e cai no
-        SystemExit "não implementado" (Seção 38/50), sem precisar de
-        nenhum mock de catálogo."""
+    def test_executar_poc_real_com_catalogo_real_e_rede_indisponivel_reprova(self):
+        """Desde a Fase 2C.1b, o catálogo REAL já tem CFSv2
+        POC_READY_DOCUMENTED e --executar-poc-real de fato executa
+        (nunca mais 'não implementado') — mas este teste NUNCA toca
+        rede real: mocka ndl.baixar_arquivo para falhar (simulando
+        indisponibilidade), o que reprova o acesso e sai com
+        SystemExit (Seção 11/15), sem precisar de nenhum mock de
+        catálogo."""
         from unittest import mock
-        with mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
-            with self.assertRaises(SystemExit):
+        with mock.patch.object(ndl, 'baixar_arquivo',
+                                side_effect=RuntimeError('rede real bloqueada neste teste')), \
+             mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
+            with self.assertRaises(SystemExit) as cm:
                 npoc.main()
+        self.assertIn('REPROVADO', str(cm.exception))
 
-    def test_executar_poc_real_falha_como_nao_implementado_quando_ha_confirmed(self):
-        """Se algum dia houver >=1 sistema CONFIRMED (não só
-        POC_READY_DOCUMENTED), o guardrail da Seção 13 também passa e
-        cai no SystemExit "não implementado" — comportamento verificado
-        com um catálogo sintético."""
+    def test_executar_poc_real_guardrail_passa_mas_exige_cfsv2_no_catalogo(self):
+        """Fase 2C.1b: o guardrail (validar_execucao_poc_possivel) passa
+        com QUALQUER sistema pronto (não só CFSv2) — mas a execução
+        real em si (executar_poc_real_cfsv2) é hardcoded para CFSv2
+        (Seção 1 — 'executar somente NOAA_NCEP/CFSv2'), então um
+        catálogo mockado sem CFSv2 falha explicitamente (nunca
+        substitui silenciosamente por outro modelo)."""
         from unittest import mock
         from dataclasses import replace
         sistema_confirmado = replace(ncat.sistema_por_nome('NOAA_GFDL', 'GFDL_SPEAR'),
@@ -409,7 +417,7 @@ class DryRunPlanTestCase(unittest.TestCase):
                                       precip_variable='prec')
         with mock.patch.object(ncat, 'CATALOGO', [sistema_confirmado]), \
              mock.patch('sys.argv', ['nmme_poc.py', '--executar-poc-real']):
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(KeyError):
                 npoc.main()
 
     def test_escrever_saidas_gera_todos_os_artifacts_esperados(self):

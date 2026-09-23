@@ -154,3 +154,130 @@ def montar_linha_temporal_audit(sistema, init_date, lead, target_month, initiali
         'source_time_coordinate': source_time_coordinate, 'source_lead_coordinate': source_lead_coordinate,
         'mapping_status': mapping_status, 'notes': notes,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Fase 2C.1b (primeiro POC real, CFSv2) — Seção 6: mapeamento temporal
+# NUNCA assumido a partir só da lógica C3S. `avaliar_mapeamento_temporal`
+# tenta confirmar a semântica L<->mês-alvo a partir dos METADADOS do
+# próprio dataset aberto (nunca por suposição) — só marca 'OK' quando há
+# justificativa objetiva encontrada no arquivo; caso contrário
+# 'UNCONFIRMED' (ou 'MISMATCH' se os metadados contradisserem a
+# hipótese) — o POC deve ser tratado como cientificamente incompleto
+# nesses dois últimos casos, mesmo com download bem-sucedido (Seção 6).
+# Função pura, sem efeito colateral — quem decide reprovar o POC por
+# isso é o guardrail (nmme_poc.avaliar_aprovacao_poc), não esta função.
+# ══════════════════════════════════════════════════════════════════════════
+
+TERMOS_CONFIRMATORIOS_L = ('forecast_period', 'lead time', 'lead_time', 'target', 'valid_time',
+                            'months since', 'forecastmonth')
+NOMES_VARIAVEL_ALVO_CANDIDATOS = ('target', 'valid_time', 'target_month', 'forecast_time')
+
+
+def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao'):
+    sys.path.insert(0, str(Path(__file__).parent))
+    import nmme_download as ndl
+    L_val = ndl.h_lead_para_L_ingrid(h_lead)
+    target_hipotese = leadtime_para_mes_alvo_nmme(init_date, h_lead, esquema)
+
+    evidencia = []
+    mapping_status = 'UNCONFIRMED'
+
+    l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
+    texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
+    pistas = [t for t in TERMOS_CONFIRMATORIOS_L if t in texto_l]
+    if pistas:
+        evidencia.append(f"L.attrs contém termo(s) {pistas} — indica semântica de lead/target, mas "
+                          f"isso sozinho não confirma o valor exato de H{h_lead} sem uma variável "
+                          f"auxiliar de data-alvo.")
+
+    var_alvo = None
+    for nome_candidato in NOMES_VARIAVEL_ALVO_CANDIDATOS:
+        if hasattr(ds, 'variables') and nome_candidato in ds.variables:
+            var_alvo = nome_candidato
+            break
+
+    if var_alvo is not None:
+        try:
+            da_alvo = ds[var_alvo]
+            # Seleciona o valor NO L do lead atual, nunca o primeiro do
+            # array às cegas (bug real encontrado ao testar: pegar
+            # sempre .flat[0] fazia H1 "confirmar" por coincidência e
+            # H2-H6 comparar contra o valor de H1, gerando MISMATCH
+            # falso em vez de checar o valor correto de cada lead).
+            valor_no_lead = da_alvo.sel(L=L_val) if 'L' in getattr(da_alvo, 'dims', ()) else da_alvo
+            bruto = np.asarray(valor_no_lead.values).flat[0]
+            alvo_real = pd.Period(str(bruto)[:7], 'M')
+        except Exception as e:
+            evidencia.append(f"variável auxiliar {var_alvo!r} presente mas não pôde ser interpretada "
+                              f"como data ({e}) — mapeamento continua UNCONFIRMED.")
+        else:
+            if alvo_real == target_hipotese:
+                mapping_status = 'OK'
+                evidencia.append(f"variável auxiliar {var_alvo!r} do dataset confirma "
+                                  f"target_month={alvo_real}, igual à hipótese H{h_lead}<->L={L_val}.")
+            else:
+                mapping_status = 'MISMATCH'
+                evidencia.append(f"variável auxiliar {var_alvo!r} do dataset indica "
+                                  f"target_month={alvo_real}, DIFERENTE da hipótese ({target_hipotese}) "
+                                  f"— hipótese H{h_lead}<->L={L_val} contradita pelos metadados.")
+    else:
+        evidencia.append(f"nenhuma variável auxiliar de data-alvo ({NOMES_VARIAVEL_ALVO_CANDIDATOS}) "
+                          f"encontrada no dataset aberto — não foi possível confirmar a semântica "
+                          f"L<->mês-alvo a partir dos metadados; hipótese H{h_lead}<->L={L_val} "
+                          f"permanece HIPÓTESE, não fato (Seção 6).")
+
+    return {'source_L': L_val, 'target_month': str(target_hipotese), 'mapping_status': mapping_status,
+            'evidence': ' | '.join(evidencia)}
+
+
+def contar_membros_nao_missing(valores_por_membro):
+    """Seção 7 — nº de membros com valor válido (não NaN) NO SUBSET
+    real aberto; nunca confundido com member_axis_size (tamanho
+    declarado do eixo M no catálogo-fonte, que pode incluir posições
+    preenchidas com missing/NaN — nunca inferir que M=28 significa 28
+    membros válidos)."""
+    v = np.asarray(valores_por_membro, dtype=float)
+    return int(np.sum(~np.isnan(v)))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão final pré-execução (Seção 5) — convenção de longitude REALMENTE
+# observada no dataset aberto, nunca copiada do catálogo. Um subset já
+# recortado a 1 ponto normalmente não permite inferir a convenção da
+# grade inteira (um valor positivo <=180 é ambíguo nas duas convenções)
+# — nesse caso o resultado honesto é UNDETERMINED_FROM_POINT_SUBSET,
+# nunca uma adivinhação. Só desambigua quando o próprio valor observado
+# só é fisicamente possível numa convenção (>180 só existe em 0-360; <0
+# só existe em -180/180).
+# ══════════════════════════════════════════════════════════════════════════
+
+LON_CONVENTION_0_360 = '0_360'
+LON_CONVENTION_NEG180_180 = 'NEG180_180'
+LON_CONVENTION_UNDETERMINED = 'UNDETERMINED_FROM_POINT_SUBSET'
+
+
+def detectar_convencao_longitude_observada(valores_lon):
+    """`valores_lon`: array-like com os valores REAIS da coordenada de
+    longitude do dataset aberto (idealmente a grade inteira antes do
+    subset por ponto; se só houver 1 valor — caso comum de subset já
+    recortado — a desambiguação só é possível quando esse valor for
+    fisicamente exclusivo de uma convenção)."""
+    valores = np.atleast_1d(np.asarray(valores_lon, dtype=float))
+    if valores.size == 0:
+        return LON_CONVENTION_UNDETERMINED
+    if valores.size > 1:
+        tem_negativo, tem_maior_180 = bool(np.any(valores < 0)), bool(np.any(valores > 180))
+        if tem_negativo and tem_maior_180:
+            return LON_CONVENTION_UNDETERMINED   # grade ambígua/mista — nunca assumir
+        if tem_negativo:
+            return LON_CONVENTION_NEG180_180
+        if tem_maior_180:
+            return LON_CONVENTION_0_360
+        return LON_CONVENTION_UNDETERMINED   # todos os valores em [0,180] — ambíguo nas duas convenções
+    v = float(valores[0])
+    if v > 180:
+        return LON_CONVENTION_0_360
+    if v < 0:
+        return LON_CONVENTION_NEG180_180
+    return LON_CONVENTION_UNDETERMINED   # ponto único em [0,180] — não dá para inferir a convenção
