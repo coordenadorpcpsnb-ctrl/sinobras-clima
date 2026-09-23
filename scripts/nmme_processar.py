@@ -173,8 +173,48 @@ TERMOS_CONFIRMATORIOS_L = ('forecast_period', 'lead time', 'lead_time', 'target'
                             'months since', 'forecastmonth')
 NOMES_VARIAVEL_ALVO_CANDIDATOS = ('target', 'valid_time', 'target_month', 'forecast_time')
 
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão pós-execução #1 (Seção 1/2/7) — modo de decodificação temporal
+# REALMENTE usado para abrir o dataset. CF_DATETIME é o caminho normal
+# (decode_times=True, cftime instalado decodifica qualquer calendário CF
+# incluindo 360_day); RAW_NUMERIC_CF é o fallback controlado
+# (decode_times=False) acionado só quando a decodificação falha por um
+# motivo ESPECIFICAMENTE temporal (nmme_poc.abrir_dataset_com_fallback_
+# temporal) — nesse modo os valores de tempo continuam numéricos crus,
+# e avaliar_mapeamento_temporal() abaixo NUNCA tenta interpretá-los como
+# data (Seção 2/8 — a barreira de confirmação não pode ser afrouxada
+# só porque o dataset abriu).
+# ══════════════════════════════════════════════════════════════════════════
 
-def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao'):
+TIME_DECODE_MODE_CF_DATETIME = 'CF_DATETIME'
+TIME_DECODE_MODE_RAW_NUMERIC_CF = 'RAW_NUMERIC_CF'
+
+
+def inspecionar_metadata_temporal(ds, init_dimension):
+    """Seção 7 (revisão pós-execução #1) — calendário/unidades de tempo
+    REALMENTE presentes no dataset aberto, lidos da coordenada de
+    inicialização (`init_dimension`, ex.: 'S'), nunca assumidos como
+    gregoriano por omissão e nunca convertidos silenciosamente. Quando
+    decode_times=True decodifica com sucesso, xarray move os atributos
+    `units`/`calendar` originais de `.attrs` para `.encoding` na
+    coordenada já decodificada — por isso `.encoding` é checado
+    primeiro, caindo para `.attrs` no modo RAW_NUMERIC_CF (onde eles
+    continuam brutos, sem decodificação)."""
+    calendar_observed = time_units_observed = dtype_observed = None
+    if init_dimension and hasattr(ds, 'variables') and init_dimension in ds.variables:
+        s = ds[init_dimension]
+        calendar_observed = s.encoding.get('calendar') or s.attrs.get('calendar')
+        time_units_observed = s.encoding.get('units') or s.attrs.get('units')
+        dtype_observed = str(s.dtype)
+    return {
+        'calendar_observed': calendar_observed or 'UNCONFIRMED',
+        'time_units_observed': time_units_observed or 'UNCONFIRMED',
+        'S_dtype_observed': dtype_observed or 'UNCONFIRMED',
+    }
+
+
+def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao',
+                                  time_decode_mode=None):
     sys.path.insert(0, str(Path(__file__).parent))
     import nmme_download as ndl
     L_val = ndl.h_lead_para_L_ingrid(h_lead)
@@ -182,6 +222,21 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
 
     evidencia = []
     mapping_status = 'UNCONFIRMED'
+
+    # Seção 2/8 — em RAW_NUMERIC_CF (decode_times=False) os valores de
+    # tempo do dataset são numéricos crus, sem decodificação de
+    # calendário; tentar interpretá-los como data seria adivinhação, não
+    # confirmação. Retorna UNCONFIRMED por DESENHO aqui, nunca por
+    # acidente de um parse que falhou (a barreira preexistente não pode
+    # depender de um efeito colateral de tipo).
+    if time_decode_mode == TIME_DECODE_MODE_RAW_NUMERIC_CF:
+        evidencia.append("dataset aberto em modo RAW_NUMERIC_CF (decode_times=False, fallback de "
+                          "decodificação temporal — Seção 1/2) — valores de tempo permanecem "
+                          "numéricos crus, sem decodificação de calendário; impossível confirmar "
+                          "target_month a partir deles. Mapeamento permanece UNCONFIRMED por "
+                          "desenho, nunca afrouxado (Seção 2/8).")
+        return {'source_L': L_val, 'target_month': str(target_hipotese), 'mapping_status': 'UNCONFIRMED',
+                'evidence': ' | '.join(evidencia)}
 
     l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
     texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()

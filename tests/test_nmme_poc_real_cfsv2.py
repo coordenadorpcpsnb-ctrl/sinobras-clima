@@ -600,7 +600,8 @@ class NetCDFNaoPublicadoTestCase(unittest.TestCase):
         self.assertIn('nmme_poc_access_audit.csv', npoc.ARTIFACT_FILENAMES)
 
     def test_o_cache_do_dataset_fica_fora_do_diretorio_de_artifacts(self):
-        cache_path = ndl.caminho_cache(CFSV2, 2005, 1)
+        cache_path = ndl.caminho_cache(CFSV2, ncat.SOURCE_BACKEND_IRIDL_LEGACY,
+                                         ncat.REPR_NMME_HARMONIZED_MONTHLY, 2005, 1)
         self.assertNotIn(str(npoc.ARTIFACTS_DIR), str(cache_path))
         self.assertTrue(str(cache_path).endswith('.nc'))
 
@@ -618,6 +619,158 @@ class NetCDFNaoPublicadoTestCase(unittest.TestCase):
             arquivos_gerados = {p.name for p in Path(tmp).iterdir()}
             self.assertIn('nmme_poc_access_audit.csv', arquivos_gerados)
             self.assertFalse(any(nome.endswith('.nc') for nome in arquivos_gerados))
+
+
+class CalendarCftimeCacheTestCase(unittest.TestCase):
+    """Revisão pós-execução #1 (run 35872475562) — a execução real
+    provou DOWNLOAD_SUCCESS/DATASET_OPEN_ERROR (calendário 360_day sem
+    cftime), nunca SERVICE_UNAVAILABLE, e revelou dois bugs estruturais
+    à parte: cache compartilhado entre Representação A/B, e cache_hit
+    perdido no caminho de exceção. Os 9 cenários abaixo (A-I) cobrem as
+    duas frentes."""
+
+    def test_a_calendar_360_day_abre_com_cftime(self):
+        import tempfile
+        import cftime as _cftime  # noqa: F401 — só confirma que está instalado (Seção 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = Path(tmp) / 'cfsv2_360day.nc'
+            # 552 meses desde 1960-01 com calendário 360_day — mesma
+            # estrutura CF real do erro da execução #1 ("months since
+            # 1960-01-01" / calendar '360'), nunca pré-decodificado à
+            # mão: escrito como número cru + atributos units/calendar,
+            # exatamente como um NetCDF real do IRIDL chega.
+            da_S = xr.DataArray(np.array([552.0]), dims=('S',),
+                                  attrs={'units': 'months since 1960-01-01', 'calendar': '360_day'})
+            ds_escrever = xr.Dataset(
+                {'prec': (('S', 'L', 'M'), np.random.RandomState(1).rand(1, 6, 2))},
+                coords={'S': da_S, 'L': np.arange(0.5, 6.5, 1.0), 'M': np.array([1, 2])})
+            ds_escrever.to_netcdf(caminho)
+
+            ds_aberto, modo = npoc.abrir_dataset_com_fallback_temporal(caminho, xr.open_dataset)
+            self.assertEqual(modo, nproc.TIME_DECODE_MODE_CF_DATETIME)
+            # decodificado com sucesso (cftime instalado) — a coordenada
+            # vira objeto de data real, não fica como número cru.
+            self.assertNotEqual(str(ds_aberto['S'].dtype), 'float64')
+
+            meta = nproc.inspecionar_metadata_temporal(ds_aberto, 'S')
+            self.assertEqual(meta['calendar_observed'], '360_day')
+            self.assertEqual(meta['time_units_observed'], 'months since 1960-01-01')
+
+    def test_b_erro_especifico_de_decode_temporal_aciona_fallback(self):
+        chamadas = []
+
+        def abrir_com_erro_calendar(caminho, **kwargs):
+            chamadas.append(kwargs)
+            if not kwargs:
+                raise ValueError(
+                    "unable to decode time units 'months since 1960-01-01' with calendar '360'. "
+                    "Try opening your dataset with decode_times=False or installing cftime")
+            self.assertEqual(kwargs.get('decode_times'), False)
+            return _ds_representacao_b()
+
+        ds, modo = npoc.abrir_dataset_com_fallback_temporal('/tmp/fake-b.nc', abrir_com_erro_calendar)
+        self.assertEqual(modo, nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF)
+        self.assertEqual(len(chamadas), 2)
+        self.assertEqual(chamadas[1], {'decode_times': False})
+
+    def test_c_erro_generico_nao_aciona_fallback(self):
+        chamadas = []
+
+        def abrir_com_erro_generico(caminho, **kwargs):
+            chamadas.append(kwargs)
+            raise OSError("[Errno 2] No such file or directory: 'fake.nc' (simulado)")
+
+        with self.assertRaises(OSError):
+            npoc.abrir_dataset_com_fallback_temporal('/tmp/fake-c.nc', abrir_com_erro_generico)
+        # nunca tentou decode_times=False para um erro que não é de
+        # decodificação temporal — só a 1 chamada normal.
+        self.assertEqual(len(chamadas), 1)
+
+    def test_d_representacao_a_e_b_geram_paths_de_cache_diferentes(self):
+        path_b = ndl.caminho_cache(CFSV2, ncat.SOURCE_BACKEND_IRIDL_LEGACY,
+                                     ncat.REPR_NMME_HARMONIZED_MONTHLY, 2005, 1)
+        path_a = ndl.caminho_cache(CFSV2, ncat.SOURCE_BACKEND_IRIDL_LEGACY,
+                                     ncat.REPR_RAW_NATIVE_ENSEMBLE, 2005, 1)
+        self.assertNotEqual(str(path_a), str(path_b))
+
+    def test_e_urls_diferentes_nunca_compartilham_cache_silenciosamente(self):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            destino = Path(tmp) / 'shared.nc'
+            chamadas_rede = []
+
+            def fake_get(url, timeout=None):
+                chamadas_rede.append(url)
+                resp = mock.Mock()
+                resp.raise_for_status = lambda: None
+                resp.content = f'conteudo-de-{url}'.encode()
+                return resp
+
+            with mock.patch.object(ndl.requests, 'get', side_effect=fake_get):
+                _, hit1 = ndl.baixar_arquivo('http://exemplo/A', destino)
+                self.assertFalse(hit1)
+                # MESMO path de destino, URL DIFERENTE — nunca reaproveita
+                # o arquivo que já está lá (seria dado de uma URL errada).
+                _, hit2 = ndl.baixar_arquivo('http://exemplo/B', destino)
+                self.assertFalse(hit2)
+            self.assertEqual(len(chamadas_rede), 2)
+            self.assertEqual(destino.read_bytes(), b'conteudo-de-http://exemplo/B')
+
+            # a MESMA url de novo agora sim reaproveita (sidecar confirma).
+            with mock.patch.object(ndl.requests, 'get', side_effect=fake_get):
+                _, hit3 = ndl.baixar_arquivo('http://exemplo/B', destino)
+            self.assertTrue(hit3)
+            self.assertEqual(len(chamadas_rede), 2)   # nenhuma chamada de rede nova
+
+    def test_f_access_audit_mantem_download_ok_com_dataset_open_error(self):
+        def baixar_ok(url, destino):
+            return ('/tmp/fake-f.nc', False)
+
+        def abrir_com_erro_generico(caminho):
+            raise OSError('arquivo corrompido (simulado)')
+
+        r = _executar(abrir_fn=abrir_com_erro_generico, baixar_fn=baixar_ok)
+        self.assertEqual(r['poc_status'], 'REPROVADO_ACESSO')
+        audit = r['access_audit_df']
+        self.assertTrue((audit['download_status'] == 'OK').all())
+        self.assertTrue((audit['dataset_open_status'] == 'DATASET_OPEN_ERROR').all())
+        self.assertTrue((audit['status'] == 'DATASET_OPEN_ERROR').all())
+
+    def test_g_cache_hit_real_preservado_em_falha_de_abertura(self):
+        def baixar_com_cache_hit(url, destino):
+            return ('/tmp/fake-g.nc', True)   # simula reaproveitamento de cache real
+
+        def abrir_com_erro(caminho):
+            raise OSError('erro simulado')
+
+        r = _executar(abrir_fn=abrir_com_erro, baixar_fn=baixar_com_cache_hit)
+        audit = r['access_audit_df']
+        self.assertTrue((audit['cache_hit'] == True).all())  # noqa: E712
+
+    def test_h_calendario_360_day_registrado_no_resultado(self):
+        ds = _ds_representacao_b(com_target_correto=True)
+        ds['S'] = ds['S'].assign_attrs(units='months since 1960-01-01', calendar='360_day')
+        r = _executar(abrir_fn=lambda c: ds)
+        self.assertEqual(r['calendar_observed'], '360_day')
+        self.assertEqual(r['time_units_observed'], 'months since 1960-01-01')
+
+    def test_i_temporal_mapping_sem_evidencia_de_target_continua_unconfirmed(self):
+        r = _executar(abrir_fn=lambda c: _ds_representacao_b(com_target_correto=False))
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+
+    def test_i2_raw_numeric_cf_forca_unconfirmed_mesmo_com_target_presente_e_correto(self):
+        """Prova que a barreira do modo RAW_NUMERIC_CF é por DESENHO, não
+        por acidente de parse: mesmo com a variável target presente e
+        CORRETA (com_target_correto=True), o modo RAW_NUMERIC_CF nunca
+        confirma o mapeamento — Seção 2/8, não pode ser afrouxado."""
+        ds = _ds_representacao_b(com_target_correto=True)
+        resultado = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                         time_decode_mode=nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF)
+        self.assertEqual(resultado['mapping_status'], 'UNCONFIRMED')
+        self.assertIn('RAW_NUMERIC_CF', resultado['evidence'])
 
 
 if __name__ == '__main__':

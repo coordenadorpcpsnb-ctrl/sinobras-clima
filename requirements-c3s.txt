@@ -23,6 +23,19 @@ eccodes>=2.48
 # runner limpo.
 netCDF4>=1.6
 
+# Fase 2C.1b (revisão pós-execução #1) — a execução real #1 (run
+# 35872475562) falhou ao abrir o NetCDF do CFSv2 com
+# "unable to decode time units 'months since 1960-01-01' with calendar
+# '360'. Try opening your dataset with decode_times=False or installing
+# cftime" — calendário 360_day (comum em modelos climáticos) não é
+# decodificável pelo xarray sem cftime. Não estava declarado aqui antes
+# porque não tinha aparecido como necessário até essa execução real
+# (Seção 1). NUNCA remove o suporte padrão de decode_times=True — só
+# garante que ele funcione para calendários não-gregorianos; o fallback
+# decode_times=False (nmme_poc.abrir_dataset_com_fallback_temporal)
+# continua existindo como segunda linha de defesa, não como substituto.
+cftime>=1.6.3
+
 # Usado só por tests/test_c3s_poc.py para validar a estrutura do YAML
 # do workflow (on.workflow_dispatch.inputs, ausência de cron) — não é
 # dependência de produção nem do restante do pipeline C3S. Declarado
