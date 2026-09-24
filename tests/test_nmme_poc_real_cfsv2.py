@@ -474,6 +474,14 @@ class TemporalAuditTestCase(unittest.TestCase):
                               'init_verification_result', 'init_verification_direct_url',
                               'init_verification_s_observed', 'init_verification_s_count',
                               'init_verification_comparison_outcome', 'init_verification_exact_outcome',
+                              's_divergente_diagnostico_executado', 's_divergente_diagnostico_url',
+                              's_divergente_diagnostico_http_status',
+                              's_divergente_diagnostico_calendar_original',
+                              's_divergente_diagnostico_calendar_normalized',
+                              's_divergente_diagnostico_s_axis_size',
+                              's_divergente_diagnostico_s_values_observed',
+                              's_divergente_diagnostico_classificacao',
+                              's_divergente_diagnostico_resultado',
                               'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
@@ -1604,6 +1612,168 @@ class ConfirmacaoDiretaExataTestCase(unittest.TestCase):
         self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'OK').any())
         aprovacao = npoc.avaliar_aprovacao_poc(r)
         self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+
+class DiagnosticoSDivergenteTestCase(unittest.TestCase):
+    """Revisão pós-execução #4 (investigação da run real 36028568952) —
+    a run encontrou um caso NÃO coberto pelas correções 1-3:
+    inicialização solicitada 2005-01, observada 1982-01, coordenada S
+    PRESENTE na variável 'prec' (1 único valor — não é o caso "S
+    ausente" que já dispara `tentar_confirmar_origem_diretamente`).
+    `_avaliar_semantica_forecast_period` já classifica isso como
+    MISMATCH corretamente (contradição objetiva observada) — os testes
+    abaixo confirmam que o NOVO diagnóstico (RANGEEDGES) roda nesse
+    caso só para auditoria, e NUNCA reclassifica mapping_status/
+    poc_status (item 9 — nenhuma aprovação automática nova), mesmo nos
+    cenários mais favoráveis (RANGEEDGES confirma 2005-01 exatamente)."""
+
+    @staticmethod
+    def _duplas_baixar_abrir(ds_primaria, ds_diagnostico=None, diagnostico_levanta=None):
+        def baixar_fn(url, destino):
+            return (url, False)
+
+        def abrir_fn(caminho, **kwargs):
+            if 'S/(Jan%202005)/(Jan%202005)/RANGEEDGES' in caminho:
+                if diagnostico_levanta is not None:
+                    raise diagnostico_levanta
+                if ds_diagnostico is None:
+                    raise OSError('diagnóstico de S divergente não configurado neste dublê de teste')
+                return ds_diagnostico
+            return ds_primaria
+
+        return baixar_fn, abrir_fn
+
+    @staticmethod
+    def _baixar_com_status_fn(status_http=200, http_error_status=None, levanta=None):
+        """Dublê de `_baixar_com_status_http` — devolve (url, status)
+        tratando `url` como "caminho" (mesmo truque do resto do
+        arquivo), ou (None, status) para simular HTTP 4xx sem levantar
+        exceção (mesmo contrato da função real), ou levanta para
+        simular falha de rede sem resposta HTTP nenhuma."""
+        def fn(url, destino):
+            if levanta is not None:
+                raise levanta
+            if http_error_status is not None:
+                return None, http_error_status
+            return url, status_http
+        return fn
+
+    def test_reproducao_exata_run4_selecao_ignorada_pelo_servidor(self):
+        """Reprodução do achado real: VALUE devolveu 1982-01 (pedido
+        2005-01); RANGEEDGES, no diagnóstico, TAMBÉM devolve 1982-01 —
+        evidência de que o servidor ignora a restrição de S nos dois
+        operadores. mapping_status continua MISMATCH (guardrail
+        intocado)."""
+        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        ds_diagnostico = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
+                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').all())
+        self.assertTrue(r['s_divergente_diagnostico_executado'])
+        self.assertEqual(r['s_divergente_diagnostico_http_status'], 200)
+        self.assertEqual(r['s_divergente_diagnostico_s_axis_size'], 1)
+        self.assertEqual(r['s_divergente_diagnostico_s_values_observed'], ['1982-01'])
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
+        self.assertTrue(r['s_divergente_diagnostico_url'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_rangeedges_confirma_2005_mesmo_com_value_errado_nunca_aprova(self):
+        """Item 9 (o mais crítico) — mesmo no cenário MAIS favorável
+        (RANGEEDGES devolve exatamente 2005-01, divergindo do VALUE
+        errado), o POC NUNCA é aprovado automaticamente. mapping_status
+        já decidido MISMATCH pela contradição objetiva do VALUE
+        permanece MISMATCH — o diagnóstico é só informativo."""
+        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        ds_diagnostico = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
+                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').all())
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH)
+        self.assertEqual(r['s_divergente_diagnostico_s_values_observed'], ['2005-01'])
+        self.assertNotEqual(r['poc_status'], 'APROVADO')
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_rangeedges_multiplas_inicializacoes_registra_valores_sem_escolher_primeiro(self):
+        """Item 5 — RANGEEDGES não restringiu a 1 único ponto (devolveu
+        3 inicializações); os 3 valores ficam registrados no
+        diagnóstico, nunca só o primeiro escolhido às cegas."""
+        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        ds_diagnostico = _ds_selecao_s(modo='multiplo', n_valores_multiplos=3)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
+                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
+        self.assertEqual(r['s_divergente_diagnostico_s_axis_size'], 3)
+        self.assertEqual(len(r['s_divergente_diagnostico_s_values_observed']), 3)
+        self.assertIn('1982-01', r['s_divergente_diagnostico_s_values_observed'][0])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_http_4xx_classifica_como_syntax_error(self):
+        """Item 7 — HTTP 4xx é evidência objetiva de falha de sintaxe/
+        request rejeitado, nunca confundida com seleção ignorada."""
+        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria)
+        r = npoc.executar_poc_real_cfsv2(
+            baixar_fn=baixar_fn, abrir_fn=abrir_fn,
+            baixar_com_status_fn=self._baixar_com_status_fn(http_error_status=400))
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR)
+        self.assertEqual(r['s_divergente_diagnostico_http_status'], 400)
+        self.assertEqual(r['s_divergente_diagnostico_s_values_observed'], [])
+
+    def test_falha_de_rede_sem_resposta_http_fica_inconclusive(self):
+        """Item 7 — sem resposta HTTP nenhuma (timeout/erro de rede),
+        nunca classificado como falha de sintaxe nem seleção ignorada —
+        só inconclusivo."""
+        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria)
+        r = npoc.executar_poc_real_cfsv2(
+            baixar_fn=baixar_fn, abrir_fn=abrir_fn,
+            baixar_com_status_fn=self._baixar_com_status_fn(levanta=OSError('timeout simulado')))
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE)
+        self.assertIsNone(r['s_divergente_diagnostico_http_status'])
+
+    def test_resposta_nao_interpretavel_classifica_como_problema_de_coordenadas(self):
+        """Item 7 — resposta HTTP OK, mas a coordenada S não pôde ser
+        lida/interpretada: lacuna nossa, nunca tratada como prova sobre
+        o comportamento do servidor."""
+        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        ds_diagnostico = _ds_com_s_scalar_nao_interpretavel(semente=61)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
+                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE)
+
+    def test_diagnostico_nao_dispara_quando_s_ausente(self):
+        """Sanidade — os dois ramos (S ausente / S presente-porém-
+        divergente) são mutuamente exclusivos: com S ausente, o novo
+        diagnóstico fica no default neutro NAO_EXECUTADO."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = VerificacaoControleValueTestCase._duplas_baixar_abrir(
+            ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertFalse(r['s_divergente_diagnostico_executado'])
+        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO)
+
+    def test_diagnostico_nao_dispara_quando_s_correto(self):
+        """Sanidade — no caminho feliz (S presente e correto), nenhuma
+        consulta de diagnóstico extra é feita."""
+        ds = Execucao3ReproducaoTestCase()._ds_execucao3()
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertFalse(r['s_divergente_diagnostico_executado'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
 
 
 if __name__ == '__main__':

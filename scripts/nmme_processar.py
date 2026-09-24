@@ -320,6 +320,40 @@ VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES = 'INCOMPARABLE_RESPONSES'
 VERIFICATION_OUTCOME_ORIGIN_MISMATCH = 'ORIGIN_MISMATCH'
 VERIFICATION_OUTCOME_DATA_INCONSISTENT = 'DATA_INCONSISTENT_WITH_VALUE'
 
+# Revisão pós-execução #4 (investigação da run 36028568952) — até aqui
+# a confirmação DIRETA via RANGEEDGES só disparava quando S estava
+# AUSENTE da variável (UNCONFIRMED_VALUE_UNVERIFIED). A execução real
+# encontrou um caso NOVO: S PRESENTE na variável, com 1 único valor,
+# mas esse valor (1982-01) diverge da origem pedida (2005-01) — a
+# consulta VALUE original devolveu, aparentemente, o início do arquivo-
+# fonte inteiro (o hindcast do CFSv2 começa em 1982), não a origem
+# pedida. `_avaliar_semantica_forecast_period` já classifica isso como
+# MISMATCH corretamente (Seção E, `periodo_observado != init_date`) —
+# essa classificação NUNCA muda por causa do diagnóstico abaixo (Seção
+# 1/9 desta investigação: nenhuma aprovação automática nova). O que
+# faltava era executar TAMBÉM a confirmação direta nesse caso, só para
+# fins de diagnóstico/auditoria — nunca para promover o status. Os 5
+# outcomes abaixo classificam objetivamente o que a consulta RANGEEDGES
+# de diagnóstico observou, distinguindo (item 7 da investigação):
+# falha de sintaxe (o servidor rejeitou o request, HTTP 4xx — evidência
+# de que a URL construída é malformada, não uma hipótese sobre a
+# semântica do operador); seleção ignorada pelo servidor (o request foi
+# aceito, mas o valor observado continua sendo o mesmo problema da
+# consulta VALUE original, ou outra origem não pedida — evidência de
+# que o servidor não aplicou a restrição); problema de interpretação de
+# coordenadas (a resposta não pôde ser lida/parseada do nosso lado —
+# não é evidência sobre o servidor, é uma lacuna nossa); e, só quando a
+# origem observada bate exatamente com a pedida, confirmação exata via
+# RANGEEDGES apesar do VALUE ter divergido (o achado mais interessante
+# possível — mostra que RANGEEDGES e VALUE se comportam diferente para
+# a mesma origem, mas mesmo assim NUNCA aprova o POC sozinho).
+S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR = 'SYNTAX_ERROR'
+S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER = 'SELECTION_IGNORED_BY_SERVER'
+S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE = 'COORD_INTERPRETATION_ISSUE'
+S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH = 'EXACT_MATCH_DESPITE_VALUE_MISMATCH'
+S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE = 'INCONCLUSIVE'
+S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO = 'NAO_EXECUTADO'
+
 INIT_SELECTION_METHOD_SCALAR_COORD = 'SCALAR_COORD_ON_VARIABLE'
 INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
 # Seção 2 (revisão pós-execução #3) — rótulo documental (nunca
@@ -373,11 +407,23 @@ def _avaliar_selecao_inicializacao(ds, rota):
     s_coord = da.coords[dim_s]
     tamanho = int(s_coord.size)
     if tamanho > 1:
+        # Revisão pós-execução #4 (investigação da run 36028568952,
+        # item 5) — quando há mais de 1 inicialização, o diagnóstico
+        # precisa dos VALORES observados (nunca só a contagem) para
+        # nunca escolher o primeiro automaticamente. `str(v)[:7]` seria
+        # ambíguo/perderia precisão para calendários não-padrão; guarda
+        # a representação bruta de cada elemento do eixo, na ordem
+        # observada, sem qualquer seleção implícita.
+        try:
+            valores_brutos_multiplos = [str(v) for v in np.asarray(s_coord.values).ravel().tolist()]
+        except Exception:
+            valores_brutos_multiplos = []
         return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
                 'init_value_observed_on_variable': None,
                 'init_axis_size_observed_on_variable': tamanho,
                 'init_selection_status': INIT_SELECTION_STATUS_FAIL_MULTIPLE,
-                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s,
+                'init_values_observed_on_variable_multiplos': valores_brutos_multiplos}
 
     try:
         bruto = np.asarray(s_coord.values).flat[0]

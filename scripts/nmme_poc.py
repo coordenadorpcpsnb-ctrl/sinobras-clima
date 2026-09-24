@@ -806,6 +806,205 @@ def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sist
                       f'pedida (Seção 1); só a confirmação direta decide.'}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão pós-execução #4 (investigação da run 36028568952) — a run real
+# encontrou um caso NÃO coberto pelas correções 1-3: S PRESENTE na
+# variável 'prec' (1 único valor, `init_selection_status` já
+# OK_SCALAR/OK_SINGLETON_DIM), mas esse valor (1982-01) diverge da
+# origem pedida (2005-01). `tentar_confirmar_origem_diretamente` só
+# disparava quando S estava AUSENTE (UNCONFIRMED_VALUE_UNVERIFIED) —
+# esse caso, por ter S presente, já é classificado MISMATCH direto por
+# `nmme_processar._avaliar_semantica_forecast_period`
+# (`periodo_observado != init_date`), e essa classificação NUNCA muda
+# por causa do diagnóstico abaixo (Seção 1/9 desta investigação:
+# nenhuma tentativa de aprovação automática nova — o diagnóstico é
+# estritamente aditivo/investigativo, roda DEPOIS da classificação já
+# decidida, só para auditoria).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _baixar_com_status_http(url, destino, sleep_fn=None, max_tentativas=None):
+    """Diagnóstico (item 4) — variante de `nmme_download.baixar_arquivo`
+    que também devolve o status HTTP OBSERVADO (mesmo em sucesso, nunca
+    só inferido de "funcionou = 200"), sem cache (é uma consulta de
+    diagnóstico pontual, não parte do pipeline principal). Nunca usada
+    pelo download do RAW nem pela confirmação direta original —
+    `baixar_arquivo`/`tentar_confirmar_origem_diretamente` continuam
+    com a mesma assinatura de sempre, sem mudança de comportamento.
+    Em falha de rede/timeout (sem resposta HTTP nenhuma), `status_http`
+    volta `None` — nunca inventa um código."""
+    import time as _time
+    import requests
+    sleep_fn = sleep_fn or _time.sleep
+    max_tentativas = max_tentativas or ndl.MAX_TENTATIVAS
+    destino = Path(destino)
+    ultimo_erro = None
+    status_http = None
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            resp = requests.get(url, timeout=ndl.TIMEOUT_SEGUNDOS)
+            status_http = resp.status_code
+            resp.raise_for_status()
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_bytes(resp.content)
+            return destino, status_http
+        except requests.exceptions.HTTPError as e:
+            # Seção 4 — status HTTP de erro é em si uma evidência
+            # objetiva (ex.: 4xx sugere sintaxe rejeitada pelo
+            # servidor) — nunca retentar 4xx como se fosse transitório.
+            status_http = getattr(getattr(e, 'response', None), 'status_code', status_http)
+            return None, status_http
+        except Exception as e:
+            ultimo_erro = e
+            if tentativa < max_tentativas:
+                espera = ndl.ESPERAS_RETRY_SEGUNDOS[min(tentativa - 1, len(ndl.ESPERAS_RETRY_SEGUNDOS) - 1)]
+                sleep_fn(espera)
+    raise RuntimeError(f"consulta de diagnóstico falhou após {max_tentativas} tentativas ({url}): "
+                        f"{ultimo_erro}")
+
+
+def diagnosticar_origem_s_divergente(rota, sistema, ano, mes, lat, lon, leads, selecao_init_original,
+                                        baixar_com_status_fn=None, abrir_fn=None):
+    """Item 1/2/3/4/5/6/7 (investigação da run 36028568952) — só deve
+    ser chamada quando `selecao_init_original` já tem S PRESENTE na
+    variável com status OK_SCALAR/OK_SINGLETON_DIM E
+    `init_periodo_observado` diferente da origem pedida (o chamador
+    decide isso, esta função não recalcula). Tenta a MESMA confirmação
+    direta via RANGEEDGES (S/(mes ano)/(mes ano)/RANGEEDGES) já usada
+    para o caso S-ausente, mas aqui PURAMENTE como diagnóstico — o
+    resultado NUNCA reclassifica `mapping_status`/`init_selection_
+    status` (que já é MISMATCH, decidido antes desta função ser
+    chamada) nem `poc_status` (item 9: nenhuma aprovação automática
+    nova). Devolve um dict com os 8 campos de auditoria pedidos (item
+    4) mais a classificação objetiva (item 7):
+
+    - SYNTAX_ERROR: o servidor respondeu com HTTP 4xx — evidência de
+      que a URL construída foi rejeitada, não uma suposição sobre
+      semântica de operador.
+    - SELECTION_IGNORED_BY_SERVER: a resposta veio OK (HTTP 2xx), mas o
+      valor de S observado ainda NÃO é a origem pedida (igual ou
+      diferente do valor errado já visto em VALUE) — evidência de que
+      o servidor não aplicou a restrição de RANGEEDGES.
+    - COORD_INTERPRETATION_ISSUE: a resposta veio OK, mas não foi
+      possível interpretar a coordenada S retornada (parsing falhou) —
+      lacuna nossa, não evidência sobre o servidor.
+    - EXACT_MATCH_DESPITE_VALUE_MISMATCH: RANGEEDGES devolveu
+      EXATAMENTE a origem pedida (1 único valor, igual a ano-mês) —
+      achado relevante (RANGEEDGES e VALUE divergem para a mesma
+      origem), mas NUNCA aprova o POC sozinho.
+    - INCONCLUSIVE: falha de rede/timeout ou qualquer outra exceção sem
+      relação clara com sintaxe/seleção/interpretação."""
+    import numpy as np
+
+    origem_esperada = f'{ano:04d}-{mes:02d}'
+    try:
+        url_diagnostico = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1],
+                                                       preservar_dimensao_s=True)
+    except ValueError as e:
+        return {'executado': False, 'url': '', 'http_status': None,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO,
+                'resultado': f'não foi possível montar a URL de diagnóstico (RANGEEDGES): {e}'}
+
+    baixar_com_status_fn = baixar_com_status_fn or _baixar_com_status_http
+    if abrir_fn is None:
+        import xarray as xr
+        abrir_fn = xr.open_dataset
+    # Path de cache distinto da confirmação direta "S ausente" (mesma
+    # URL base seria possível nas duas, mas os dois diagnósticos nunca
+    # coexistem na mesma execução — string extra é só defesa contra
+    # colisão, não é usada na consulta HTTP em si).
+    destino_diagnostico = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
+                                               ano, mes, url=f'{url_diagnostico}|diagnostico_s_divergente')
+
+    try:
+        caminho_diagnostico, http_status = baixar_com_status_fn(url_diagnostico, destino_diagnostico)
+    except Exception as e:
+        return {'executado': True, 'url': url_diagnostico, 'http_status': None,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE,
+                'resultado': f'consulta de diagnóstico (RANGEEDGES) falhou sem resposta HTTP '
+                              f'({type(e).__name__}: {e}) — inconclusivo, não é evidência de sintaxe '
+                              f'nem de seleção ignorada.'}
+
+    if caminho_diagnostico is None:
+        # Item 7 — HTTP 4xx: o servidor rejeitou o request explicitamente.
+        return {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR,
+                'resultado': f'servidor respondeu HTTP {http_status} para a URL de diagnóstico — '
+                              f'evidência objetiva de falha de sintaxe/request rejeitado, nunca tratada '
+                              f'como problema de seleção ou de interpretação de coordenadas.'}
+
+    try:
+        ds_diagnostico, _, info_calendar = abrir_dataset_com_fallback_temporal(
+            caminho_diagnostico, abrir_fn, rota.init_dimension)
+    except Exception as e:
+        return {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE,
+                'resultado': f'resposta HTTP {http_status} recebida, mas o arquivo não pôde ser aberto/'
+                              f'decodificado ({type(e).__name__}: {e}) — problema de interpretação do '
+                              f'nosso lado, não evidência sobre o comportamento do servidor.'}
+
+    if rota.variable_name not in getattr(ds_diagnostico, 'variables', {}):
+        return {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                'calendar_original': info_calendar['calendar_original'],
+                'calendar_normalized': info_calendar['calendar_normalized'],
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE,
+                'resultado': f'variável {rota.variable_name!r} ausente na resposta de diagnóstico — '
+                              f'não é possível ler a coordenada S associada a ela.'}
+
+    selecao_diagnostico = nproc._avaliar_selecao_inicializacao(ds_diagnostico, rota)
+    status_diag = selecao_diagnostico['init_selection_status']
+    s_count = selecao_diagnostico['init_axis_size_observed_on_variable']
+    base_resultado = {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                       'calendar_original': info_calendar['calendar_original'],
+                       'calendar_normalized': info_calendar['calendar_normalized'],
+                       's_axis_size': s_count}
+
+    if status_diag in (nproc.INIT_SELECTION_STATUS_OK_SCALAR, nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM):
+        s_observado = selecao_diagnostico['init_value_observed_on_variable']
+        if s_observado == origem_esperada:
+            # Item 7 — achado forte: RANGEEDGES confirma exatamente a
+            # origem que VALUE não confirmou. NUNCA vira aprovação
+            # (item 9) — só registra a divergência de comportamento
+            # entre os dois operadores para investigação humana.
+            return {**base_resultado, 's_values_observed': [s_observado],
+                    'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH,
+                    'resultado': f'RANGEEDGES devolveu exatamente {s_observado!r} == origem pedida '
+                                  f'({origem_esperada!r}), enquanto a consulta VALUE original havia '
+                                  f'devolvido {selecao_init_original.get("init_value_observed_on_variable")!r} '
+                                  f'— os dois operadores se comportam DIFERENTE para a mesma origem. Não '
+                                  f'promove aprovação (item 9); mapping_status já decidido como MISMATCH '
+                                  f'permanece inalterado.'}
+        return {**base_resultado, 's_values_observed': [s_observado],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER,
+                'resultado': f'RANGEEDGES respondeu HTTP {http_status} com 1 único valor de S '
+                              f'({s_observado!r}), mas ainda DIFERENTE da origem pedida '
+                              f'({origem_esperada!r}) — evidência de que o servidor não aplicou a '
+                              f'restrição de S (nem via VALUE nem via RANGEEDGES).'}
+
+    if status_diag == nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE:
+        valores = selecao_diagnostico.get('init_values_observed_on_variable_multiplos', [])
+        return {**base_resultado, 's_values_observed': valores,
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER,
+                'resultado': f'RANGEEDGES devolveu {s_count} inicializações associadas à variável '
+                              f'(valores observados: {valores!r} — nenhuma escolhida automaticamente, '
+                              f'item 5) — evidência de que o servidor não restringiu S a 1 único ponto.'}
+
+    # S ausente/valor não interpretável mesmo com RANGEEDGES.
+    return {**base_resultado, 's_values_observed': [],
+            'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE,
+            'resultado': f'resposta HTTP {http_status} recebida, mas a coordenada S não pôde ser lida/'
+                          f'interpretada na resposta de diagnóstico ({status_diag}) — problema de '
+                          f'interpretação, não confirma nem refuta o comportamento do servidor.'}
+
+
 def validar_acesso_dataset_real(ds, rota):
     """Seção 5/6 — validação EMPÍRICA do dataset aberto de verdade
     contra o que a rota documentava: formato utilizável, variável
@@ -926,7 +1125,7 @@ def validar_membros_poc(rota, member_ids_axis, member_count_non_missing_por_lead
 
 def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO, sistema=None,
                               esquema_temporal='lead1_igual_mes_inicializacao',
-                              baixar_fn=None, abrir_fn=None):
+                              baixar_fn=None, abrir_fn=None, baixar_com_status_fn=None):
     """Seção 1-11 (Fase 2C.1b) — primeiro POC REAL, só CFSv2, origem
     2005-01, H1-H6. Tenta as rotas na ordem de
     nmme_download.ordem_tentativa_member_level (CCSR se pronta;
@@ -935,7 +1134,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     calcula skill, nunca usa CHIRPS, nunca baixa série histórica
     completa nem o globo (Seção 4). Devolve um dict de resultado —
     nunca levanta por SERVICE_UNAVAILABLE (Seção 15: reprova o acesso
-    explicitamente em vez de propagar uma exceção não tratada)."""
+    explicitamente em vez de propagar uma exceção não tratada).
+
+    `baixar_com_status_fn` (revisão pós-execução #4, item 4): injetável
+    separadamente de `baixar_fn` — só usado pelo diagnóstico de S
+    divergente (`diagnosticar_origem_s_divergente`), que precisa do
+    status HTTP observado mesmo em sucesso; default `None` usa
+    `_baixar_com_status_http` (rede real). Testes injetam um dublê aqui
+    do mesmo jeito que já fazem para `baixar_fn`/`abrir_fn`."""
     from _c3s_utils import MUNICIPIOS
     import numpy as np
 
@@ -1071,6 +1277,18 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     # suficiente — nunca promove UNCONFIRMED_VALUE_UNVERIFIED para OK
     # sem essa verificação (Seção 4).
     selecao_init = nproc._avaliar_selecao_inicializacao(ds, rota_usada)
+    # Revisão pós-execução #4 (investigação da run 36028568952, item 1)
+    # — default "não executado": o diagnóstico de S divergente só roda
+    # no ramo `elif` abaixo (S presente, mas com data errada); no ramo
+    # `if` (S ausente) e no caminho feliz (S presente e correto) fica
+    # com este valor neutro, nunca None cru (facilita threading para
+    # CSV/metadata sem checagem extra no chamador).
+    diagnostico_s_divergente = {
+        'executado': False, 'url': '', 'http_status': None,
+        'calendar_original': None, 'calendar_normalized': None,
+        's_axis_size': None, 's_values_observed': [],
+        'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO,
+        'resultado': 'não aplicável — S não estava presente-porém-divergente nesta execução.'}
     if (time_decode_mode_usada != nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
             and selecao_init['init_selection_status']
             == nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED):
@@ -1101,6 +1319,22 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
                          'init_verification_s_count': direta['s_count'],
                          'init_verification_comparison_outcome': diagnostico['outcome'],
                          'init_verification_exact_outcome': direta['outcome']}
+    elif (time_decode_mode_usada != nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
+          and selecao_init['init_selection_status'] in (nproc.INIT_SELECTION_STATUS_OK_SCALAR,
+                                                          nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM)
+          and selecao_init['init_periodo_observado'] != init_date):
+        # Revisão pós-execução #4 (investigação da run 36028568952,
+        # itens 1/2) — S está PRESENTE na variável (não é o caso do
+        # bloco `if` acima), mas o único valor observado diverge da
+        # origem pedida. `_avaliar_semantica_forecast_period` já vai
+        # classificar isso como MISMATCH puramente pela contradição
+        # objetiva já observada (Seção E) — o diagnóstico abaixo é
+        # ADITIVO, nunca reclassifica nada, só investiga o
+        # comportamento do servidor via RANGEEDGES para auditoria
+        # humana (item 9: nenhuma aprovação automática nova).
+        diagnostico_s_divergente = diagnosticar_origem_s_divergente(
+            rota_usada, sistema, ano, mes, lat, lon, leads, selecao_init,
+            baixar_com_status_fn=baixar_com_status_fn, abrir_fn=abrir_fn)
 
     raw_linhas, temporal_linhas = [], []
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
@@ -1196,6 +1430,22 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'init_verification_s_count': mapeamento['init_verification_s_count'],
             'init_verification_comparison_outcome': mapeamento['init_verification_comparison_outcome'],
             'init_verification_exact_outcome': mapeamento['init_verification_exact_outcome'],
+            # Revisão pós-execução #4 (investigação da run 36028568952,
+            # itens 1/2/4/7) — diagnóstico de S PRESENTE porém
+            # divergente: nunca reclassifica mapping_status/
+            # init_selection_status acima (que já decidiram MISMATCH
+            # objetivamente), só registra a evidência da tentativa de
+            # confirmação direta via RANGEEDGES para esse caso.
+            's_divergente_diagnostico_executado': diagnostico_s_divergente['executado'],
+            's_divergente_diagnostico_url': diagnostico_s_divergente['url'],
+            's_divergente_diagnostico_http_status': diagnostico_s_divergente['http_status'],
+            's_divergente_diagnostico_calendar_original': diagnostico_s_divergente['calendar_original'],
+            's_divergente_diagnostico_calendar_normalized': diagnostico_s_divergente['calendar_normalized'],
+            's_divergente_diagnostico_s_axis_size': diagnostico_s_divergente['s_axis_size'],
+            's_divergente_diagnostico_s_values_observed': '; '.join(
+                diagnostico_s_divergente['s_values_observed']),
+            's_divergente_diagnostico_classificacao': diagnostico_s_divergente['classificacao'],
+            's_divergente_diagnostico_resultado': diagnostico_s_divergente['resultado'],
             'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
 
     raw_df = pd.DataFrame(raw_linhas)
@@ -1329,6 +1579,19 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'init_verification_s_count': init_verification_s_count,
         'init_verification_comparison_outcome': init_verification_comparison_outcome,
         'init_verification_exact_outcome': init_verification_exact_outcome,
+        # Revisão pós-execução #4 (investigação da run 36028568952) —
+        # diagnóstico de S PRESENTE porém divergente (nunca influencia
+        # poc_status/mapping_status, computado 1x por execução, igual a
+        # init_verification_* — Seção 3 do mesmo comentário acima).
+        's_divergente_diagnostico_executado': diagnostico_s_divergente['executado'],
+        's_divergente_diagnostico_url': diagnostico_s_divergente['url'],
+        's_divergente_diagnostico_http_status': diagnostico_s_divergente['http_status'],
+        's_divergente_diagnostico_calendar_original': diagnostico_s_divergente['calendar_original'],
+        's_divergente_diagnostico_calendar_normalized': diagnostico_s_divergente['calendar_normalized'],
+        's_divergente_diagnostico_s_axis_size': diagnostico_s_divergente['s_axis_size'],
+        's_divergente_diagnostico_s_values_observed': diagnostico_s_divergente['s_values_observed'],
+        's_divergente_diagnostico_classificacao': diagnostico_s_divergente['classificacao'],
+        's_divergente_diagnostico_resultado': diagnostico_s_divergente['resultado'],
         'mapping_reference': list(rota_usada.mapping_reference),
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
@@ -1569,6 +1832,26 @@ def montar_metadata(sistemas=None, resultado_poc=None):
                                                           'NAO_EXECUTADO_NESTA_TAREFA'),
         'init_verification_exact_outcome': r.get('init_verification_exact_outcome',
                                                      'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Revisão pós-execução #4 (investigação da run 36028568952) —
+        # diagnóstico de S PRESENTE porém divergente (nunca influencia
+        # poc_status).
+        's_divergente_diagnostico_executado': r.get('s_divergente_diagnostico_executado',
+                                                        'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_url': r.get('s_divergente_diagnostico_url', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_http_status': r.get('s_divergente_diagnostico_http_status',
+                                                          'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_calendar_original': r.get('s_divergente_diagnostico_calendar_original',
+                                                                'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_calendar_normalized': r.get('s_divergente_diagnostico_calendar_normalized',
+                                                                  'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_s_axis_size': r.get('s_divergente_diagnostico_s_axis_size',
+                                                          'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_s_values_observed': r.get('s_divergente_diagnostico_s_values_observed',
+                                                                'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_classificacao': r.get('s_divergente_diagnostico_classificacao',
+                                                            'NAO_EXECUTADO_NESTA_TAREFA'),
+        's_divergente_diagnostico_resultado': r.get('s_divergente_diagnostico_resultado',
+                                                        'NAO_EXECUTADO_NESTA_TAREFA'),
         'mapping_reference': r.get('mapping_reference', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
@@ -1785,6 +2068,16 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         'init_verification_method', 'init_verification_control_url', 'init_verification_result',
         'init_verification_direct_url', 'init_verification_s_observed', 'init_verification_s_count',
         'init_verification_comparison_outcome', 'init_verification_exact_outcome',
+        # s_divergente_diagnostico_* (revisão pós-execução #4,
+        # investigação da run 36028568952): diagnóstico de S PRESENTE
+        # porém divergente da origem pedida — nunca reclassifica
+        # mapping_status/init_selection_status, só registra a evidência
+        # da tentativa de confirmação direta via RANGEEDGES nesse caso.
+        's_divergente_diagnostico_executado', 's_divergente_diagnostico_url',
+        's_divergente_diagnostico_http_status', 's_divergente_diagnostico_calendar_original',
+        's_divergente_diagnostico_calendar_normalized', 's_divergente_diagnostico_s_axis_size',
+        's_divergente_diagnostico_s_values_observed', 's_divergente_diagnostico_classificacao',
+        's_divergente_diagnostico_resultado',
         'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
         # Seção 11 (revisão pós-execução #1) — colunas de auditoria por
@@ -1844,6 +2137,22 @@ def main():
         print(f"poc_status={aprovacao['poc_status']}")
         for chave, valor in aprovacao['checklist'].items():
             print(f"  - {chave}: {valor}")
+        # Revisão pós-execução #4 (investigação da run 36028568952,
+        # item 4) — impresso no log do job (nunca só no artifact CSV)
+        # para que o diagnóstico fique visível mesmo sem baixar o
+        # artifact; só imprime quando de fato executou (S presente-
+        # porém-divergente), silencioso nos demais casos.
+        if resultado.get('s_divergente_diagnostico_executado'):
+            print("\n=== Diagnóstico: S presente na variável, porém divergente da origem pedida "
+                  "(revisão pós-execução #4) ===")
+            print(f"  url: {resultado.get('s_divergente_diagnostico_url')}")
+            print(f"  http_status: {resultado.get('s_divergente_diagnostico_http_status')}")
+            print(f"  calendar_original: {resultado.get('s_divergente_diagnostico_calendar_original')}")
+            print(f"  calendar_normalized: {resultado.get('s_divergente_diagnostico_calendar_normalized')}")
+            print(f"  s_axis_size: {resultado.get('s_divergente_diagnostico_s_axis_size')}")
+            print(f"  s_values_observed: {resultado.get('s_divergente_diagnostico_s_values_observed')}")
+            print(f"  classificacao: {resultado.get('s_divergente_diagnostico_classificacao')}")
+            print(f"  resultado: {resultado.get('s_divergente_diagnostico_resultado')}")
         if aprovacao['poc_status'] != 'APROVADO':
             raise SystemExit(f"POC real REPROVADO ({aprovacao['poc_status']}) — ver "
                               f"artifacts/nmme_poc/nmme_poc_access_audit.csv e "
