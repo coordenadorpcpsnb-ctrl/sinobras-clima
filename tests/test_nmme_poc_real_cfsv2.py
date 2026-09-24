@@ -459,29 +459,16 @@ class TemporalAuditTestCase(unittest.TestCase):
         # mapping_confirmation_method (Seção 5, execução real #2) — qual
         # dos dois métodos confirmou (ou não) cada lead. init_selection_*
         # (Seção 7, execução real #3) — auditoria da seleção de
-        # inicialização por lead. init_verification_* (revisão pós-
-        # execução #3, correção 2/item 4) — método/URL/resultado da
-        # verificação de controle independente, mais os campos que
-        # distinguem a confirmação DIRETA (RANGEEDGES/metadado) do
-        # diagnóstico de comparação (complementar, nunca decisivo
-        # isoladamente).
+        # inicialização por lead. inicializacao_* (revisão pós-execução
+        # #5, RANGEEDGES como fonte principal) — identifica RANGEEDGES
+        # como fonte principal e o método/valores da seleção explícita.
         colunas_esperadas = {'centre', 'model_name', 'init_date', 'H_lead', 'source_L',
                               'target_month', 'mapping_status', 'evidence',
                               'mapping_confirmation_method', 'init_selection_method',
                               'init_value_requested', 'init_value_observed_on_variable',
                               'init_axis_size_observed_on_variable', 'init_selection_status',
-                              'init_verification_method', 'init_verification_control_url',
-                              'init_verification_result', 'init_verification_direct_url',
-                              'init_verification_s_observed', 'init_verification_s_count',
-                              'init_verification_comparison_outcome', 'init_verification_exact_outcome',
-                              's_divergente_diagnostico_executado', 's_divergente_diagnostico_url',
-                              's_divergente_diagnostico_http_status',
-                              's_divergente_diagnostico_calendar_original',
-                              's_divergente_diagnostico_calendar_normalized',
-                              's_divergente_diagnostico_s_axis_size',
-                              's_divergente_diagnostico_s_values_observed',
-                              's_divergente_diagnostico_classificacao',
-                              's_divergente_diagnostico_resultado',
+                              'inicializacao_fonte_principal', 'inicializacao_selecao_metodo',
+                              'inicializacao_selecao_valores_antes', 'inicializacao_selecao_valores_depois',
                               'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
@@ -1207,6 +1194,10 @@ class Execucao3ReproducaoTestCase(unittest.TestCase):
         self.assertEqual(aprovacao['poc_status'], 'APROVADO')
 
     def test_10b_url_gerada_na_execucao_usa_sintaxe_correta(self):
+        """Revisão pós-execução #5 (RANGEEDGES como fonte principal) —
+        a URL real usada pelo pipeline agora é RANGEEDGES, nunca VALUE
+        (Seção 6 da correção: "não utilizar VALUE como fonte de dados
+        nessa nova estratégia")."""
         chamadas = []
 
         def baixar_registra(url, destino):
@@ -1215,44 +1206,19 @@ class Execucao3ReproducaoTestCase(unittest.TestCase):
 
         ds = self._ds_execucao3()
         _executar(abrir_fn=lambda c: ds, baixar_fn=baixar_registra)
-        self.assertTrue(any('S/(Jan%202005)/VALUE/' in u for u in chamadas))
+        self.assertTrue(any('S/(Jan%202005)/(Jan%202005)/RANGEEDGES/' in u for u in chamadas))
+        # X/Y (seleção espacial de ponto) continuam legitimamente usando
+        # VALUE — só a cláusula de S (tempo/inicialização) não pode mais
+        # usar VALUE (Seção 6 da correção).
+        self.assertFalse(any('S/(Jan%202005)/VALUE/' in u for u in chamadas))
         self.assertFalse(any('01%202005' in u for u in chamadas))
-
-
-def _ds_execucao3_sem_s(valor_base=0.5, escala=3.0, semente=61, n_membros=24):
-    """Dataset sintético equivalente a `_ds_execucao3`, mas com S
-    REMOVIDO de 'prec' (Ingrid VALUE eliminou a dimensão) — S continua
-    presente no Dataset como um todo (variável decoy, dimensão própria,
-    nunca compartilhada com 'prec') só para satisfazer o check de
-    dimensões de `validar_acesso_dataset_real` (Seção 5/6), exatamente
-    como um NetCDF real poderia preservar um artefato vestigial de S em
-    outra variável enquanto 'prec' já foi recortado. Usado pelos testes
-    de verificação de controle (revisão pós-execução #3, risco
-    residual) — nunca cai para esse S decoy como substituto (é isso
-    que a correção anterior já garante, lendo de `da.coords`)."""
-    lon_sb_360 = SAO_BENTO['lon'] % 360.0
-    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
-    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
-    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
-    membros = np.arange(1, n_membros + 1)
-    rng = np.random.RandomState(semente)
-    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
-    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
-                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
-    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
-                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros})
-    prec.attrs['units'] = 'mm/day'
-    decoy_com_s = xr.DataArray([1.0], dims=('S',),
-                                 coords={'S': [pd.Timestamp('2005-01-01')]})
-    return xr.Dataset({'prec': prec, 'decoy_com_s_vestigial': decoy_com_s})
 
 
 def _ds_com_s_scalar_confirmado(valor_base=0.5, escala=3.0, semente=61, n_membros=24,
                                    s_valor='2005-01-01'):
-    """Variante de `_ds_execucao3_sem_s` com S SCALAR associado a
-    'prec' — usada como resposta da tentativa de confirmação DIRETA
-    (S/(Jan 2005)/(Jan 2005)/RANGEEDGES) quando ela tem sucesso em
-    preservar a dimensão S (Seção 2 da correção pós-execução #3)."""
+    """Dataset sintético com S SCALAR associado a 'prec' — usado como
+    resposta de `diagnosticar_origem_s_divergente` (RANGEEDGES) em
+    `SDivergenteDiagnosticoTestCase`."""
     lon_sb_360 = SAO_BENTO['lon'] % 360.0
     lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
     lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
@@ -1293,355 +1259,54 @@ def _ds_com_s_scalar_nao_interpretavel(valor_base=0.5, escala=3.0, semente=61, n
     return xr.Dataset({'prec': prec})
 
 
-class VerificacaoControleValueTestCase(unittest.TestCase):
-    """Revisão pós-execução #3, correção 2 (a revisão identificou dois
-    problemas na consulta de controle — corrigidos aqui). Desenho em
-    duas camadas:
-
-    - `tentar_confirmar_origem_diretamente` (item 2) — S/(Jan 2005)/
-      (Jan 2005)/RANGEEDGES tenta preservar a coordenada S; só um
-      sucesso aqui (EXACT_ORIGIN_CONFIRMED) pode promover
-      `init_selection_status` para OK_INGRID_VALUE_VERIFIED.
-    - `verificar_selecao_ingrid_value_por_consulta_controle` (item 1/3)
-      — diagnóstico de comparação com uma origem diferente, SEMPRE
-      complementar, NUNCA decisivo isoladamente: formatos diferentes,
-      valores divergentes e valores idênticos são todos tratados como
-      evidência insuficiente por si só (testado explicitamente abaixo).
-
-    Dispatch de 3 variantes de URL no dublê de rede: a URL de
-    confirmação direta contém a cláusula S/(Jan%202005)/(Jan%202005)/
-    RANGEEDGES (dois limites IGUAIS à origem pedida — diferente da
-    cláusula L, que também usa RANGEEDGES mas com limites de lead,
-    nunca (Jan 2005)/(Jan 2005)); a URL primária contém S/(Jan%202005)/
-    VALUE; qualquer outra é a consulta de controle (origem diferente)."""
-
-    @staticmethod
-    def _duplas_baixar_abrir(ds_primaria, ds_direta=None, ds_controle=None,
-                                direta_levanta=None, controle_levanta=None):
-        def baixar_fn(url, destino):
-            return (url, False)   # usa a própria URL como "caminho" p/ desambiguar no abrir_fn
-
-        def abrir_fn(caminho, **kwargs):
-            if 'S/(Jan%202005)/(Jan%202005)/RANGEEDGES' in caminho:
-                if direta_levanta is not None:
-                    raise direta_levanta
-                if ds_direta is None:
-                    raise OSError('confirmação direta não configurada neste dublê de teste')
-                return ds_direta
-            if 'S/(Jan%202005)/VALUE' in caminho:
-                return ds_primaria
-            if controle_levanta is not None:
-                raise controle_levanta
-            return ds_controle
-
-        return baixar_fn, abrir_fn
-
-    def test_confirmacao_direta_rangeedges_confirma_e_aprova(self):
-        """Único caminho que pode chegar a OK_INGRID_VALUE_VERIFIED/
-        APROVADO — RANGEEDGES preservou S como scalar == origem pedida
-        (item 2). O diagnóstico de comparação roda junto (item 3,
-        preservado) mas não é o que decide aqui."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        self.assertEqual(r['init_verification_exact_outcome'],
-                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
-        self.assertEqual(r['init_verification_method'], 'INGRID_S_SINGLETON_RANGEEDGES')
-        self.assertTrue(r['init_verification_direct_url'])
-        self.assertEqual(r['init_verification_s_observed'], '2005-01')
-        self.assertEqual(r['init_verification_s_count'], 1)
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_diferencas_de_precipitacao_no_diagnostico_nao_confirmam_sozinhas(self):
-        """Item 1/5 — valores divergentes na consulta de controle
-        comprovam só que as respostas diferem, NUNCA promovem sozinhos
-        a OK_INGRID_VALUE_VERIFIED quando a confirmação direta não teve
-        sucesso (aqui, RANGEEDGES não configurada -> falha)."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=62)   # valores DIFERENTES
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_selection_status'],
-                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
-        self.assertEqual(r['init_verification_comparison_outcome'],
-                          nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED)
-        self.assertNotEqual(r['init_verification_exact_outcome'],
-                             nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
-        self.assertIn('NÃO', r['init_verification_result'])
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_valores_identicos_sao_so_alerta_nunca_reprovacao_definitiva(self):
-        """Item 1/5 — valores idênticos na consulta de controle são um
-        ALERTA (IDENTICAL_RESPONSES_SUSPECT), não a prova de que o
-        servidor ignorou S: nunca força mais um MISMATCH definitivo
-        (comportamento antigo, removido) — fica UNCONFIRMED, igual a
-        qualquer outra evidência insuficiente."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=61)   # MESMOS valores
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_selection_status'],
-                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
-        self.assertEqual(r['init_verification_comparison_outcome'],
-                          nproc.VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT)
-        self.assertIn('IDÊNTICOS', r['init_verification_result'])
-        self.assertIn('NÃO', r['init_verification_result'])
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
-        self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').any())
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_formato_diferente_entre_respostas_nao_comprova_selecao_correta(self):
-        """Item 1/5 — formatos diferentes entre a resposta original e a
-        de controle não comprovam, isoladamente, que a seleção foi
-        correta; tratado como mais um caso de DIFFERENT_RESPONSES_
-        ORIGIN_UNVERIFIED, nunca uma confirmação."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61, n_membros=24)
-        ds_controle = _ds_execucao3_sem_s(semente=61, n_membros=20)   # formato (shape) diferente
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_selection_status'],
-                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
-        self.assertEqual(r['init_verification_comparison_outcome'],
-                          nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED)
-        self.assertIn('formato', r['init_verification_result'])
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_verificacao_inconclusiva_control_query_falha_fica_unconfirmed(self):
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(
-            ds_primaria, controle_levanta=OSError('controle indisponível (simulado)'))
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_selection_status'],
-                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
-        self.assertEqual(r['init_verification_comparison_outcome'],
-                          nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES)
-        self.assertIn('incomparável', r['init_verification_result'])
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_confirmacao_direta_falhando_registra_nao_conclusivo(self):
-        """Item 2 — a tentativa de confirmação direta que não conseguiu
-        preservar S (aqui: RANGEEDGES não configurada no dublê ->
-        exceção) fica NAO_CONCLUSIVO, nunca é tratada como
-        EXACT_ORIGIN_CONFIRMED por omissão."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(
-            ds_primaria, ds_controle=ds_controle,
-            direta_levanta=OSError('RANGEEDGES indisponível (simulado)'))
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_exact_outcome'], 'NAO_CONCLUSIVO')
-        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_verificacao_registra_todos_os_campos_de_diagnostico_no_temporal_audit(self):
-        """Item 4 — os 8 elementos pedidos ficam auditáveis: URL
-        original (`source_url`, já existente fora deste dict), URL de
-        controle, método de seleção de S, coordenada S observada,
-        quantidade de inicializações, resultado da comparação,
-        resultado da confirmação exata e a justificativa final."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertTrue(r['source_url'])   # URL original
-        linha = r['temporal_audit_df'].iloc[0]
-        for campo in ('init_verification_method', 'init_verification_control_url',
-                      'init_verification_result', 'init_verification_direct_url',
-                      'init_verification_s_observed', 'init_verification_s_count',
-                      'init_verification_comparison_outcome', 'init_verification_exact_outcome'):
-            self.assertIn(campo, linha.index, msg=f'{campo} ausente do temporal_audit_df')
-        self.assertTrue(linha['init_verification_control_url'])
-        self.assertTrue(linha['init_verification_direct_url'])
-        self.assertEqual(linha['init_verification_s_observed'], '2005-01')
-        self.assertEqual(linha['init_verification_s_count'], 1)
-        self.assertEqual(linha['init_verification_exact_outcome'],
-                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
-        self.assertTrue(linha['init_verification_result'])
+def _ds_com_s_janela(valores_s, valor_base=0.5, escala=3.0, semente=61, n_membros=24):
+    """Dataset sintético com S como DIMENSÃO real de múltiplos valores
+    explícitos (revisão pós-execução #5/#10) — reproduz o achado
+    empírico da run 36032400919: RANGEEDGES devolveu uma JANELA (ex.:
+    jan+fev/2005), não um único ponto. `valores_s`: lista de strings
+    'AAAA-MM-DD' na ordem em que devem aparecer no eixo S."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    n_s = len(valores_s)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(n_s, 3, 3, len(l_valores), n_membros) * escala
+    da_S = xr.DataArray([pd.Timestamp(v) for v in valores_s], dims=('S',),
+                          attrs={'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('S', 'X', 'Y', 'L', 'M'),
+                          coords={'S': da_S, 'X': lons, 'Y': lats, 'L': da_L, 'M': membros})
+    prec.attrs['units'] = 'mm/day'
+    return xr.Dataset({'prec': prec})
 
 
-class ConfirmacaoDiretaExataTestCase(unittest.TestCase):
-    """Revisão pós-execução #3, correção 3 — a revisão apontou que a
-    confirmação direta via RANGEEDGES tinha dois problemas: (1) tratava
-    "S tem 1 único valor" como suficiente, sem checar se esse valor era
-    de fato a origem pedida; (2) nunca comparava o PAYLOAD de
-    precipitação de RANGEEDGES com o da consulta VALUE original (a que
-    alimenta o RAW de fato). Os testes abaixo cobrem os dois pontos
-    isoladamente e em combinação, sempre via `executar_poc_real_cfsv2`
-    ponta a ponta (não chamando `tentar_confirmar_origem_diretamente`
-    diretamente, para também exercitar `ponto_original` sendo passado
-    pela orquestração)."""
+class SDivergenteDiagnosticoTestCase(unittest.TestCase):
+    """Revisão pós-execução #5 (RANGEEDGES como fonte principal) — a
+    run real 36032400919 mostrou que o operador Ingrid VALUE pode
+    devolver uma origem TOTALMENTE errada sem erro HTTP (1982-01 para
+    2005-01 pedido); `executar_poc_real_cfsv2` não usa mais VALUE como
+    fonte primária (Seção "não utilizar VALUE como fonte de dados"),
+    então `tentar_confirmar_origem_diretamente`/`verificar_selecao_
+    ingrid_value_por_consulta_controle` (desenhadas especificamente
+    para verificar uma seleção via VALUE) ficaram inalcançáveis e foram
+    REMOVIDAS. `diagnosticar_origem_s_divergente` foi MANTIDA e
+    corrigida (item 10, mesma run) por instrução explícita — testada
+    aqui DIRETAMENTE (não mais via executar_poc_real_cfsv2, que não
+    tem mais o caminho VALUE que esta função foi desenhada para
+    diagnosticar)."""
 
     @staticmethod
-    def _duplas_baixar_abrir(ds_primaria, ds_direta=None, ds_controle=None):
-        return VerificacaoControleValueTestCase._duplas_baixar_abrir(
-            ds_primaria, ds_direta=ds_direta, ds_controle=ds_controle)
-
-    def test_s_unico_igual_a_2005_01_confirma(self):
-        """Item 3, caso 1 — S único e IGUAL à origem pedida (o caminho
-        já coberto por VerificacaoControleValueTestCase, reafirmado
-        aqui pelo nome exato pedido na revisão)."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_s_observed'], '2005-01')
-        self.assertEqual(r['init_verification_exact_outcome'],
-                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
-        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_s_unico_diferente_de_2005_01_gera_origin_mismatch(self):
-        """Item 3, caso 2 — S único, mas DIFERENTE da origem pedida
-        (2005-02 em vez de 2005-01): item 1 exige reprovar a
-        confirmação com ORIGIN_MISMATCH, nunca tratar "1 valor" como
-        suficiente."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-02-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_s_observed'], '2005-02')
-        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH)
-        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        self.assertIn('DIVERGE', r['init_verification_result'])
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_s_nao_interpretavel_fica_inconclusivo(self):
-        """Item 3, caso 3 — S presente mas com conteúdo não
-        interpretável como data: nunca vira EXACT_ORIGIN_CONFIRMED nem
-        ORIGIN_MISMATCH (não dá para comparar o que não foi lido) — só
-        inconclusivo."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_nao_interpretavel(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertIsNone(r['init_verification_s_observed'])
-        self.assertEqual(r['init_verification_exact_outcome'], 'NAO_CONCLUSIVO')
-        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_value_e_rangeedges_com_dados_equivalentes_permite_aprovar(self):
-        """Item 3, caso 4 — mesma origem, mesmos membros/leads, valores
-        de precipitação NUMERICAMENTE equivalentes entre VALUE e
-        RANGEEDGES (mesma semente -> mesmos dados sintéticos):
-        consistência confirmada, nada impede a aprovação."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_exact_outcome'],
-                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_value_e_rangeedges_com_dados_divergentes_nao_aprova(self):
-        """Item 3, caso 5 — mesma origem (S=2005-01 confirmado nos dois
-        lados), mas os VALORES de precipitação divergem (sementes
-        diferentes simulando respostas HTTP com payloads diferentes):
-        item 2 exige reprovar mesmo com S correto."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=99, s_valor='2005-01-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_s_observed'], '2005-01')   # S sozinho bateu
-        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT)
-        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        self.assertIn('divergem', r['init_verification_result'])
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_diferencas_de_membros_entre_value_e_rangeedges_reprovam(self):
-        """Item 3, caso 6 — mesma origem, mas os IDs/dimensões de
-        membros de RANGEEDGES não batem com os de VALUE (24 vs. 20
-        membros): dimensões incompatíveis, nunca comparadas às cegas
-        nem aprovadas."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61, n_membros=24)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01', n_membros=20)
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT)
-        self.assertIn('membros', r['init_verification_result'])
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-    def test_confirmacao_direta_correta_sem_equivalencia_dos_dados_nao_aprova_poc(self):
-        """Item 3, caso 7 (explícito) — mesmo com a confirmação direta
-        "correta" quanto à origem (S == 2005-01, item 1 satisfeito), a
-        ausência de equivalência de dados (item 2) tem que impedir a
-        aprovação do POC inteiro, não só marcar um campo de auditoria:
-        checa também que mapping_status nunca vira 'OK' em nenhum lead
-        nesse cenário."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_direta = _ds_com_s_scalar_confirmado(semente=99, s_valor='2005-01-01')
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
-                                                            ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_verification_s_observed'], '2005-01')
-        self.assertNotEqual(r['init_verification_exact_outcome'],
-                             nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
-        self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'OK').any())
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
-
-
-class DiagnosticoSDivergenteTestCase(unittest.TestCase):
-    """Revisão pós-execução #4 (investigação da run real 36028568952) —
-    a run encontrou um caso NÃO coberto pelas correções 1-3:
-    inicialização solicitada 2005-01, observada 1982-01, coordenada S
-    PRESENTE na variável 'prec' (1 único valor — não é o caso "S
-    ausente" que já dispara `tentar_confirmar_origem_diretamente`).
-    `_avaliar_semantica_forecast_period` já classifica isso como
-    MISMATCH corretamente (contradição objetiva observada) — os testes
-    abaixo confirmam que o NOVO diagnóstico (RANGEEDGES) roda nesse
-    caso só para auditoria, e NUNCA reclassifica mapping_status/
-    poc_status (item 9 — nenhuma aprovação automática nova), mesmo nos
-    cenários mais favoráveis (RANGEEDGES confirma 2005-01 exatamente)."""
-
-    @staticmethod
-    def _duplas_baixar_abrir(ds_primaria, ds_diagnostico=None, diagnostico_levanta=None):
-        def baixar_fn(url, destino):
-            return (url, False)
-
-        def abrir_fn(caminho, **kwargs):
-            if 'S/(Jan%202005)/(Jan%202005)/RANGEEDGES' in caminho:
-                if diagnostico_levanta is not None:
-                    raise diagnostico_levanta
-                if ds_diagnostico is None:
-                    raise OSError('diagnóstico de S divergente não configurado neste dublê de teste')
-                return ds_diagnostico
-            return ds_primaria
-
-        return baixar_fn, abrir_fn
+    def _abrir_fn(ds_diagnostico=None, levanta=None):
+        def fn(caminho, **kwargs):
+            if levanta is not None:
+                raise levanta
+            if ds_diagnostico is None:
+                raise OSError('diagnóstico não configurado neste dublê de teste')
+            return ds_diagnostico
+        return fn
 
     @staticmethod
     def _baixar_com_status_fn(status_http=200, http_error_status=None, levanta=None):
@@ -1658,123 +1323,283 @@ class DiagnosticoSDivergenteTestCase(unittest.TestCase):
             return url, status_http
         return fn
 
+    @classmethod
+    def _chamar(cls, ds_diagnostico=None, baixar_com_status_fn=None, abrir_levanta=None,
+                 selecao_init_original=None):
+        rota = _rota_metodo_b()
+        selecao_init_original = selecao_init_original or {'init_value_observed_on_variable': '1982-01'}
+        return npoc.diagnosticar_origem_s_divergente(
+            rota, CFSV2, 2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'], (1, 2, 3, 4, 5, 6),
+            selecao_init_original,
+            baixar_com_status_fn=baixar_com_status_fn or cls._baixar_com_status_fn(200),
+            abrir_fn=cls._abrir_fn(ds_diagnostico, levanta=abrir_levanta))
+
     def test_reproducao_exata_run4_selecao_ignorada_pelo_servidor(self):
         """Reprodução do achado real: VALUE devolveu 1982-01 (pedido
         2005-01); RANGEEDGES, no diagnóstico, TAMBÉM devolve 1982-01 —
-        evidência de que o servidor ignora a restrição de S nos dois
-        operadores. mapping_status continua MISMATCH (guardrail
-        intocado)."""
-        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+        evidência de que o servidor ignora a restrição de S."""
         ds_diagnostico = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').all())
-        self.assertTrue(r['s_divergente_diagnostico_executado'])
-        self.assertEqual(r['s_divergente_diagnostico_http_status'], 200)
-        self.assertEqual(r['s_divergente_diagnostico_s_axis_size'], 1)
-        self.assertEqual(r['s_divergente_diagnostico_s_values_observed'], ['1982-01'])
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
-        self.assertTrue(r['s_divergente_diagnostico_url'])
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+        r = self._chamar(ds_diagnostico=ds_diagnostico)
+        self.assertEqual(r['http_status'], 200)
+        self.assertEqual(r['s_axis_size'], 1)
+        self.assertEqual(r['s_values_observed'], ['1982-01'])
+        self.assertEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
+        self.assertTrue(r['url'])
 
-    def test_rangeedges_confirma_2005_mesmo_com_value_errado_nunca_aprova(self):
-        """Item 9 (o mais crítico) — mesmo no cenário MAIS favorável
-        (RANGEEDGES devolve exatamente 2005-01, divergindo do VALUE
-        errado), o POC NUNCA é aprovado automaticamente. mapping_status
-        já decidido MISMATCH pela contradição objetiva do VALUE
-        permanece MISMATCH — o diagnóstico é só informativo."""
-        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+    def test_rangeedges_confirma_2005_mesmo_com_value_errado(self):
+        """Achado mais interessante possível: RANGEEDGES devolve
+        exatamente a origem pedida, divergindo do VALUE errado."""
         ds_diagnostico = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').all())
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH)
-        self.assertEqual(r['s_divergente_diagnostico_s_values_observed'], ['2005-01'])
-        self.assertNotEqual(r['poc_status'], 'APROVADO')
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+        r = self._chamar(ds_diagnostico=ds_diagnostico)
+        self.assertEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH)
+        self.assertEqual(r['s_values_observed'], ['2005-01'])
 
-    def test_rangeedges_multiplas_inicializacoes_registra_valores_sem_escolher_primeiro(self):
-        """Item 5 — RANGEEDGES não restringiu a 1 único ponto (devolveu
-        3 inicializações); os 3 valores ficam registrados no
-        diagnóstico, nunca só o primeiro escolhido às cegas."""
-        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
+    def test_multiplas_inicializacoes_com_alvo_ausente_fica_selection_ignored(self):
+        """Item 10 — a origem pedida (2005-01) NÃO está entre os
+        múltiplos valores devolvidos (1982/1983/1984): aí sim
+        SELECTION_IGNORED_BY_SERVER é a leitura correta."""
         ds_diagnostico = _ds_selecao_s(modo='multiplo', n_valores_multiplos=3)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
-        self.assertEqual(r['s_divergente_diagnostico_s_axis_size'], 3)
-        self.assertEqual(len(r['s_divergente_diagnostico_s_values_observed']), 3)
-        self.assertIn('1982-01', r['s_divergente_diagnostico_s_values_observed'][0])
-        aprovacao = npoc.avaliar_aprovacao_poc(r)
-        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+        r = self._chamar(ds_diagnostico=ds_diagnostico)
+        self.assertEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
+        self.assertEqual(r['s_axis_size'], 3)
+        self.assertEqual(len(r['s_values_observed']), 3)
+
+    def test_multiplas_inicializacoes_com_alvo_presente_vira_range_window(self):
+        """Item 10 (correção da run 36032400919) — reprodução exata do
+        achado real: RANGEEDGES devolveu jan+fev/2005 para limites
+        idênticos a jan/2005, com a origem pedida PRESENTE entre os
+        valores. Antes da correção isso virava SELECTION_IGNORED_BY_
+        SERVER (errado); agora é RANGE_WINDOW_MULTIPLE_INITIALIZATIONS
+        — o servidor não ignorou nada, devolveu uma janela que contém a
+        origem certa."""
+        ds_diagnostico = _ds_com_s_janela(['2005-01-01', '2005-02-01'])
+        r = self._chamar(ds_diagnostico=ds_diagnostico)
+        self.assertEqual(r['classificacao'],
+                          nproc.S_DIVERGENTE_DIAGNOSTICO_RANGE_WINDOW_MULTIPLE_INITIALIZATIONS)
+        self.assertNotEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER)
+        self.assertEqual(r['s_axis_size'], 2)
+        self.assertEqual(sorted(str(v)[:7] for v in r['s_values_observed']), ['2005-01', '2005-02'])
 
     def test_http_4xx_classifica_como_syntax_error(self):
         """Item 7 — HTTP 4xx é evidência objetiva de falha de sintaxe/
         request rejeitado, nunca confundida com seleção ignorada."""
-        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria)
-        r = npoc.executar_poc_real_cfsv2(
-            baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-            baixar_com_status_fn=self._baixar_com_status_fn(http_error_status=400))
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR)
-        self.assertEqual(r['s_divergente_diagnostico_http_status'], 400)
-        self.assertEqual(r['s_divergente_diagnostico_s_values_observed'], [])
+        r = self._chamar(baixar_com_status_fn=self._baixar_com_status_fn(http_error_status=400))
+        self.assertEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR)
+        self.assertEqual(r['http_status'], 400)
+        self.assertEqual(r['s_values_observed'], [])
 
     def test_falha_de_rede_sem_resposta_http_fica_inconclusive(self):
         """Item 7 — sem resposta HTTP nenhuma (timeout/erro de rede),
         nunca classificado como falha de sintaxe nem seleção ignorada —
         só inconclusivo."""
-        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria)
-        r = npoc.executar_poc_real_cfsv2(
-            baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-            baixar_com_status_fn=self._baixar_com_status_fn(levanta=OSError('timeout simulado')))
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE)
-        self.assertIsNone(r['s_divergente_diagnostico_http_status'])
+        r = self._chamar(baixar_com_status_fn=self._baixar_com_status_fn(
+            levanta=OSError('timeout simulado')))
+        self.assertEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE)
+        self.assertIsNone(r['http_status'])
 
     def test_resposta_nao_interpretavel_classifica_como_problema_de_coordenadas(self):
         """Item 7 — resposta HTTP OK, mas a coordenada S não pôde ser
         lida/interpretada: lacuna nossa, nunca tratada como prova sobre
         o comportamento do servidor."""
-        ds_primaria = _ds_com_s_scalar_confirmado(semente=61, s_valor='1982-01-01')
         ds_diagnostico = _ds_com_s_scalar_nao_interpretavel(semente=61)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_diagnostico=ds_diagnostico)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-                                            baixar_com_status_fn=self._baixar_com_status_fn(200))
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE)
+        r = self._chamar(ds_diagnostico=ds_diagnostico)
+        self.assertEqual(r['classificacao'], nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE)
 
-    def test_diagnostico_nao_dispara_quando_s_ausente(self):
-        """Sanidade — os dois ramos (S ausente / S presente-porém-
-        divergente) são mutuamente exclusivos: com S ausente, o novo
-        diagnóstico fica no default neutro NAO_EXECUTADO."""
-        ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = VerificacaoControleValueTestCase._duplas_baixar_abrir(
-            ds_primaria, ds_controle=ds_controle)
-        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertFalse(r['s_divergente_diagnostico_executado'])
-        self.assertEqual(r['s_divergente_diagnostico_classificacao'],
-                          nproc.S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO)
 
-    def test_diagnostico_nao_dispara_quando_s_correto(self):
-        """Sanidade — no caminho feliz (S presente e correto), nenhuma
-        consulta de diagnóstico extra é feita."""
-        ds = Execucao3ReproducaoTestCase()._ds_execucao3()
+class RangeedgesFontePrincipalTestCase(unittest.TestCase):
+    """Revisão pós-execução #5 — RANGEEDGES é a ÚNICA fonte primária
+    do POC real (nunca VALUE — Seção 6: "não presumir que os mesmos
+    limites em RANGEEDGES necessariamente selecionam uma única
+    inicialização"; a run 36032400919 confirmou isso empiricamente: S
+    voltou com jan+fev/2005 para limites idênticos a jan/2005). A
+    inicialização é selecionada EXPLICITAMENTE em Python por
+    coordenada observada — nunca por posição/índice/proximidade
+    (nmme_processar.selecionar_inicializacao_por_coordenada).
+
+    "Testes obrigatórios" da tarefa, cobertos nesta classe:
+    - Jan/2005 e Fev/2005 retornados -> seleciona exclusivamente Jan.
+    - Jan/2005 ausente -> reprova.
+    - Jan/2005 duplicado -> reprova.
+    - Múltiplas inicializações presentes após a seleção -> reprova.
+    - Inicialização observada diferente da solicitada -> reprova.
+    - 24 membros por lead preservados (representação harmonizada).
+    - H1-H6 e a validação temporal preservados.
+    - Conversão de unidade preservada.
+    - Nenhuma linha RAW vem de fevereiro/2005.
+    """
+
+    @staticmethod
+    def _ds_janela(valores_s, valor_base=0.5, escala=3.0, semente=51, n_membros=24,
+                     valor_base_por_s=None):
+        """Como `_ds_com_s_janela`, mas com controle FINO do valor de
+        precipitação por índice de S (`valor_base_por_s`) — usado para
+        provar que o RAW final só carrega os valores do S selecionado,
+        nunca de um vizinho presente na janela."""
+        lon_sb_360 = SAO_BENTO['lon'] % 360.0
+        lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+        lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+        l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+        membros = np.arange(1, n_membros + 1)
+        n_s = len(valores_s)
+        rng = np.random.RandomState(semente)
+        if valor_base_por_s is not None:
+            dados = np.empty((n_s, 3, 3, len(l_valores), n_membros))
+            for i, base_i in enumerate(valor_base_por_s):
+                dados[i] = base_i + rng.rand(3, 3, len(l_valores), n_membros) * escala
+        else:
+            dados = valor_base + rng.rand(n_s, 3, 3, len(l_valores), n_membros) * escala
+        da_S = xr.DataArray([pd.Timestamp(v) for v in valores_s], dims=('S',),
+                              attrs={'standard_name': 'forecast_reference_time'})
+        da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                              attrs={'units': 'months', 'standard_name': 'forecast_period'})
+        prec = xr.DataArray(dados, dims=('S', 'X', 'Y', 'L', 'M'),
+                              coords={'S': da_S, 'X': lons, 'Y': lats, 'L': da_L, 'M': membros})
+        prec.attrs['units'] = 'mm/day'
+        return xr.Dataset({'prec': prec})
+
+    def test_janela_com_jan_e_fev_seleciona_exclusivamente_jan(self):
+        """Caso obrigatório 1 — reprodução exata do achado empírico da
+        run 36032400919 (jan+fev/2005 retornados): o pipeline aprova e
+        usa só janeiro."""
+        ds = self._ds_janela(['2005-01-01', '2005-02-01'], valor_base_por_s=[10.0, 900.0])
         r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
-        self.assertFalse(r['s_divergente_diagnostico_executado'])
+        self.assertEqual(r['poc_status'], 'PROCESSADO')
+        self.assertEqual(r['inicializacao_fonte_principal'], 'RANGEEDGES')
+        self.assertEqual(r['inicializacao_selecao_metodo'],
+                          nproc.INIT_SELECTION_METHOD_RANGEEDGES_WINDOW_COORDINATE_MATCH)
+        self.assertEqual(len(r['inicializacao_selecao_valores_antes']), 2)
+        self.assertEqual(len(r['inicializacao_selecao_valores_depois']), 1)
+        self.assertIn('2005-01', r['inicializacao_selecao_valores_depois'][0])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_nenhuma_linha_raw_vem_de_fevereiro_2005(self):
+        """Caso obrigatório 9 — os valores de precipitação em raw_df
+        batem com o bloco de janeiro (base 10.0-13.0), nunca com o de
+        fevereiro (base 900.0-903.0, absurdamente mais alto de
+        propósito para nunca passar despercebido)."""
+        ds = self._ds_janela(['2005-01-01', '2005-02-01'], valor_base_por_s=[10.0, 900.0], escala=3.0)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'], 'PROCESSADO')
+        self.assertTrue(len(r['raw_df']) > 0)
+        self.assertTrue((r['raw_df']['forecast_prec_mm'] < 500).all(),
+                          msg='linha RAW com valor de fevereiro/2005 vazou para o resultado')
+
+    def test_jan_2005_ausente_reprova(self):
+        """Caso obrigatório 2 — só fevereiro presente, nunca janeiro."""
+        ds = self._ds_janela(['2005-02-01', '2005-03-01'])
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'],
+                          f'REPROVADO_INICIALIZACAO_{nproc.INIT_SELECTION_STATUS_RANGEEDGES_FAIL_AUSENTE}')
+        self.assertEqual(len(r['raw_df']), 0)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_jan_2005_duplicado_reprova(self):
+        """Caso obrigatório 3 — 2 dias diferentes, ambos dentro de
+        janeiro/2005 (dado ambíguo — nunca escolhe um dos dois por
+        posição)."""
+        ds = self._ds_janela(['2005-01-01', '2005-01-15'])
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'],
+                          f'REPROVADO_INICIALIZACAO_{nproc.INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DUPLICADO}')
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_multipla_apos_selecao_reprova(self):
+        """Caso obrigatório 4 (defesa redundante com o "duplicado",
+        item 5 da correção) — testado diretamente na função pura:
+        mesmo que a contagem por período encontre só 1 correspondência,
+        se a seleção por coordenada exata devolver mais de 1 ponto,
+        reprova (nunca assume o primeiro)."""
+        rota = _rota_metodo_b()
+        da_falsa = _DaFalsaSelecaoMultipla()
+        r = nproc.selecionar_inicializacao_por_coordenada(da_falsa, rota, 2005, 1)
+        self.assertEqual(r['status'], nproc.INIT_SELECTION_STATUS_RANGEEDGES_FAIL_MULTIPLA_APOS_SELECAO)
+        self.assertIsNone(r['da_selecionado'])
+
+    def test_inicializacao_observada_diferente_da_solicitada_reprova(self):
+        """Caso obrigatório 5 (defesa pós-seleção) — testado
+        diretamente: mesmo que a seleção por coordenada devolva 1 único
+        ponto, se esse ponto divergir do mês pedido, reprova."""
+        rota = _rota_metodo_b()
+        da_falsa = _DaFalsaSelecaoDivergente()
+        r = nproc.selecionar_inicializacao_por_coordenada(da_falsa, rota, 2005, 1)
+        self.assertEqual(r['status'], nproc.INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DIVERGENTE_APOS_SELECAO)
+        self.assertIsNone(r['da_selecionado'])
+
+    def test_24_membros_preservados_na_representacao_harmonizada(self):
+        """Caso obrigatório 6."""
+        ds = self._ds_janela(['2005-01-01', '2005-02-01'], n_membros=24)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'], 'PROCESSADO')
+        self.assertEqual(r['member_axis_size'], 24)
+        self.assertTrue(all(n == 24 for n in r['member_count_non_missing_por_lead']))
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_h1_a_h6_e_validacao_temporal_preservados(self):
+        """Caso obrigatório 7."""
+        ds = self._ds_janela(['2005-01-01', '2005-02-01'])
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(set(r['temporal_audit_df']['H_lead']), {1, 2, 3, 4, 5, 6})
         self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
+        self.assertEqual(r['temporal_mapping_status'], 'OK')
+
+    def test_conversao_de_unidade_preservada(self):
+        """Caso obrigatório 8."""
+        ds = self._ds_janela(['2005-01-01', '2005-02-01'])
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(r['units_observed'], 'mm/day')
+        self.assertTrue(r['raw_df']['units_original'].notna().all())
+        self.assertTrue(r['raw_df']['conversion_applied'].notna().all())
+
+class _DaFalsaSelecaoMultipla:
+    """Dublê mínimo de DataArray — simula o caso adversarial em que a
+    contagem por PERÍODO encontra só 1 correspondência, mas a seleção
+    por coordenada EXATA (`.sel`) devolve mais de 1 ponto (ex.: dois
+    timestamps tecnicamente diferentes que colapsam ao mesmo objeto de
+    seleção por uma peculiaridade do índice/calendário — cenário que a
+    contagem por período sozinha não detectaria). Existe só para
+    exercitar o branch defensivo de `selecionar_inicializacao_por_
+    coordenada` sem depender de dado real capaz de produzi-lo."""
+
+    def __init__(self):
+        self.coords = {'S': self}
+        self.dims = ('S',)
+        self.values = [pd.Timestamp('2005-01-01')]
+
+    def sel(self, indexadores):
+        return _DaPosSelecaoMultipla()
 
 
+class _DaPosSelecaoMultipla:
+    def __init__(self):
+        self.coords = {'S': self}
+        self.values = [pd.Timestamp('2005-01-01'), pd.Timestamp('2005-01-01')]
+
+
+class _DaFalsaSelecaoDivergente:
+    """Dublê mínimo — a seleção por coordenada exata devolve 1 único
+    ponto, mas esse ponto (por um bug hipotético de comparação) não
+    bate o mês pedido."""
+
+    def __init__(self):
+        self.coords = {'S': self}
+        self.dims = ('S',)
+        self.values = [pd.Timestamp('2005-01-01')]
+
+    def sel(self, indexadores):
+        return _DaPosSelecaoDivergente()
+
+
+class _DaPosSelecaoDivergente:
+    def __init__(self):
+        self.coords = {'S': self}
+        self.values = [pd.Timestamp('2005-03-01')]
+
+
+if __name__ == '__main__':
+    unittest.main()
 if __name__ == '__main__':
     unittest.main()
