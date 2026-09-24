@@ -406,7 +406,7 @@ INIT_SELECTION_STATUS_RANGEEDGES_FAIL_NAO_INTERPRETAVEL = 'RANGEEDGES_FAIL_NAO_I
 INIT_SELECTION_STATUS_RANGEEDGES_FAIL_SEM_COORDENADA = 'RANGEEDGES_FAIL_SEM_COORDENADA'
 
 
-def selecionar_inicializacao_por_coordenada(da, rota, ano, mes):
+def selecionar_inicializacao_por_coordenada(da, rota, ano, mes, ds=None):
     """Seleção EXPLÍCITA e validada da inicialização a partir de uma
     resposta Ingrid RANGEEDGES (item 1-5 da correção RANGEEDGES-fonte-
     principal). `da` é a DataArray da variável de precipitação já
@@ -433,17 +433,33 @@ def selecionar_inicializacao_por_coordenada(da, rota, ano, mes):
        de S, FAIL_MULTIPLA_APOS_SELECAO; se o valor final não bater a
        origem pedida, FAIL_DIVERGENTE_APOS_SELECAO.
 
+    `ds`, quando informado, é o Dataset INTEIRO de onde `da` veio (ex.:
+    o próprio dataset aberto do RANGEEDGES, com TODAS as variáveis —
+    inclusive uma eventual variável auxiliar de data-alvo como
+    `target`/`valid_time`, que não é coordenada de `da` e por isso não
+    seria filtrada só por filtrar `da`). Quando a seleção é bem-sucedida,
+    a MESMA coordenada `valor_alvo` escolhida para `da` é aplicada ao
+    `ds` inteiro (`ds.sel({S: valor_alvo})`), devolvida como
+    `ds_selecionado` — para que nenhuma validação temporal posterior
+    (`avaliar_mapeamento_temporal`, incluindo o Método A de variável
+    auxiliar) possa ler um valor associado a uma inicialização diferente
+    da selecionada. `.sel()` preserva os atributos de todas as
+    coordenadas não filtradas (inclusive S e L) sem precisar copiá-los
+    à mão. Sem `ds` (uso direto da função pura, ex. em testes), fica
+    `None` — o chamador decide o que fazer.
+
     Devolve dict com `status`, `s_values_before` (lista de strings, TODOS
     os valores observados antes da seleção, nunca só o escolhido),
     `s_values_after` (lista após a seleção, esperado 1 elemento quando
-    status==RANGEEDGES_OK), `da_selecionado` (só quando OK) e
-    `evidencia`."""
+    status==RANGEEDGES_OK), `da_selecionado` (só quando OK),
+    `ds_selecionado` (só quando OK e `ds` foi informado) e `evidencia`."""
     dim_s = getattr(rota, 'init_dimension', None) or 'S'
     origem = pd.Period(f'{ano:04d}-{mes:02d}', 'M')
 
     if dim_s not in getattr(da, 'coords', {}):
         return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_SEM_COORDENADA,
                 's_values_before': [], 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
                 'evidencia': f"coordenada {dim_s!r} ausente da variável — RANGEEDGES não preservou "
                               f"nenhum valor de S associado a ela."}
 
@@ -455,6 +471,7 @@ def selecionar_inicializacao_por_coordenada(da, rota, ano, mes):
     except Exception as e:
         return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_NAO_INTERPRETAVEL,
                 's_values_before': s_values_before, 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
                 'evidencia': f"não foi possível interpretar 1+ valores de S observados "
                               f"({s_values_before!r}) como período mensal ({type(e).__name__}: {e})."}
 
@@ -462,11 +479,13 @@ def selecionar_inicializacao_por_coordenada(da, rota, ano, mes):
     if not indices_match:
         return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_AUSENTE,
                 's_values_before': s_values_before, 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
                 'evidencia': f"origem pedida ({origem}) não está entre os valores de S observados "
                               f"na janela RANGEEDGES ({s_values_before!r})."}
     if len(indices_match) > 1:
         return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DUPLICADO,
                 's_values_before': s_values_before, 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
                 'evidencia': f"origem pedida ({origem}) aparece {len(indices_match)} vezes entre os "
                               f"valores de S observados ({s_values_before!r}) — dado ambíguo, nunca "
                               f"escolhida por posição."}
@@ -485,6 +504,7 @@ def selecionar_inicializacao_por_coordenada(da, rota, ano, mes):
     if valores_pos.size > 1:
         return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_MULTIPLA_APOS_SELECAO,
                 's_values_before': s_values_before, 's_values_after': s_values_after, 'da_selecionado': None,
+                'ds_selecionado': None,
                 'evidencia': f"seleção por coordenada exata ainda devolveu {valores_pos.size} valores "
                               f"de S ({s_values_after!r}) — nunca assume o primeiro como correto."}
 
@@ -492,12 +512,24 @@ def selecionar_inicializacao_por_coordenada(da, rota, ano, mes):
     if periodo_pos != origem:
         return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DIVERGENTE_APOS_SELECAO,
                 's_values_before': s_values_before, 's_values_after': s_values_after, 'da_selecionado': None,
+                'ds_selecionado': None,
                 'evidencia': f"após a seleção por coordenada exata, o valor observado ({periodo_pos}) "
                               f"diverge da origem pedida ({origem})."}
 
+    # Item novo (revisão de acompanhamento) — a MESMA coordenada exata
+    # usada para filtrar `da` é aplicada ao `ds` inteiro, quando
+    # informado, para que qualquer variável auxiliar (ex.: `target`)
+    # também fique restrita à inicialização selecionada antes de
+    # qualquer validação temporal downstream (nunca só `da`/`prec`,
+    # que não inclui variáveis auxiliares como coordenadas próprias).
+    if ds is not None:
+        ds_selecionado = ds.sel({dim_s: valor_alvo}) if dim_s in getattr(ds, 'dims', ()) else ds
+    else:
+        ds_selecionado = None
+
     return {'status': INIT_SELECTION_STATUS_RANGEEDGES_OK,
             's_values_before': s_values_before, 's_values_after': s_values_after,
-            'da_selecionado': da_selecionado,
+            'da_selecionado': da_selecionado, 'ds_selecionado': ds_selecionado,
             'evidencia': f"origem {origem} selecionada por coordenada exata (RANGEEDGES devolveu "
                           f"{len(s_values_before)} valor(es) na janela: {s_values_before!r}; "
                           f"selecionado exclusivamente {s_values_after!r})."}

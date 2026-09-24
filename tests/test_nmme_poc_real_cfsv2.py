@@ -1554,6 +1554,40 @@ class RangeedgesFontePrincipalTestCase(unittest.TestCase):
         self.assertTrue(r['raw_df']['units_original'].notna().all())
         self.assertTrue(r['raw_df']['conversion_applied'].notna().all())
 
+    def test_variavel_auxiliar_de_data_alvo_usa_apenas_a_inicializacao_selecionada(self):
+        """Ajuste pontual (revisão de acompanhamento) — depois da seleção
+        explícita da inicialização, TODA validação temporal posterior
+        precisa operar sobre o dataset já restrito a ela, nunca sobre o
+        `ds` original (que pode ter mais de 1 inicialização na janela
+        RANGEEDGES). Este teste prova isso para o Método A (variável
+        auxiliar de data-alvo, ex.: `target`/`valid_time`), que é uma
+        variável PRÓPRIA do dataset — não uma coordenada de `da`/`prec`
+        — e por isso não seria filtrada só por filtrar `da`.
+
+        Constrói S=[fev, jan] com FEVEREIRO (a inicialização ERRADA) de
+        propósito PRIMEIRO no eixo: se `avaliar_mapeamento_temporal`
+        recebesse o `ds` original sem filtrar, `target.sel(L=...)`
+        ainda teria 2 valores de S e a leitura ingênua do primeiro
+        elemento (`.flat[0]`) pegaria o de fevereiro. Os valores de
+        `target` associados a fevereiro são deliberadamente absurdos
+        (`'1999-12'` fixo, nunca bate com nenhuma hipótese de lead) —
+        se algum vazar, o mapeamento cai para MISMATCH em vez de OK, e
+        o teste pega isso sem depender de coincidência de ordenação."""
+        ds = self._ds_janela(['2005-02-01', '2005-01-01'])
+        targets_fev_errado = np.array(['1999-12'] * 6)
+        targets_jan_certo = np.array(['2005-01', '2005-02', '2005-03', '2005-04', '2005-05', '2005-06'])
+        ds = ds.assign(target=(('S', 'L'), np.stack([targets_fev_errado, targets_jan_certo])))
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=_baixar_ok, abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'], 'PROCESSADO')
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all(),
+                          msg='mapeamento temporal vazou a inicialização de fevereiro/2005 (errada) '
+                              'para a variável auxiliar de data-alvo')
+        self.assertTrue((r['temporal_audit_df']['mapping_confirmation_method']
+                           == nproc.MAPPING_METHOD_TARGET_VARIABLE).all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+
 class _DaFalsaSelecaoMultipla:
     """Dublê mínimo de DataArray — simula o caso adversarial em que a
     contagem por PERÍODO encontra só 1 correspondência, mas a seleção

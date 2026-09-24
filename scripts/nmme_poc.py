@@ -936,7 +936,7 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     # partir de fevereiro de 2005", por exemplo). Reprova explicitamente
     # aqui, nunca segue adiante com uma inicialização ambígua/ausente/
     # divergente (Seção 1/9 — nenhuma aprovação automática).
-    selecao_rangeedges = nproc.selecionar_inicializacao_por_coordenada(da, rota_usada, ano, mes)
+    selecao_rangeedges = nproc.selecionar_inicializacao_por_coordenada(da, rota_usada, ano, mes, ds=ds)
     if selecao_rangeedges['status'] != nproc.INIT_SELECTION_STATUS_RANGEEDGES_OK:
         return {**resultado_base, 'poc_status': f"REPROVADO_INICIALIZACAO_{selecao_rangeedges['status']}",
                 'backend_used': rota_usada.data_backend,
@@ -953,6 +953,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
                 'inicializacao_selecao_evidencia': selecao_rangeedges['evidencia'],
                 'raw_df': pd.DataFrame(), 'temporal_audit_df': pd.DataFrame(), 'checklist': {}}
     da = selecao_rangeedges['da_selecionado']
+    # Revisão de acompanhamento (ajuste pontual pós-#5) — todas as
+    # validações temporais posteriores (`avaliar_mapeamento_temporal`,
+    # inclusive o Método A de variável auxiliar de data-alvo) passam a
+    # usar o Dataset INTEIRO já restrito à mesma inicialização
+    # selecionada acima, nunca o `ds` original (que pode ter mais de 1
+    # inicialização na janela RANGEEDGES). `ds_selecionado` preserva os
+    # atributos de S e L intactos (`.sel()` não os descarta).
+    ds_temporal = selecao_rangeedges['ds_selecionado']
 
     ponto = da.sel({rota_usada.lon_dimension: lon, rota_usada.lat_dimension: lat}, method='nearest')
     selected_lon = float(ponto[rota_usada.lon_dimension].item())
@@ -979,7 +987,7 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     init_axis_size_observed_on_variable = init_selection_status = None
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
-        mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
+        mapeamento = nproc.avaliar_mapeamento_temporal(ds_temporal, lead, init_date, esquema_temporal,
                                                           time_decode_mode=time_decode_mode_usada,
                                                           rota=rota_usada, selecao_init=selecao_init)
         mapping_confirmation_methods.append(mapeamento['mapping_confirmation_method'])
