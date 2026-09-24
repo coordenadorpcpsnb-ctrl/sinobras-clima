@@ -410,6 +410,102 @@ def abrir_dataset_com_fallback_temporal(caminho, abrir_fn, init_dimension='S'):
         return ds_decodificado, nproc.TIME_DECODE_MODE_CF_DATETIME_NORMALIZED_ALIAS, info_calendar
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão pós-execução #3 (risco residual) — a documentação do operador
+# Ingrid VALUE, sozinha, NUNCA prova que o servidor de fato selecionou a
+# inicialização pedida quando S é removido da variável 'prec' (só
+# demonstra que o operador é DESENHADO para fazer isso). Quando
+# `_avaliar_selecao_inicializacao` (nmme_processar.py) devolve
+# UNCONFIRMED_VALUE_UNVERIFIED, esta função faz uma consulta de
+# CONTROLE mínima — mesma rota, mesmo ponto, mesmos leads, origem
+# DIFERENTE da pedida e historicamente disponível — e compara os dados
+# retornados: se vierem IDÊNTICOS aos da consulta original, é evidência
+# objetiva de que o servidor ignora a seleção de S (o mesmo padrão de
+# falha da execução real #3, agora detectado em vez de aceito
+# silenciosamente); se divergirem, é evidência objetiva de que o
+# servidor de fato diferencia por S. Precisa de baixar_fn/abrir_fn (rede
+# real ou dublês injetados nos testes) — por isso vive aqui, fora da
+# função pura de avaliação (nmme_processar._avaliar_selecao_
+# inicializacao), que só inspeciona um Dataset já aberto.
+# ══════════════════════════════════════════════════════════════════════════
+
+def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sistema, ano, mes, lat, lon,
+                                                             leads, baixar_fn, abrir_fn):
+    """Nunca decide `poc_status` sozinha — só devolve um veredito
+    objetivo (verificado/ignorado/inconclusivo) que
+    nmme_processar._avaliar_semantica_forecast_period usa para
+    classificar `init_selection_status`. Inconclusiva (consulta de
+    controle falhou, sem origem de controle dentro do S grid nativo, ou
+    sem valores finitos comparáveis) NUNCA vira confirmação — fica
+    UNCONFIRMED_VALUE_UNVERIFIED (Seção 4)."""
+    import numpy as np
+
+    origens_tentadas = []
+    url_controle = None
+    for ano_controle in (ano - 1, ano + 1):
+        try:
+            url_controle = ndl.montar_url_para_rota(rota, ano_controle, mes, lat, lon, leads[0], leads[-1])
+            break
+        except ValueError:
+            origens_tentadas.append(f'{ano_controle:04d}-{mes:02d}')
+            url_controle = None
+    if url_controle is None:
+        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': '',
+                'result': f'nenhuma origem de controle dentro do S grid nativo desta rota (tentativas: '
+                          f'{origens_tentadas}) — verificação inconclusiva, nunca tratada como '
+                          f'confirmação (Seção 4).'}
+
+    destino_controle = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
+                                            ano_controle, mes, url=url_controle)
+    try:
+        caminho_controle, _ = baixar_fn(url_controle, destino_controle)
+        ds_controle, _, _ = abrir_dataset_com_fallback_temporal(caminho_controle, abrir_fn,
+                                                                    rota.init_dimension)
+    except Exception as e:
+        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                'result': f'consulta de controle falhou ({type(e).__name__}: {e}) — verificação '
+                          f'inconclusiva, nunca tratada como confirmação (Seção 4).'}
+
+    if rota.variable_name not in getattr(ds_controle, 'variables', {}):
+        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                'result': f'variável {rota.variable_name!r} ausente na resposta de controle — '
+                          f'verificação inconclusiva.'}
+
+    try:
+        valores_original = np.asarray(ds_original[rota.variable_name].values, dtype=float)
+        valores_controle = np.asarray(ds_controle[rota.variable_name].values, dtype=float)
+        if valores_original.shape != valores_controle.shape:
+            identicos = False   # formas diferentes já bastam como evidência de resposta distinta
+        else:
+            comparaveis = np.isfinite(valores_original) & np.isfinite(valores_controle)
+            if not comparaveis.any():
+                return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+                        'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                        'result': 'nenhum valor finito comparável entre as duas respostas — '
+                                  'verificação inconclusiva.'}
+            identicos = bool(np.allclose(valores_original[comparaveis], valores_controle[comparaveis]))
+    except Exception as e:
+        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                'result': f'comparação entre as duas respostas falhou ({type(e).__name__}: {e}) — '
+                          f'verificação inconclusiva.'}
+
+    if identicos:
+        return {'status': nproc.INIT_SELECTION_STATUS_FAIL_VALUE_IGNORED,
+                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                'result': f'dados da consulta de controle (origem {ano_controle:04d}-{mes:02d}) são '
+                          f'IDÊNTICOS aos da consulta original (origem {ano:04d}-{mes:02d}) — '
+                          f'evidência objetiva de que o servidor ignorou a seleção de S.'}
+    return {'status': nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED,
+            'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+            'result': f'dados da consulta de controle (origem {ano_controle:04d}-{mes:02d}) DIVERGEM '
+                      f'dos da consulta original (origem {ano:04d}-{mes:02d}) — evidência objetiva de '
+                      f'que o servidor respeita a seleção de S.'}
+
+
 def validar_acesso_dataset_real(ds, rota):
     """Seção 5/6 — validação EMPÍRICA do dataset aberto de verdade
     contra o que a rota documentava: formato utilizável, variável
@@ -667,17 +763,37 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     membros_eixo = (list(ponto[rota_usada.member_dimension].values)
                      if rota_usada.member_dimension in ponto.dims else [0])
 
+    # Seção 3 (revisão pós-execução #3, risco residual) — S não varia
+    # por lead, então a seleção de inicialização (e a eventual consulta
+    # de controle, que acessa a rede) é computada UMA VEZ por execução,
+    # nunca recalculada/reconsultada 6x. Só dispara a consulta de
+    # controle quando a via documental (VALUE) não é, sozinha,
+    # suficiente — nunca promove UNCONFIRMED_VALUE_UNVERIFIED para OK
+    # sem essa verificação (Seção 4).
+    selecao_init = nproc._avaliar_selecao_inicializacao(ds, rota_usada)
+    if (time_decode_mode_usada != nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
+            and selecao_init['init_selection_status']
+            == nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED):
+        verificacao = verificar_selecao_ingrid_value_por_consulta_controle(
+            ds, rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn)
+        selecao_init = {**selecao_init,
+                         'init_selection_status': verificacao['status'],
+                         'init_verification_method': verificacao['method'],
+                         'init_verification_control_url': verificacao['control_url'],
+                         'init_verification_result': verificacao['result']}
+
     raw_linhas, temporal_linhas = [], []
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
     mapping_confirmation_methods = []
     forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
     init_selection_method = init_value_observed_on_variable = None
     init_axis_size_observed_on_variable = init_selection_status = None
+    init_verification_method = init_verification_control_url = init_verification_result = None
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
         mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
                                                           time_decode_mode=time_decode_mode_usada,
-                                                          rota=rota_usada)
+                                                          rota=rota_usada, selecao_init=selecao_init)
         mapping_confirmation_methods.append(mapeamento['mapping_confirmation_method'])
         if forecast_reference_time_observed is None:
             forecast_reference_time_observed = mapeamento['forecast_reference_time_observed']
@@ -693,6 +809,12 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             init_axis_size_observed_on_variable = mapeamento['init_axis_size_observed_on_variable']
         if init_selection_status is None:
             init_selection_status = mapeamento['init_selection_status']
+        if not init_verification_method:
+            init_verification_method = mapeamento['init_verification_method']
+        if not init_verification_control_url:
+            init_verification_control_url = mapeamento['init_verification_control_url']
+        if not init_verification_result:
+            init_verification_result = mapeamento['init_verification_result']
         L_sel = mapeamento['source_L']
         fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
                        if rota_usada.lead_dimension in ponto.dims else ponto)
@@ -726,6 +848,13 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'init_value_observed_on_variable': mapeamento['init_value_observed_on_variable'],
             'init_axis_size_observed_on_variable': mapeamento['init_axis_size_observed_on_variable'],
             'init_selection_status': mapeamento['init_selection_status'],
+            # Seção 5 (revisão pós-execução #3) — método/URL/resultado
+            # da verificação de controle independente (só preenchido
+            # quando S foi removido da variável e a via documental por
+            # si só não bastou).
+            'init_verification_method': mapeamento['init_verification_method'],
+            'init_verification_control_url': mapeamento['init_verification_control_url'],
+            'init_verification_result': mapeamento['init_verification_result'],
             'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
 
     raw_df = pd.DataFrame(raw_linhas)
@@ -841,6 +970,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'init_value_observed_on_variable': init_value_observed_on_variable,
         'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
         'init_selection_status': init_selection_status,
+        # Seção 3/5 (revisão pós-execução #3, risco residual) — método/
+        # URL/resultado da verificação de controle independente que
+        # corrobora ou refuta a documentação do operador Ingrid VALUE
+        # quando S é removido da variável (nunca confirma só pela
+        # documentação — Seção 2/3/4).
+        'init_verification_method': init_verification_method,
+        'init_verification_control_url': init_verification_control_url,
+        'init_verification_result': init_verification_result,
         'mapping_reference': list(rota_usada.mapping_reference),
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
@@ -1065,6 +1202,12 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'init_axis_size_observed_on_variable': r.get('init_axis_size_observed_on_variable',
                                                         'NAO_EXECUTADO_NESTA_TAREFA'),
         'init_selection_status': r.get('init_selection_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        # Seção 3/5 (revisão pós-execução #3, risco residual) — método/
+        # URL/resultado da verificação de controle independente.
+        'init_verification_method': r.get('init_verification_method', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_control_url': r.get('init_verification_control_url',
+                                                  'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_result': r.get('init_verification_result', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'mapping_reference': r.get('mapping_reference', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
@@ -1267,10 +1410,15 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         # init_selection_* (Seção 7, execução real #3): auditoria da
         # seleção de inicialização por lead, lida da coordenada S da
         # variável REAL, nunca do eixo S global do Dataset.
+        # init_verification_* (revisão pós-execução #3, risco residual):
+        # método/URL/resultado da verificação de controle independente
+        # (só preenchido quando S foi removido da variável).
         'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
         'mapping_status', 'evidence', 'mapping_confirmation_method',
         'init_selection_method', 'init_value_requested', 'init_value_observed_on_variable',
-        'init_axis_size_observed_on_variable', 'init_selection_status', 'notes']))
+        'init_axis_size_observed_on_variable', 'init_selection_status',
+        'init_verification_method', 'init_verification_control_url', 'init_verification_result',
+        'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
         # Seção 11 (revisão pós-execução #1) — colunas de auditoria por
         # rota/tentativa: cache_path/cache_hit reais, download_status

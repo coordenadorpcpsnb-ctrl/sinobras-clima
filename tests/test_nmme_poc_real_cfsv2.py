@@ -459,12 +459,16 @@ class TemporalAuditTestCase(unittest.TestCase):
         # mapping_confirmation_method (Seção 5, execução real #2) — qual
         # dos dois métodos confirmou (ou não) cada lead. init_selection_*
         # (Seção 7, execução real #3) — auditoria da seleção de
-        # inicialização por lead.
+        # inicialização por lead. init_verification_* (revisão pós-
+        # execução #3, risco residual) — método/URL/resultado da
+        # verificação de controle independente.
         colunas_esperadas = {'centre', 'model_name', 'init_date', 'H_lead', 'source_L',
                               'target_month', 'mapping_status', 'evidence',
                               'mapping_confirmation_method', 'init_selection_method',
                               'init_value_requested', 'init_value_observed_on_variable',
-                              'init_axis_size_observed_on_variable', 'init_selection_status', 'notes'}
+                              'init_axis_size_observed_on_variable', 'init_selection_status',
+                              'init_verification_method', 'init_verification_control_url',
+                              'init_verification_result', 'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
     def test_k_uma_linha_por_lead(self):
@@ -1116,17 +1120,24 @@ class SelecaoInicializacaoTestCase(unittest.TestCase):
                                                           rota=_rota_metodo_b())
         self.assertEqual(r_completo['mapping_status'], 'MISMATCH')
 
-    def test_8_value_documentado_confirma_quando_s_ausente(self):
+    def test_8_documentacao_sozinha_nao_confirma_fica_unconfirmed_ate_verificacao(self):
+        """Revisão pós-execução #3 (risco residual) — a documentação do
+        operador Ingrid VALUE, ISOLADAMENTE, não prova que o servidor
+        selecionou a inicialização pedida; fica UNCONFIRMED_VALUE_
+        UNVERIFIED (nunca OK) até uma verificação de controle
+        independente confirmar (Seção 2/3/4 — testada ponta a ponta em
+        VerificacaoControleValueTestCase)."""
         import dataclasses
         ds = _ds_selecao_s(modo='ausente')
         rota_documentada = dataclasses.replace(_rota_metodo_b(),
                                                   ingrid_value_init_selection_documented=True)
         r = nproc._avaliar_selecao_inicializacao(ds, rota_documentada)
-        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE)
-        self.assertEqual(r['init_selection_method'], nproc.INIT_SELECTION_METHOD_INGRID_VALUE)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_selection_method'],
+                          nproc.INIT_SELECTION_METHOD_REQUEST_CONFIRMED_SELECTION)
         r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
                                                           rota=rota_documentada)
-        self.assertEqual(r_completo['mapping_status'], 'OK')
+        self.assertEqual(r_completo['mapping_status'], 'UNCONFIRMED')
 
     def test_8b_sem_documentacao_s_ausente_fica_unconfirmed(self):
         """A mesma ausência de S, mas SEM
@@ -1192,6 +1203,104 @@ class Execucao3ReproducaoTestCase(unittest.TestCase):
         _executar(abrir_fn=lambda c: ds, baixar_fn=baixar_registra)
         self.assertTrue(any('S/(Jan%202005)/VALUE/' in u for u in chamadas))
         self.assertFalse(any('01%202005' in u for u in chamadas))
+
+
+def _ds_execucao3_sem_s(valor_base=0.5, escala=3.0, semente=61, n_membros=24):
+    """Dataset sintético equivalente a `_ds_execucao3`, mas com S
+    REMOVIDO de 'prec' (Ingrid VALUE eliminou a dimensão) — S continua
+    presente no Dataset como um todo (variável decoy, dimensão própria,
+    nunca compartilhada com 'prec') só para satisfazer o check de
+    dimensões de `validar_acesso_dataset_real` (Seção 5/6), exatamente
+    como um NetCDF real poderia preservar um artefato vestigial de S em
+    outra variável enquanto 'prec' já foi recortado. Usado pelos testes
+    de verificação de controle (revisão pós-execução #3, risco
+    residual) — nunca cai para esse S decoy como substituto (é isso
+    que a correção anterior já garante, lendo de `da.coords`)."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros})
+    prec.attrs['units'] = 'mm/day'
+    decoy_com_s = xr.DataArray([1.0], dims=('S',),
+                                 coords={'S': [pd.Timestamp('2005-01-01')]})
+    return xr.Dataset({'prec': prec, 'decoy_com_s_vestigial': decoy_com_s})
+
+
+class VerificacaoControleValueTestCase(unittest.TestCase):
+    """Revisão pós-execução #3 (risco residual) — a documentação do
+    operador Ingrid VALUE, isoladamente, não prova que o servidor
+    selecionou a inicialização pedida quando S é removido de 'prec'.
+    Testa as 3 regressões pedidas: seleção correta (a consulta de
+    controle confirma), seleção ignorada (a consulta de controle
+    detecta) e verificação inconclusiva (nunca vira confirmação por
+    omissão)."""
+
+    @staticmethod
+    def _duplas_baixar_abrir(ds_primaria, ds_controle=None, controle_levanta=None):
+        def baixar_fn(url, destino):
+            return (url, False)   # usa a própria URL como "caminho" p/ desambiguar no abrir_fn
+
+        def abrir_fn(caminho, **kwargs):
+            if 'Jan%202005' in caminho:
+                return ds_primaria
+            if controle_levanta is not None:
+                raise controle_levanta
+            return ds_controle
+
+        return baixar_fn, abrir_fn
+
+    def test_selecao_correta_verificacao_confirma_e_aprova(self):
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)   # valores DIFERENTES -> servidor respeita S
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        self.assertEqual(r['init_verification_method'], 'INGRID_VALUE_CONTROL_QUERY')
+        self.assertTrue(r['init_verification_control_url'])
+        self.assertIn('DIVERGEM', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_selecao_ignorada_verificacao_detecta_e_nunca_aprova(self):
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=61)   # MESMOS valores -> servidor ignorou S
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_FAIL_VALUE_IGNORED)
+        self.assertIn('IDÊNTICOS', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_verificacao_inconclusiva_fica_unconfirmed_nunca_aprova(self):
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(
+            ds_primaria, controle_levanta=OSError('controle indisponível (simulado)'))
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertIn('inconclusiva', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_verificacao_registra_metodo_url_resultado_no_temporal_audit(self):
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        linha = r['temporal_audit_df'].iloc[0]
+        self.assertEqual(linha['init_verification_method'], 'INGRID_VALUE_CONTROL_QUERY')
+        self.assertTrue(linha['init_verification_control_url'])
+        self.assertTrue(linha['init_verification_result'])
 
 
 if __name__ == '__main__':
