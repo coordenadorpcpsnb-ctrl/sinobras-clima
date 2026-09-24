@@ -411,33 +411,140 @@ def abrir_dataset_com_fallback_temporal(caminho, abrir_fn, init_dimension='S'):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Revisão pós-execução #3 (risco residual) — a documentação do operador
-# Ingrid VALUE, sozinha, NUNCA prova que o servidor de fato selecionou a
-# inicialização pedida quando S é removido da variável 'prec' (só
-# demonstra que o operador é DESENHADO para fazer isso). Quando
-# `_avaliar_selecao_inicializacao` (nmme_processar.py) devolve
-# UNCONFIRMED_VALUE_UNVERIFIED, esta função faz uma consulta de
-# CONTROLE mínima — mesma rota, mesmo ponto, mesmos leads, origem
-# DIFERENTE da pedida e historicamente disponível — e compara os dados
-# retornados: se vierem IDÊNTICOS aos da consulta original, é evidência
-# objetiva de que o servidor ignora a seleção de S (o mesmo padrão de
-# falha da execução real #3, agora detectado em vez de aceito
-# silenciosamente); se divergirem, é evidência objetiva de que o
-# servidor de fato diferencia por S. Precisa de baixar_fn/abrir_fn (rede
-# real ou dublês injetados nos testes) — por isso vive aqui, fora da
-# função pura de avaliação (nmme_processar._avaliar_selecao_
-# inicializacao), que só inspeciona um Dataset já aberto.
+# Revisão pós-execução #3, correção 2 (risco residual + correção da
+# revisão) — desenho em DUAS camadas, nenhuma delas isolada basta para
+# `INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED`:
+#
+# 1) CONFIRMAÇÃO DIRETA (`tentar_confirmar_origem_diretamente`) — tenta
+#    reobter a MESMA origem pedida com S/(mes ano)/(mes ano)/RANGEEDGES
+#    em vez de S/(mes ano)/VALUE (nmme_download._clausula_selecao_s);
+#    RANGEEDGES, diferente de VALUE, documentadamente preserva a
+#    dimensão como uma faixa em vez de removê-la — com os dois limites
+#    idênticos, a faixa colapsa a 1 ponto de grade SEM remover S. Se a
+#    coordenada S sobreviver (scalar ou singleton-dim), a origem foi
+#    confirmada pela COORDENADA OBSERVADA na resposta, nunca pela URL
+#    solicitada (`VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED` — o
+#    único outcome que pode virar OK_INGRID_VALUE_VERIFIED). Se
+#    RANGEEDGES também eliminar S, tenta um metadado confiável
+#    (`_buscar_metadado_confiavel_de_inicializacao` — nesta
+#    investigação, nenhuma evidência de que o IRIDL emite um atributo
+#    assim foi encontrada; placeholder honesto, devolve None).
+#
+# 2) DIAGNÓSTICO DE COMPARAÇÃO (`verificar_selecao_ingrid_value_por_
+#    consulta_controle`, preservado por instrução explícita — Seção 3
+#    da correção) — consulta de controle com origem DIFERENTE da
+#    pedida e compara os valores retornados. Reclassificado nesta
+#    correção: "formatos diferentes não comprovam seleção correta;
+#    valores divergentes comprovam só que as respostas diferem, não que
+#    correspondem exatamente às inicializações pedidas; valores
+#    idênticos são um alerta, não prova definitiva" (Seção 1 da
+#    correção). Por isso NUNCA devolve um outcome que sozinho vire
+#    OK_INGRID_VALUE_VERIFIED nem force MISMATCH — só um dos 3
+#    diagnósticos objetivos (DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
+#    IDENTICAL_RESPONSES_SUSPECT, INCOMPARABLE_RESPONSES), sempre
+#    complementar à confirmação direta (item 3, nunca decisivo
+#    isoladamente).
+#
+# Ambas precisam de baixar_fn/abrir_fn (rede real ou dublês injetados
+# nos testes) — por isso vivem aqui, fora da função pura de avaliação
+# (nmme_processar._avaliar_selecao_inicializacao), que só inspeciona um
+# Dataset já aberto.
 # ══════════════════════════════════════════════════════════════════════════
+
+def _buscar_metadado_confiavel_de_inicializacao(ds, rota, ano, mes):
+    """Item 2 (correção, fallback) — procura, nos atributos do dataset/
+    variável, um metadado que identifique EXPLICITAMENTE a
+    inicialização selecionada, para o caso em que RANGEEDGES também
+    eliminar a dimensão S. Nunca inventa nome de atributo: só
+    reconheceria uma convenção CF/Ingrid já documentada para esse fim.
+    Nenhuma evidência de que o IRIDL de fato emite um atributo assim
+    foi encontrada nesta investigação (sem acesso de rede real nesta
+    tarefa) — placeholder honesto, devolve None na ausência de
+    evidência, nunca assume um nome plausível."""
+    return None
+
+
+def tentar_confirmar_origem_diretamente(rota, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn):
+    """Item 2 (correção pós-execução #3) — única via que pode produzir
+    `VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED`. Reusa
+    `nmme_processar._avaliar_selecao_inicializacao` sobre a resposta
+    RANGEEDGES (mesma função que já classifica scalar/singleton/
+    multiple/ausente para a consulta VALUE original) em vez de duplicar
+    essa lógica de detecção."""
+    try:
+        url_direta = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1],
+                                                 preservar_dimensao_s=True)
+    except ValueError as e:
+        return {'outcome': 'NAO_TENTADO', 'method': 'NONE', 'url': '',
+                's_observed': None, 's_count': 0,
+                'result': f'não foi possível montar a URL de confirmação direta (RANGEEDGES): {e}'}
+
+    destino_direto = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
+                                          ano, mes, url=url_direta)
+    try:
+        caminho_direto, _ = baixar_fn(url_direta, destino_direto)
+        ds_direto, _, _ = abrir_dataset_com_fallback_temporal(caminho_direto, abrir_fn, rota.init_dimension)
+    except Exception as e:
+        return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+                's_observed': None, 's_count': 0,
+                'result': f'consulta de confirmação direta (RANGEEDGES) falhou ({type(e).__name__}: {e}) '
+                          f'— origem não pôde ser confirmada diretamente.'}
+
+    if rota.variable_name not in getattr(ds_direto, 'variables', {}):
+        return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+                's_observed': None, 's_count': 0,
+                'result': f'variável {rota.variable_name!r} ausente na resposta de confirmação direta — '
+                          f'origem não pôde ser confirmada diretamente.'}
+
+    selecao_direta = nproc._avaliar_selecao_inicializacao(ds_direto, rota)
+    s_count = selecao_direta['init_axis_size_observed_on_variable']
+    s_observado = selecao_direta['init_value_observed_on_variable']
+    status_direto = selecao_direta['init_selection_status']
+
+    if status_direto in (nproc.INIT_SELECTION_STATUS_OK_SCALAR, nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM):
+        return {'outcome': nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED,
+                'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+                's_observed': s_observado, 's_count': s_count,
+                'result': f'S/(mes ano)/(mes ano)/RANGEEDGES preservou a dimensão S com valor '
+                          f'{s_observado!r} (1 inicialização) — origem confirmada diretamente pela '
+                          f'coordenada observada na resposta, não pela URL solicitada (Seção 2).'}
+
+    if status_direto == nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE:
+        return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+                's_observed': s_observado, 's_count': s_count,
+                'result': f'RANGEEDGES devolveu {s_count} inicializações associadas à variável '
+                          f'(esperado 1) — confirmação direta inconclusiva.'}
+
+    # S ainda ausente da variável mesmo com RANGEEDGES — item 2, fallback
+    # de metadado confiável, antes de desistir da confirmação direta.
+    metadado = _buscar_metadado_confiavel_de_inicializacao(ds_direto, rota, ano, mes)
+    if metadado is not None:
+        return {'outcome': nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED,
+                'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
+                's_observed': metadado, 's_count': 1,
+                'result': f'S ausente da variável mesmo com RANGEEDGES, mas um atributo de metadado '
+                          f'confiável identifica explicitamente a inicialização selecionada '
+                          f'({metadado!r}).'}
+    return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+            's_observed': None, 's_count': s_count,
+            'result': 'RANGEEDGES não preservou a dimensão S e nenhum metadado confiável identifica '
+                      'explicitamente a inicialização selecionada — confirmação direta não foi '
+                      'possível (Seção 2).'}
+
 
 def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sistema, ano, mes, lat, lon,
                                                              leads, baixar_fn, abrir_fn):
-    """Nunca decide `poc_status` sozinha — só devolve um veredito
-    objetivo (verificado/ignorado/inconclusivo) que
-    nmme_processar._avaliar_semantica_forecast_period usa para
-    classificar `init_selection_status`. Inconclusiva (consulta de
-    controle falhou, sem origem de controle dentro do S grid nativo, ou
-    sem valores finitos comparáveis) NUNCA vira confirmação — fica
-    UNCONFIRMED_VALUE_UNVERIFIED (Seção 4)."""
+    """Item 1/3 (correção) — NUNCA decide `poc_status` nem
+    `init_selection_status` sozinha; devolve só um dos 3 diagnósticos
+    objetivos abaixo, sempre complementar à confirmação DIRETA
+    (`tentar_confirmar_origem_diretamente`). "Formatos diferentes não
+    comprovam seleção correta; valores divergentes comprovam só que as
+    respostas diferem; valores idênticos são um alerta, não prova
+    definitiva" (Seção 1 da correção) — por isso os outcomes possíveis
+    são só DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
+    IDENTICAL_RESPONSES_SUSPECT e INCOMPARABLE_RESPONSES; nunca
+    EXACT_ORIGIN_CONFIRMED (essa só vem da confirmação direta) nem um
+    veredito de reprovação definitiva."""
     import numpy as np
 
     origens_tentadas = []
@@ -450,11 +557,11 @@ def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sist
             origens_tentadas.append(f'{ano_controle:04d}-{mes:02d}')
             url_controle = None
     if url_controle is None:
-        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
                 'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': '',
                 'result': f'nenhuma origem de controle dentro do S grid nativo desta rota (tentativas: '
-                          f'{origens_tentadas}) — verificação inconclusiva, nunca tratada como '
-                          f'confirmação (Seção 4).'}
+                          f'{origens_tentadas}) — diagnóstico de comparação incomparável, nunca tratado '
+                          f'como confirmação ou contradição (Seção 1/4).'}
 
     destino_controle = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
                                             ano_controle, mes, url=url_controle)
@@ -463,47 +570,57 @@ def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sist
         ds_controle, _, _ = abrir_dataset_com_fallback_temporal(caminho_controle, abrir_fn,
                                                                     rota.init_dimension)
     except Exception as e:
-        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
                 'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                'result': f'consulta de controle falhou ({type(e).__name__}: {e}) — verificação '
-                          f'inconclusiva, nunca tratada como confirmação (Seção 4).'}
+                'result': f'consulta de controle falhou ({type(e).__name__}: {e}) — diagnóstico de '
+                          f'comparação incomparável, nunca tratado como confirmação (Seção 1/4).'}
 
     if rota.variable_name not in getattr(ds_controle, 'variables', {}):
-        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
                 'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
                 'result': f'variável {rota.variable_name!r} ausente na resposta de controle — '
-                          f'verificação inconclusiva.'}
+                          f'diagnóstico de comparação incomparável.'}
 
     try:
         valores_original = np.asarray(ds_original[rota.variable_name].values, dtype=float)
         valores_controle = np.asarray(ds_controle[rota.variable_name].values, dtype=float)
         if valores_original.shape != valores_controle.shape:
-            identicos = False   # formas diferentes já bastam como evidência de resposta distinta
-        else:
-            comparaveis = np.isfinite(valores_original) & np.isfinite(valores_controle)
-            if not comparaveis.any():
-                return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
-                        'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                        'result': 'nenhum valor finito comparável entre as duas respostas — '
-                                  'verificação inconclusiva.'}
-            identicos = bool(np.allclose(valores_original[comparaveis], valores_controle[comparaveis]))
+            # Item 1 da correção — formatos diferentes NÃO comprovam
+            # seleção correta por si só; é só mais um sinal de resposta
+            # distinta, tratado igual a "valores divergentes" abaixo,
+            # nunca promovido a confirmação.
+            return {'outcome': nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
+                    'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                    'result': f'formato da resposta de controle ({valores_controle.shape}) difere do '
+                              f'formato da resposta original ({valores_original.shape}) — as respostas '
+                              f'diferem, mas isso NÃO comprova, isoladamente, que a original corresponde '
+                              f'exatamente à inicialização pedida (Seção 1).'}
+        comparaveis = np.isfinite(valores_original) & np.isfinite(valores_controle)
+        if not comparaveis.any():
+            return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
+                    'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
+                    'result': 'nenhum valor finito comparável entre as duas respostas — diagnóstico de '
+                              'comparação incomparável.'}
+        identicos = bool(np.allclose(valores_original[comparaveis], valores_controle[comparaveis]))
     except Exception as e:
-        return {'status': nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
                 'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
                 'result': f'comparação entre as duas respostas falhou ({type(e).__name__}: {e}) — '
-                          f'verificação inconclusiva.'}
+                          f'diagnóstico de comparação incomparável.'}
 
     if identicos:
-        return {'status': nproc.INIT_SELECTION_STATUS_FAIL_VALUE_IGNORED,
+        return {'outcome': nproc.VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT,
                 'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
                 'result': f'dados da consulta de controle (origem {ano_controle:04d}-{mes:02d}) são '
-                          f'IDÊNTICOS aos da consulta original (origem {ano:04d}-{mes:02d}) — '
-                          f'evidência objetiva de que o servidor ignorou a seleção de S.'}
-    return {'status': nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED,
+                          f'IDÊNTICOS aos da consulta original (origem {ano:04d}-{mes:02d}) — alerta '
+                          f'de que o servidor pode estar ignorando a seleção de S, mas isso sozinho NÃO '
+                          f'é prova definitiva (Seção 1); só a confirmação direta decide.'}
+    return {'outcome': nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
             'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
             'result': f'dados da consulta de controle (origem {ano_controle:04d}-{mes:02d}) DIVERGEM '
-                      f'dos da consulta original (origem {ano:04d}-{mes:02d}) — evidência objetiva de '
-                      f'que o servidor respeita a seleção de S.'}
+                      f'dos da consulta original (origem {ano:04d}-{mes:02d}) — comprova só que as '
+                      f'respostas diferem, NÃO que a original corresponde exatamente à inicialização '
+                      f'pedida (Seção 1); só a confirmação direta decide.'}
 
 
 def validar_acesso_dataset_real(ds, rota):
@@ -774,13 +891,33 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     if (time_decode_mode_usada != nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
             and selecao_init['init_selection_status']
             == nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED):
-        verificacao = verificar_selecao_ingrid_value_por_consulta_controle(
+        # Seção 3 (revisão pós-execução #3, correção 2) — duas camadas,
+        # sempre as duas: a confirmação DIRETA (item 2) é a única que
+        # pode promover o status para OK_INGRID_VALUE_VERIFIED; o
+        # diagnóstico de comparação (item 3) continua rodando como
+        # complementar, mas nunca decide isoladamente (item 1/3 — nem
+        # para aprovar, nem para reprovar).
+        direta = tentar_confirmar_origem_diretamente(
+            rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn)
+        diagnostico = verificar_selecao_ingrid_value_por_consulta_controle(
             ds, rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn)
+        exact_ok = direta['outcome'] == nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED
+        status_final = (nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED if exact_ok
+                         else nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        metodo_final = direta['method'] if (exact_ok or direta['method'] != 'NONE') else diagnostico['method']
+        resultado_texto = (
+            f"Confirmação direta (RANGEEDGES/metadado — item 2): {direta['result']} | Diagnóstico de "
+            f"comparação (item 3, complementar, nunca decisivo isoladamente): {diagnostico['result']}")
         selecao_init = {**selecao_init,
-                         'init_selection_status': verificacao['status'],
-                         'init_verification_method': verificacao['method'],
-                         'init_verification_control_url': verificacao['control_url'],
-                         'init_verification_result': verificacao['result']}
+                         'init_selection_status': status_final,
+                         'init_verification_method': metodo_final,
+                         'init_verification_control_url': diagnostico['control_url'],
+                         'init_verification_result': resultado_texto,
+                         'init_verification_direct_url': direta['url'],
+                         'init_verification_s_observed': direta['s_observed'],
+                         'init_verification_s_count': direta['s_count'],
+                         'init_verification_comparison_outcome': diagnostico['outcome'],
+                         'init_verification_exact_outcome': direta['outcome']}
 
     raw_linhas, temporal_linhas = [], []
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
@@ -789,6 +926,9 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     init_selection_method = init_value_observed_on_variable = None
     init_axis_size_observed_on_variable = init_selection_status = None
     init_verification_method = init_verification_control_url = init_verification_result = None
+    init_verification_direct_url = None
+    init_verification_s_observed = init_verification_s_count = None
+    init_verification_comparison_outcome = init_verification_exact_outcome = None
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
         mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
@@ -815,6 +955,16 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             init_verification_control_url = mapeamento['init_verification_control_url']
         if not init_verification_result:
             init_verification_result = mapeamento['init_verification_result']
+        if not init_verification_direct_url:
+            init_verification_direct_url = mapeamento['init_verification_direct_url']
+        if init_verification_s_observed is None:
+            init_verification_s_observed = mapeamento['init_verification_s_observed']
+        if init_verification_s_count is None:
+            init_verification_s_count = mapeamento['init_verification_s_count']
+        if not init_verification_comparison_outcome:
+            init_verification_comparison_outcome = mapeamento['init_verification_comparison_outcome']
+        if not init_verification_exact_outcome:
+            init_verification_exact_outcome = mapeamento['init_verification_exact_outcome']
         L_sel = mapeamento['source_L']
         fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
                        if rota_usada.lead_dimension in ponto.dims else ponto)
@@ -848,13 +998,21 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'init_value_observed_on_variable': mapeamento['init_value_observed_on_variable'],
             'init_axis_size_observed_on_variable': mapeamento['init_axis_size_observed_on_variable'],
             'init_selection_status': mapeamento['init_selection_status'],
-            # Seção 5 (revisão pós-execução #3) — método/URL/resultado
-            # da verificação de controle independente (só preenchido
-            # quando S foi removido da variável e a via documental por
-            # si só não bastou).
+            # Seção 5 (revisão pós-execução #3, correção 2/item 4) —
+            # método/URL/resultado da verificação de controle
+            # independente (só preenchido quando S foi removido da
+            # variável e a via documental por si só não bastou), mais
+            # os campos que distinguem a confirmação DIRETA
+            # (RANGEEDGES/metadado — item 2) do diagnóstico de
+            # comparação (item 1/3, nunca decisivo isoladamente).
             'init_verification_method': mapeamento['init_verification_method'],
             'init_verification_control_url': mapeamento['init_verification_control_url'],
             'init_verification_result': mapeamento['init_verification_result'],
+            'init_verification_direct_url': mapeamento['init_verification_direct_url'],
+            'init_verification_s_observed': mapeamento['init_verification_s_observed'],
+            'init_verification_s_count': mapeamento['init_verification_s_count'],
+            'init_verification_comparison_outcome': mapeamento['init_verification_comparison_outcome'],
+            'init_verification_exact_outcome': mapeamento['init_verification_exact_outcome'],
             'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
 
     raw_df = pd.DataFrame(raw_linhas)
@@ -970,14 +1128,24 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'init_value_observed_on_variable': init_value_observed_on_variable,
         'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
         'init_selection_status': init_selection_status,
-        # Seção 3/5 (revisão pós-execução #3, risco residual) — método/
-        # URL/resultado da verificação de controle independente que
-        # corrobora ou refuta a documentação do operador Ingrid VALUE
-        # quando S é removido da variável (nunca confirma só pela
-        # documentação — Seção 2/3/4).
+        # Seção 3/5 (revisão pós-execução #3, correção 2/item 4) —
+        # método/URL/resultado da verificação de controle independente
+        # que corrobora ou refuta a documentação do operador Ingrid
+        # VALUE quando S é removido da variável (nunca confirma só pela
+        # documentação — Seção 2/3/4). init_verification_direct_url/
+        # _s_observed/_s_count/_comparison_outcome/_exact_outcome
+        # distinguem a confirmação DIRETA (RANGEEDGES/metadado, item 2
+        # — única via que pode confirmar empiricamente a origem) do
+        # diagnóstico de comparação (item 1/3, sempre complementar,
+        # nunca decisivo isoladamente).
         'init_verification_method': init_verification_method,
         'init_verification_control_url': init_verification_control_url,
         'init_verification_result': init_verification_result,
+        'init_verification_direct_url': init_verification_direct_url,
+        'init_verification_s_observed': init_verification_s_observed,
+        'init_verification_s_count': init_verification_s_count,
+        'init_verification_comparison_outcome': init_verification_comparison_outcome,
+        'init_verification_exact_outcome': init_verification_exact_outcome,
         'mapping_reference': list(rota_usada.mapping_reference),
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
@@ -1202,12 +1370,22 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'init_axis_size_observed_on_variable': r.get('init_axis_size_observed_on_variable',
                                                         'NAO_EXECUTADO_NESTA_TAREFA'),
         'init_selection_status': r.get('init_selection_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        # Seção 3/5 (revisão pós-execução #3, risco residual) — método/
-        # URL/resultado da verificação de controle independente.
+        # Seção 3/5 (revisão pós-execução #3, correção 2/item 4) —
+        # método/URL/resultado da verificação de controle independente,
+        # mais os campos que distinguem a confirmação DIRETA
+        # (RANGEEDGES/metadado) do diagnóstico de comparação
+        # (complementar, nunca decisivo isoladamente).
         'init_verification_method': r.get('init_verification_method', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'init_verification_control_url': r.get('init_verification_control_url',
                                                   'NAO_EXECUTADO_NESTA_TAREFA'),
         'init_verification_result': r.get('init_verification_result', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_direct_url': r.get('init_verification_direct_url', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_s_observed': r.get('init_verification_s_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_s_count': r.get('init_verification_s_count', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_comparison_outcome': r.get('init_verification_comparison_outcome',
+                                                          'NAO_EXECUTADO_NESTA_TAREFA'),
+        'init_verification_exact_outcome': r.get('init_verification_exact_outcome',
+                                                     'NAO_EXECUTADO_NESTA_TAREFA'),
         'mapping_reference': r.get('mapping_reference', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
@@ -1410,14 +1588,20 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         # init_selection_* (Seção 7, execução real #3): auditoria da
         # seleção de inicialização por lead, lida da coordenada S da
         # variável REAL, nunca do eixo S global do Dataset.
-        # init_verification_* (revisão pós-execução #3, risco residual):
-        # método/URL/resultado da verificação de controle independente
-        # (só preenchido quando S foi removido da variável).
+        # init_verification_* (revisão pós-execução #3, correção 2/item
+        # 4): método/URL/resultado da verificação de controle
+        # independente (só preenchido quando S foi removido da
+        # variável), com os campos que distinguem a confirmação DIRETA
+        # (RANGEEDGES/metadado — única via que pode confirmar
+        # empiricamente a origem) do diagnóstico de comparação
+        # (complementar, nunca decisivo isoladamente).
         'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
         'mapping_status', 'evidence', 'mapping_confirmation_method',
         'init_selection_method', 'init_value_requested', 'init_value_observed_on_variable',
         'init_axis_size_observed_on_variable', 'init_selection_status',
         'init_verification_method', 'init_verification_control_url', 'init_verification_result',
+        'init_verification_direct_url', 'init_verification_s_observed', 'init_verification_s_count',
+        'init_verification_comparison_outcome', 'init_verification_exact_outcome',
         'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
         # Seção 11 (revisão pós-execução #1) — colunas de auditoria por

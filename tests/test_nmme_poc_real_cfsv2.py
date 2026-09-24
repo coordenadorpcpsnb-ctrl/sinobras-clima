@@ -460,15 +460,21 @@ class TemporalAuditTestCase(unittest.TestCase):
         # dos dois métodos confirmou (ou não) cada lead. init_selection_*
         # (Seção 7, execução real #3) — auditoria da seleção de
         # inicialização por lead. init_verification_* (revisão pós-
-        # execução #3, risco residual) — método/URL/resultado da
-        # verificação de controle independente.
+        # execução #3, correção 2/item 4) — método/URL/resultado da
+        # verificação de controle independente, mais os campos que
+        # distinguem a confirmação DIRETA (RANGEEDGES/metadado) do
+        # diagnóstico de comparação (complementar, nunca decisivo
+        # isoladamente).
         colunas_esperadas = {'centre', 'model_name', 'init_date', 'H_lead', 'source_L',
                               'target_month', 'mapping_status', 'evidence',
                               'mapping_confirmation_method', 'init_selection_method',
                               'init_value_requested', 'init_value_observed_on_variable',
                               'init_axis_size_observed_on_variable', 'init_selection_status',
                               'init_verification_method', 'init_verification_control_url',
-                              'init_verification_result', 'notes'}
+                              'init_verification_result', 'init_verification_direct_url',
+                              'init_verification_s_observed', 'init_verification_s_count',
+                              'init_verification_comparison_outcome', 'init_verification_exact_outcome',
+                              'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
     def test_k_uma_linha_por_lead(self):
@@ -1233,22 +1239,64 @@ def _ds_execucao3_sem_s(valor_base=0.5, escala=3.0, semente=61, n_membros=24):
     return xr.Dataset({'prec': prec, 'decoy_com_s_vestigial': decoy_com_s})
 
 
+def _ds_com_s_scalar_confirmado(valor_base=0.5, escala=3.0, semente=61, n_membros=24,
+                                   s_valor='2005-01-01'):
+    """Variante de `_ds_execucao3_sem_s` com S SCALAR associado a
+    'prec' — usada como resposta da tentativa de confirmação DIRETA
+    (S/(Jan 2005)/(Jan 2005)/RANGEEDGES) quando ela tem sucesso em
+    preservar a dimensão S (Seção 2 da correção pós-execução #3)."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_S = xr.DataArray(pd.Timestamp(s_valor), attrs={'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+    prec.attrs['units'] = 'mm/day'
+    return xr.Dataset({'prec': prec})
+
+
 class VerificacaoControleValueTestCase(unittest.TestCase):
-    """Revisão pós-execução #3 (risco residual) — a documentação do
-    operador Ingrid VALUE, isoladamente, não prova que o servidor
-    selecionou a inicialização pedida quando S é removido de 'prec'.
-    Testa as 3 regressões pedidas: seleção correta (a consulta de
-    controle confirma), seleção ignorada (a consulta de controle
-    detecta) e verificação inconclusiva (nunca vira confirmação por
-    omissão)."""
+    """Revisão pós-execução #3, correção 2 (a revisão identificou dois
+    problemas na consulta de controle — corrigidos aqui). Desenho em
+    duas camadas:
+
+    - `tentar_confirmar_origem_diretamente` (item 2) — S/(Jan 2005)/
+      (Jan 2005)/RANGEEDGES tenta preservar a coordenada S; só um
+      sucesso aqui (EXACT_ORIGIN_CONFIRMED) pode promover
+      `init_selection_status` para OK_INGRID_VALUE_VERIFIED.
+    - `verificar_selecao_ingrid_value_por_consulta_controle` (item 1/3)
+      — diagnóstico de comparação com uma origem diferente, SEMPRE
+      complementar, NUNCA decisivo isoladamente: formatos diferentes,
+      valores divergentes e valores idênticos são todos tratados como
+      evidência insuficiente por si só (testado explicitamente abaixo).
+
+    Dispatch de 3 variantes de URL no dublê de rede: a URL de
+    confirmação direta contém a cláusula S/(Jan%202005)/(Jan%202005)/
+    RANGEEDGES (dois limites IGUAIS à origem pedida — diferente da
+    cláusula L, que também usa RANGEEDGES mas com limites de lead,
+    nunca (Jan 2005)/(Jan 2005)); a URL primária contém S/(Jan%202005)/
+    VALUE; qualquer outra é a consulta de controle (origem diferente)."""
 
     @staticmethod
-    def _duplas_baixar_abrir(ds_primaria, ds_controle=None, controle_levanta=None):
+    def _duplas_baixar_abrir(ds_primaria, ds_direta=None, ds_controle=None,
+                                direta_levanta=None, controle_levanta=None):
         def baixar_fn(url, destino):
             return (url, False)   # usa a própria URL como "caminho" p/ desambiguar no abrir_fn
 
         def abrir_fn(caminho, **kwargs):
-            if 'Jan%202005' in caminho:
+            if 'S/(Jan%202005)/(Jan%202005)/RANGEEDGES' in caminho:
+                if direta_levanta is not None:
+                    raise direta_levanta
+                if ds_direta is None:
+                    raise OSError('confirmação direta não configurada neste dublê de teste')
+                return ds_direta
+            if 'S/(Jan%202005)/VALUE' in caminho:
                 return ds_primaria
             if controle_levanta is not None:
                 raise controle_levanta
@@ -1256,50 +1304,141 @@ class VerificacaoControleValueTestCase(unittest.TestCase):
 
         return baixar_fn, abrir_fn
 
-    def test_selecao_correta_verificacao_confirma_e_aprova(self):
+    def test_confirmacao_direta_rangeedges_confirma_e_aprova(self):
+        """Único caminho que pode chegar a OK_INGRID_VALUE_VERIFIED/
+        APROVADO — RANGEEDGES preservou S como scalar == origem pedida
+        (item 2). O diagnóstico de comparação roda junto (item 3,
+        preservado) mas não é o que decide aqui."""
         ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=62)   # valores DIFERENTES -> servidor respeita S
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
         r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
         self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
-        self.assertEqual(r['init_verification_method'], 'INGRID_VALUE_CONTROL_QUERY')
-        self.assertTrue(r['init_verification_control_url'])
-        self.assertIn('DIVERGEM', r['init_verification_result'])
+        self.assertEqual(r['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertEqual(r['init_verification_method'], 'INGRID_S_SINGLETON_RANGEEDGES')
+        self.assertTrue(r['init_verification_direct_url'])
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')
+        self.assertEqual(r['init_verification_s_count'], 1)
         self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
         aprovacao = npoc.avaliar_aprovacao_poc(r)
         self.assertEqual(aprovacao['poc_status'], 'APROVADO')
 
-    def test_selecao_ignorada_verificacao_detecta_e_nunca_aprova(self):
+    def test_diferencas_de_precipitacao_no_diagnostico_nao_confirmam_sozinhas(self):
+        """Item 1/5 — valores divergentes na consulta de controle
+        comprovam só que as respostas diferem, NUNCA promovem sozinhos
+        a OK_INGRID_VALUE_VERIFIED quando a confirmação direta não teve
+        sucesso (aqui, RANGEEDGES não configurada -> falha)."""
         ds_primaria = _ds_execucao3_sem_s(semente=61)
-        ds_controle = _ds_execucao3_sem_s(semente=61)   # MESMOS valores -> servidor ignorou S
+        ds_controle = _ds_execucao3_sem_s(semente=62)   # valores DIFERENTES
         baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
         r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
-        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_FAIL_VALUE_IGNORED)
-        self.assertIn('IDÊNTICOS', r['init_verification_result'])
-        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').all())
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED)
+        self.assertNotEqual(r['init_verification_exact_outcome'],
+                             nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertIn('NÃO', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
         aprovacao = npoc.avaliar_aprovacao_poc(r)
         self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
 
-    def test_verificacao_inconclusiva_fica_unconfirmed_nunca_aprova(self):
+    def test_valores_identicos_sao_so_alerta_nunca_reprovacao_definitiva(self):
+        """Item 1/5 — valores idênticos na consulta de controle são um
+        ALERTA (IDENTICAL_RESPONSES_SUSPECT), não a prova de que o
+        servidor ignorou S: nunca força mais um MISMATCH definitivo
+        (comportamento antigo, removido) — fica UNCONFIRMED, igual a
+        qualquer outra evidência insuficiente."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=61)   # MESMOS valores
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT)
+        self.assertIn('IDÊNTICOS', r['init_verification_result'])
+        self.assertIn('NÃO', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+        self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').any())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_formato_diferente_entre_respostas_nao_comprova_selecao_correta(self):
+        """Item 1/5 — formatos diferentes entre a resposta original e a
+        de controle não comprovam, isoladamente, que a seleção foi
+        correta; tratado como mais um caso de DIFFERENT_RESPONSES_
+        ORIGIN_UNVERIFIED, nunca uma confirmação."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61, n_membros=24)
+        ds_controle = _ds_execucao3_sem_s(semente=61, n_membros=20)   # formato (shape) diferente
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED)
+        self.assertIn('formato', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_verificacao_inconclusiva_control_query_falha_fica_unconfirmed(self):
         ds_primaria = _ds_execucao3_sem_s(semente=61)
         baixar_fn, abrir_fn = self._duplas_baixar_abrir(
             ds_primaria, controle_levanta=OSError('controle indisponível (simulado)'))
         r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
         self.assertEqual(r['init_selection_status'],
                           nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
-        self.assertIn('inconclusiva', r['init_verification_result'])
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES)
+        self.assertIn('incomparável', r['init_verification_result'])
         self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
         aprovacao = npoc.avaliar_aprovacao_poc(r)
         self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
 
-    def test_verificacao_registra_metodo_url_resultado_no_temporal_audit(self):
+    def test_confirmacao_direta_falhando_registra_nao_conclusivo(self):
+        """Item 2 — a tentativa de confirmação direta que não conseguiu
+        preservar S (aqui: RANGEEDGES não configurada no dublê ->
+        exceção) fica NAO_CONCLUSIVO, nunca é tratada como
+        EXACT_ORIGIN_CONFIRMED por omissão."""
         ds_primaria = _ds_execucao3_sem_s(semente=61)
         ds_controle = _ds_execucao3_sem_s(semente=62)
-        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(
+            ds_primaria, ds_controle=ds_controle,
+            direta_levanta=OSError('RANGEEDGES indisponível (simulado)'))
         r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_exact_outcome'], 'NAO_CONCLUSIVO')
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_verificacao_registra_todos_os_campos_de_diagnostico_no_temporal_audit(self):
+        """Item 4 — os 8 elementos pedidos ficam auditáveis: URL
+        original (`source_url`, já existente fora deste dict), URL de
+        controle, método de seleção de S, coordenada S observada,
+        quantidade de inicializações, resultado da comparação,
+        resultado da confirmação exata e a justificativa final."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertTrue(r['source_url'])   # URL original
         linha = r['temporal_audit_df'].iloc[0]
-        self.assertEqual(linha['init_verification_method'], 'INGRID_VALUE_CONTROL_QUERY')
+        for campo in ('init_verification_method', 'init_verification_control_url',
+                      'init_verification_result', 'init_verification_direct_url',
+                      'init_verification_s_observed', 'init_verification_s_count',
+                      'init_verification_comparison_outcome', 'init_verification_exact_outcome'):
+            self.assertIn(campo, linha.index, msg=f'{campo} ausente do temporal_audit_df')
         self.assertTrue(linha['init_verification_control_url'])
+        self.assertTrue(linha['init_verification_direct_url'])
+        self.assertEqual(linha['init_verification_s_observed'], '2005-01')
+        self.assertEqual(linha['init_verification_s_count'], 1)
+        self.assertEqual(linha['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
         self.assertTrue(linha['init_verification_result'])
 
 

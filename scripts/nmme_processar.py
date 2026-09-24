@@ -278,20 +278,35 @@ INIT_SELECTION_STATUS_OK_SCALAR = 'OK_SCALAR_COORD'
 INIT_SELECTION_STATUS_OK_SINGLETON_DIM = 'OK_SINGLETON_DIM'
 INIT_SELECTION_STATUS_FAIL_MULTIPLE = 'FAIL_MULTIPLE_INITIALIZATIONS'
 INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD = 'UNCONFIRMED_NO_INIT_COORD'
-# Revisão pós-execução #3 (risco residual) — a documentação do operador
-# Ingrid VALUE sozinha NÃO prova que o servidor de fato selecionou a
-# inicialização pedida quando S é removido da variável. O que era
-# `OK_INGRID_VALUE_DOCUMENTED` (confirmava sozinho) vira
-# `UNCONFIRMED_VALUE_UNVERIFIED` por padrão — só sobe para
-# `OK_INGRID_VALUE_VERIFIED` depois de uma consulta de controle
-# independente (Seção 3, nmme_poc.verificar_selecao_ingrid_value_por_
-# consulta_controle) confirmar objetivamente que o servidor NÃO ignorou
-# a seleção; se a consulta de controle detectar que o servidor ignorou
-# (dados idênticos entre origens diferentes), vira `FAIL_VALUE_IGNORED`
-# — uma contradição, não uma falta de evidência.
+# Revisão pós-execução #3 (risco residual, correção 2) — a documentação
+# do operador Ingrid VALUE sozinha NÃO prova que o servidor de fato
+# selecionou a inicialização pedida quando S é removido da variável.
+# `UNCONFIRMED_VALUE_UNVERIFIED` é o status DEFAULT enquanto isso — só
+# sobe para `OK_INGRID_VALUE_VERIFIED` quando uma CONFIRMAÇÃO DIRETA
+# (nmme_poc.tentar_confirmar_origem_diretamente — seleção S/.../.../
+# RANGEEDGES que preserva a dimensão, ou metadado confiável) observa a
+# origem de fato, nunca a partir de comparação indireta de valores de
+# precipitação (Seção 1/2 — "formatos diferentes não comprovam seleção
+# correta; valores divergentes comprovam só que as respostas diferem;
+# valores idênticos são um alerta, não prova definitiva"). A consulta
+# de controle (nmme_poc.verificar_selecao_ingrid_value_por_consulta_
+# controle) continua rodando como DIAGNÓSTICO complementar (Seção 3),
+# mas nunca decide `init_selection_status` sozinha — seu resultado (um
+# dos VERIFICATION_OUTCOME_* abaixo) só vai para os campos de auditoria
+# `init_verification_*`.
 INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED = 'UNCONFIRMED_VALUE_UNVERIFIED'
 INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED = 'OK_INGRID_VALUE_VERIFIED'
-INIT_SELECTION_STATUS_FAIL_VALUE_IGNORED = 'FAIL_VALUE_IGNORED'
+
+# Revisão pós-execução #3 (correção 2, item 1) — outcomes objetivos da
+# verificação da seleção via Ingrid VALUE. Só EXACT_ORIGIN_CONFIRMED
+# pode confirmar empiricamente a origem (vem da confirmação DIRETA,
+# nunca da comparação indireta abaixo) — os outros três são
+# diagnósticos/alertas, nunca produzem confirmação nem contradição
+# definitiva por si só.
+VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED = 'EXACT_ORIGIN_CONFIRMED'
+VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED = 'DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED'
+VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT = 'IDENTICAL_RESPONSES_SUSPECT'
+VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES = 'INCOMPARABLE_RESPONSES'
 
 INIT_SELECTION_METHOD_SCALAR_COORD = 'SCALAR_COORD_ON_VARIABLE'
 INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
@@ -379,54 +394,57 @@ def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date, selec
     """Método B (Seção 4/6) — os requisitos A-E são checados de forma
     INDEPENDENTE e objetiva. Distingue duas classes de falha: falta de
     EVIDÊNCIA (units/standard_name ausentes, rota sem documentação, S
-    ausente da variável sem verificação de controle concluída — vira
+    ausente da variável sem confirmação DIRETA concluída — vira
     UNCONFIRMED, nunca uma afirmação) de CONTRADIÇÃO objetiva (S
     observado na variável diverge da origem pedida, múltiplas
-    inicializações presentes, consulta de controle prova que o servidor
-    ignorou a seleção de S, ou a grade de L observada diverge da
+    inicializações presentes, ou a grade de L observada diverge da
     esperada — vira MISMATCH, o mesmo tratamento que o Método A já dava
     a uma variável auxiliar discordante).
 
+    Revisão pós-execução #3 (correção 2, risco residual) — a
+    comparação indireta de valores de precipitação entre origens
+    (nmme_poc.verificar_selecao_ingrid_value_por_consulta_controle)
+    NUNCA decide esta classificação sozinha, nem para confirmar nem
+    para contradizer: "formatos diferentes não comprovam seleção
+    correta; valores divergentes comprovam só que as respostas
+    diferem; valores idênticos são um alerta, não prova definitiva"
+    (Seção 1). Só uma confirmação DIRETA da origem
+    (nmme_poc.tentar_confirmar_origem_diretamente — seleção S/.../.../
+    RANGEEDGES que preserva a dimensão, ou metadado confiável) pode
+    produzir `INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED`.
+
     `selecao_init`, quando informado, é o resultado PRÉ-CALCULADO de
-    `_avaliar_selecao_inicializacao` (Seção 3, revisão pós-execução #3)
-    — permite que o chamador (nmme_poc.executar_poc_real_cfsv2) já
-    tenha rodado a verificação de controle independente (que precisa de
-    acesso à rede, fora do escopo desta função pura) antes de avaliar
-    cada lead. Se omitido, calcula aqui sem verificação (nunca promove
-    UNCONFIRMED_VALUE_UNVERIFIED para OK sozinha)."""
+    `_avaliar_selecao_inicializacao` (mais a eventual confirmação
+    direta/diagnóstico de controle, computados pelo chamador — que
+    precisam de acesso à rede, fora do escopo desta função pura)."""
     dim_l = getattr(rota, 'lead_dimension', None) or 'L'
     insuficientes, contraditorias = [], []
 
     # E. Inicialização confirmada por coordenada S scalar/singleton
-    # associada a 'prec', OU seleção Ingrid VALUE VERIFICADA por
-    # consulta de controle independente (Seção 3/4/5/6-E, revisão pós-
-    # execução #3) — NUNCA pelo eixo S global do Dataset, e NUNCA só
-    # pela documentação do operador VALUE sem verificação empírica.
+    # associada a 'prec', OU confirmação DIRETA da seleção Ingrid VALUE
+    # (Seção 3/4/5/6-E, revisão pós-execução #3, correção 2) — NUNCA
+    # pelo eixo S global do Dataset, e NUNCA só pela documentação do
+    # operador VALUE ou por comparação indireta de valores.
     selecao_init = selecao_init if selecao_init is not None else _avaliar_selecao_inicializacao(ds, rota)
     status_init = selecao_init['init_selection_status']
     periodo_observado = selecao_init['init_periodo_observado']
-    if status_init in (INIT_SELECTION_STATUS_FAIL_MULTIPLE, INIT_SELECTION_STATUS_FAIL_VALUE_IGNORED):
-        if status_init == INIT_SELECTION_STATUS_FAIL_MULTIPLE:
-            contraditorias.append(f"variável {rota.variable_name!r} tem "
-                                    f"{selecao_init['init_axis_size_observed_on_variable']} valores de S "
-                                    f"associados — o subset de origem não ocorreu de fato")
-        else:
-            contraditorias.append("consulta de controle independente mostrou que o servidor IGNOROU a "
-                                    "seleção de S (dados idênticos para origens diferentes) — "
-                                    f"{selecao_init.get('init_verification_result', '')}")
+    if status_init == INIT_SELECTION_STATUS_FAIL_MULTIPLE:
+        contraditorias.append(f"variável {rota.variable_name!r} tem "
+                                f"{selecao_init['init_axis_size_observed_on_variable']} valores de S "
+                                f"associados — o subset de origem não ocorreu de fato")
     elif status_init in (INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD,
                           INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED):
         if status_init == INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED:
             resultado_verificacao = selecao_init.get('init_verification_result') or 'verificação não executada'
-            insuficientes.append("S ausente da variável — seleção Ingrid VALUE documentada apenas "
-                                   "como evidência documental, sem verificação de controle "
-                                   f"independente conclusiva (Seção 2/3/4) — {resultado_verificacao}")
+            insuficientes.append("S ausente da variável — nem a confirmação direta (RANGEEDGES/metadado) "
+                                   "nem o diagnóstico de comparação indireta bastaram para confirmar "
+                                   f"empiricamente a origem (Seção 1/2/3/4) — {resultado_verificacao}")
         else:
             insuficientes.append(f"S não pôde ser confirmado como associado à variável "
                                    f"{rota.variable_name!r} (nem scalar/singleton, nem via VALUE "
                                    f"documentado) — Seção 3/5")
     elif status_init == INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED:
-        pass   # confirmado empiricamente por consulta de controle independente — nada a comparar
+        pass   # confirmado empiricamente por confirmação DIRETA da origem — nada a comparar
     elif periodo_observado != init_date:
         contraditorias.append(f"S observado na variável {rota.variable_name!r} ({periodo_observado}) "
                                 f"diverge da origem pedida ({init_date})")
@@ -494,12 +512,26 @@ def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date, selec
             'init_value_observed_on_variable': selecao_init['init_value_observed_on_variable'],
             'init_axis_size_observed_on_variable': selecao_init['init_axis_size_observed_on_variable'],
             'init_selection_status': status_init,
-            # Seção 5 (revisão pós-execução #3) — método/URL/resultado da
-            # verificação de controle independente, quando aplicável
-            # (só preenchido no caminho S-ausente-da-variável).
+            # Seção 5 (revisão pós-execução #3, correção 2/item 4) —
+            # método/URL/resultado da verificação de controle
+            # independente, quando aplicável (só preenchido no caminho
+            # S-ausente-da-variável). init_verification_method/
+            # _control_url/_result vêm do diagnóstico de comparação
+            # (Seção 1/3) e/ou da tentativa de confirmação DIRETA (Seção
+            # 2) — os 5 campos abaixo tornam essas duas fontes
+            # distinguíveis no artifact (item 4 da tarefa: URL de
+            # controle já coberto por _control_url; URL original fica no
+            # campo `source_url` do resultado agregado, fora desta
+            # função pura).
             'init_verification_method': selecao_init.get('init_verification_method', ''),
             'init_verification_control_url': selecao_init.get('init_verification_control_url', ''),
-            'init_verification_result': selecao_init.get('init_verification_result', '')}
+            'init_verification_result': selecao_init.get('init_verification_result', ''),
+            'init_verification_direct_url': selecao_init.get('init_verification_direct_url', ''),
+            'init_verification_s_observed': selecao_init.get('init_verification_s_observed'),
+            'init_verification_s_count': selecao_init.get('init_verification_s_count'),
+            'init_verification_comparison_outcome': selecao_init.get(
+                'init_verification_comparison_outcome', ''),
+            'init_verification_exact_outcome': selecao_init.get('init_verification_exact_outcome', '')}
 
 
 def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao',
@@ -523,6 +555,9 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
     init_axis_size_observed_on_variable = None
     init_selection_status = None
     init_verification_method = init_verification_control_url = init_verification_result = ''
+    init_verification_direct_url = ''
+    init_verification_s_observed = init_verification_s_count = None
+    init_verification_comparison_outcome = init_verification_exact_outcome = ''
 
     # Seção 2/8 — em RAW_NUMERIC_CF (decode_times=False) os valores de
     # tempo do dataset são numéricos crus, sem decodificação de
@@ -544,7 +579,10 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
                 'init_selection_method': INIT_SELECTION_METHOD_NONE, 'init_value_requested': str(init_date),
                 'init_value_observed_on_variable': None, 'init_axis_size_observed_on_variable': None,
                 'init_selection_status': None, 'init_verification_method': '',
-                'init_verification_control_url': '', 'init_verification_result': ''}
+                'init_verification_control_url': '', 'init_verification_result': '',
+                'init_verification_direct_url': '', 'init_verification_s_observed': None,
+                'init_verification_s_count': None, 'init_verification_comparison_outcome': '',
+                'init_verification_exact_outcome': ''}
 
     l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
     texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
@@ -605,6 +643,11 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
         init_verification_method = resultado_b['init_verification_method']
         init_verification_control_url = resultado_b['init_verification_control_url']
         init_verification_result = resultado_b['init_verification_result']
+        init_verification_direct_url = resultado_b['init_verification_direct_url']
+        init_verification_s_observed = resultado_b['init_verification_s_observed']
+        init_verification_s_count = resultado_b['init_verification_s_count']
+        init_verification_comparison_outcome = resultado_b['init_verification_comparison_outcome']
+        init_verification_exact_outcome = resultado_b['init_verification_exact_outcome']
         evidencia.append(resultado_b['evidence'])
         mapping_status = resultado_b['status']
         if mapping_status == 'OK':
@@ -622,7 +665,12 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
             'init_selection_status': init_selection_status,
             'init_verification_method': init_verification_method,
             'init_verification_control_url': init_verification_control_url,
-            'init_verification_result': init_verification_result}
+            'init_verification_result': init_verification_result,
+            'init_verification_direct_url': init_verification_direct_url,
+            'init_verification_s_observed': init_verification_s_observed,
+            'init_verification_s_count': init_verification_s_count,
+            'init_verification_comparison_outcome': init_verification_comparison_outcome,
+            'init_verification_exact_outcome': init_verification_exact_outcome}
 
 
 def contar_membros_nao_missing(valores_por_membro):
