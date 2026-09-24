@@ -297,28 +297,62 @@ INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD = 'UNCONFIRMED_NO_INIT_COORD'
 INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED = 'UNCONFIRMED_VALUE_UNVERIFIED'
 INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED = 'OK_INGRID_VALUE_VERIFIED'
 
-# Revisão pós-execução #3 (correção 2, item 1) — outcomes objetivos da
-# verificação da seleção via Ingrid VALUE. Só EXACT_ORIGIN_CONFIRMED
-# pode confirmar empiricamente a origem (vem da confirmação DIRETA,
-# nunca da comparação indireta abaixo) — os outros três são
-# diagnósticos/alertas, nunca produzem confirmação nem contradição
-# definitiva por si só.
-VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED = 'EXACT_ORIGIN_CONFIRMED'
-VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED = 'DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED'
-VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT = 'IDENTICAL_RESPONSES_SUSPECT'
-VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES = 'INCOMPARABLE_RESPONSES'
-# Revisão pós-execução #3 (correção 3, itens 1/2) — a confirmação DIRETA
-# (RANGEEDGES) por si só, ao só olhar "a dimensão S tem 1 único valor",
-# não bastava: o valor único podia não ser a origem pedida, e o payload
-# de precipitação de RANGEEDGES podia divergir do da consulta VALUE
-# original (usada de fato no RAW). Nenhum dos dois outcomes abaixo pode
-# virar EXACT_ORIGIN_CONFIRMED nem OK_INGRID_VALUE_VERIFIED —
-# `tentar_confirmar_origem_diretamente` só devolve EXACT_ORIGIN_CONFIRMED
-# quando o valor único bate EXATAMENTE com ano/mês pedidos (item 1) E os
-# dados de precipitação de RANGEEDGES concordam com os de VALUE dentro
-# de tolerância mínima (item 2).
-VERIFICATION_OUTCOME_ORIGIN_MISMATCH = 'ORIGIN_MISMATCH'
-VERIFICATION_OUTCOME_DATA_INCONSISTENT = 'DATA_INCONSISTENT_WITH_VALUE'
+# Revisão pós-execução #5 (RANGEEDGES como fonte principal) — os
+# VERIFICATION_OUTCOME_* que viviam aqui (EXACT_ORIGIN_CONFIRMED,
+# DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED, IDENTICAL_RESPONSES_SUSPECT,
+# INCOMPARABLE_RESPONSES, ORIGIN_MISMATCH, DATA_INCONSISTENT_WITH_VALUE)
+# eram devolvidos exclusivamente por `nmme_poc.tentar_confirmar_origem_
+# diretamente`/`verificar_selecao_ingrid_value_por_consulta_controle`,
+# REMOVIDAS junto com toda a verificação de uma seleção via VALUE (a
+# run real 36032400919 mostrou VALUE não ser confiável — Seção "não
+# utilizar VALUE como fonte de dados"). Removidos por ficarem
+# genuinamente inalcançáveis; histórico completo nos commits anteriores
+# desta branch.
+
+# Revisão pós-execução #4 (investigação da run 36028568952) — até aqui
+# a confirmação DIRETA via RANGEEDGES só disparava quando S estava
+# AUSENTE da variável (UNCONFIRMED_VALUE_UNVERIFIED). A execução real
+# encontrou um caso NOVO: S PRESENTE na variável, com 1 único valor,
+# mas esse valor (1982-01) diverge da origem pedida (2005-01) — a
+# consulta VALUE original devolveu, aparentemente, o início do arquivo-
+# fonte inteiro (o hindcast do CFSv2 começa em 1982), não a origem
+# pedida. `_avaliar_semantica_forecast_period` já classifica isso como
+# MISMATCH corretamente (Seção E, `periodo_observado != init_date`) —
+# essa classificação NUNCA muda por causa do diagnóstico abaixo (Seção
+# 1/9 desta investigação: nenhuma aprovação automática nova). O que
+# faltava era executar TAMBÉM a confirmação direta nesse caso, só para
+# fins de diagnóstico/auditoria — nunca para promover o status. Os 5
+# outcomes abaixo classificam objetivamente o que a consulta RANGEEDGES
+# de diagnóstico observou, distinguindo (item 7 da investigação):
+# falha de sintaxe (o servidor rejeitou o request, HTTP 4xx — evidência
+# de que a URL construída é malformada, não uma hipótese sobre a
+# semântica do operador); seleção ignorada pelo servidor (o request foi
+# aceito, mas o valor observado continua sendo o mesmo problema da
+# consulta VALUE original, ou outra origem não pedida — evidência de
+# que o servidor não aplicou a restrição); problema de interpretação de
+# coordenadas (a resposta não pôde ser lida/parseada do nosso lado —
+# não é evidência sobre o servidor, é uma lacuna nossa); e, só quando a
+# origem observada bate exatamente com a pedida, confirmação exata via
+# RANGEEDGES apesar do VALUE ter divergido (o achado mais interessante
+# possível — mostra que RANGEEDGES e VALUE se comportam diferente para
+# a mesma origem, mas mesmo assim NUNCA aprova o POC sozinho).
+S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR = 'SYNTAX_ERROR'
+S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER = 'SELECTION_IGNORED_BY_SERVER'
+S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE = 'COORD_INTERPRETATION_ISSUE'
+S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH = 'EXACT_MATCH_DESPITE_VALUE_MISMATCH'
+S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE = 'INCONCLUSIVE'
+S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO = 'NAO_EXECUTADO'
+# Revisão pós-execução #5 (item 10, correção da run real 36032400919) —
+# a execução real mostrou que RANGEEDGES com limites idênticos devolve
+# uma JANELA (ex.: janeiro E fevereiro de 2005), não necessariamente 1
+# único ponto. `diagnosticar_origem_s_divergente` tratava isso como
+# SELECTION_IGNORED_BY_SERVER sempre que via >1 valor — errado quando a
+# origem PEDIDA está entre os valores devolvidos: nesse caso o servidor
+# não ignorou nada, só devolveu uma janela que CONTÉM a origem certa,
+# junto de um vizinho. `SELECTION_IGNORED_BY_SERVER` fica reservado
+# para quando a origem pedida está ausente entre os múltiplos valores
+# (aí sim evidência de que a seleção não funcionou).
+S_DIVERGENTE_DIAGNOSTICO_RANGE_WINDOW_MULTIPLE_INITIALIZATIONS = 'RANGE_WINDOW_MULTIPLE_INITIALIZATIONS'
 
 INIT_SELECTION_METHOD_SCALAR_COORD = 'SCALAR_COORD_ON_VARIABLE'
 INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
@@ -329,6 +363,176 @@ INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
 # tentará corroborar ou refutar objetivamente.
 INIT_SELECTION_METHOD_REQUEST_CONFIRMED_SELECTION = 'REQUEST_CONFIRMED_SELECTION'
 INIT_SELECTION_METHOD_NONE = 'NONE'
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão pós-execução #5 (RANGEEDGES como fonte principal) — a run real
+# 36032400919 confirmou empiricamente que RANGEEDGES com limites
+# idênticos (S/(Jan 2005)/(Jan 2005)/RANGEEDGES) devolve uma JANELA
+# pequena (observado: jan+fev/2005), não garante 1 único ponto — e que a
+# origem pedida ESTAVA presente nessa janela, ao contrário do VALUE
+# (que devolveu 1982-01, o início do arquivo inteiro). Isso torna
+# RANGEEDGES + seleção EXPLÍCITA em Python (por coordenada observada,
+# nunca por posição/índice/proximidade) uma fonte mais confiável que
+# VALUE — `selecionar_inicializacao_por_coordenada` é essa seleção.
+# ══════════════════════════════════════════════════════════════════════════
+
+INIT_SELECTION_METHOD_RANGEEDGES_WINDOW_COORDINATE_MATCH = 'RANGEEDGES_WINDOW_COORDINATE_MATCH'
+
+INIT_SELECTION_STATUS_RANGEEDGES_OK = 'RANGEEDGES_OK'
+# Item 2/3 — a origem pedida não apareceu NENHUMA vez entre os valores
+# de S observados na janela RANGEEDGES.
+INIT_SELECTION_STATUS_RANGEEDGES_FAIL_AUSENTE = 'RANGEEDGES_FAIL_AUSENTE'
+# Item 3 — a origem pedida apareceu MAIS de uma vez (2 valores S
+# distintos, ambos dentro do mês pedido) — o subset de origem não
+# ocorreu de fato, dado ambíguo, nunca escolhido por posição.
+INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DUPLICADO = 'RANGEEDGES_FAIL_DUPLICADO'
+# Item 5 — defesa adicional, redundante com FAIL_DUPLICADO na prática:
+# mesmo quando exatamente 1 valor de S bateu a origem pedida ANTES da
+# seleção, se a seleção por coordenada EXATA (`.sel`, nunca
+# `method='nearest'`) devolver mais de 1 ponto depois, reprova — nunca
+# assume que o primeiro resultado é o certo.
+INIT_SELECTION_STATUS_RANGEEDGES_FAIL_MULTIPLA_APOS_SELECAO = 'RANGEEDGES_FAIL_MULTIPLA_APOS_SELECAO'
+# Defesa final — depois de selecionar por coordenada exata, o valor
+# resultante ainda diverge do mês pedido (não deveria acontecer se a
+# seleção por coordenada foi implementada corretamente, mas nunca
+# assumido sem checar).
+INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DIVERGENTE_APOS_SELECAO = 'RANGEEDGES_FAIL_DIVERGENTE_APOS_SELECAO'
+# S presente mas com valores que não puderam ser interpretados como
+# data (parsing falhou) — lacuna nossa, nunca contornada com adivinhação.
+INIT_SELECTION_STATUS_RANGEEDGES_FAIL_NAO_INTERPRETAVEL = 'RANGEEDGES_FAIL_NAO_INTERPRETAVEL'
+# S ausente da variável mesmo na janela RANGEEDGES (nenhum valor de S
+# associado a 'prec' — cenário diferente de FAIL_AUSENTE, que é "S
+# presente mas sem o mês pedido").
+INIT_SELECTION_STATUS_RANGEEDGES_FAIL_SEM_COORDENADA = 'RANGEEDGES_FAIL_SEM_COORDENADA'
+
+
+def selecionar_inicializacao_por_coordenada(da, rota, ano, mes, ds=None):
+    """Seleção EXPLÍCITA e validada da inicialização a partir de uma
+    resposta Ingrid RANGEEDGES (item 1-5 da correção RANGEEDGES-fonte-
+    principal). `da` é a DataArray da variável de precipitação já
+    aberta (ex.: `ds[var_encontrada]`), possivelmente com MAIS de 1
+    valor de S (RANGEEDGES devolve uma janela, não um ponto — Seção
+    acima). Nunca seleciona por posição, índice zero ou proximidade
+    temporal (`method='nearest'`) — só por igualdade EXATA com a
+    coordenada S observada que corresponde à origem pedida.
+
+    Algoritmo:
+    1. Lê TODOS os valores de S associados a `da` (antes de qualquer
+       seleção) — se S estiver ausente, FAIL_SEM_COORDENADA.
+    2. Tenta interpretar cada valor como período mensal — se algum não
+       for interpretável, FAIL_NAO_INTERPRETAVEL (nunca ignora
+       silenciosamente um valor que não conseguiu ler).
+    3. Conta quantos valores correspondem à origem pedida (ano-mês):
+       0 -> FAIL_AUSENTE; >1 -> FAIL_DUPLICADO (dado ambíguo, nunca
+       escolhe o primeiro).
+    4. Com exatamente 1 correspondência, seleciona por
+       `.sel({S: <valor observado>})` (a dimensão S some do resultado
+       quando S é uma dimensão real; quando já é escalar/singleton,
+       nada precisa ser filtrado).
+    5. Defesa pós-seleção: se o resultado ainda tiver mais de 1 valor
+       de S, FAIL_MULTIPLA_APOS_SELECAO; se o valor final não bater a
+       origem pedida, FAIL_DIVERGENTE_APOS_SELECAO.
+
+    `ds`, quando informado, é o Dataset INTEIRO de onde `da` veio (ex.:
+    o próprio dataset aberto do RANGEEDGES, com TODAS as variáveis —
+    inclusive uma eventual variável auxiliar de data-alvo como
+    `target`/`valid_time`, que não é coordenada de `da` e por isso não
+    seria filtrada só por filtrar `da`). Quando a seleção é bem-sucedida,
+    a MESMA coordenada `valor_alvo` escolhida para `da` é aplicada ao
+    `ds` inteiro (`ds.sel({S: valor_alvo})`), devolvida como
+    `ds_selecionado` — para que nenhuma validação temporal posterior
+    (`avaliar_mapeamento_temporal`, incluindo o Método A de variável
+    auxiliar) possa ler um valor associado a uma inicialização diferente
+    da selecionada. `.sel()` preserva os atributos de todas as
+    coordenadas não filtradas (inclusive S e L) sem precisar copiá-los
+    à mão. Sem `ds` (uso direto da função pura, ex. em testes), fica
+    `None` — o chamador decide o que fazer.
+
+    Devolve dict com `status`, `s_values_before` (lista de strings, TODOS
+    os valores observados antes da seleção, nunca só o escolhido),
+    `s_values_after` (lista após a seleção, esperado 1 elemento quando
+    status==RANGEEDGES_OK), `da_selecionado` (só quando OK),
+    `ds_selecionado` (só quando OK e `ds` foi informado) e `evidencia`."""
+    dim_s = getattr(rota, 'init_dimension', None) or 'S'
+    origem = pd.Period(f'{ano:04d}-{mes:02d}', 'M')
+
+    if dim_s not in getattr(da, 'coords', {}):
+        return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_SEM_COORDENADA,
+                's_values_before': [], 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
+                'evidencia': f"coordenada {dim_s!r} ausente da variável — RANGEEDGES não preservou "
+                              f"nenhum valor de S associado a ela."}
+
+    valores_brutos = np.atleast_1d(np.asarray(da.coords[dim_s].values))
+    s_values_before = [str(v) for v in valores_brutos]
+
+    try:
+        periodos = [pd.Period(str(v)[:7], 'M') for v in valores_brutos]
+    except Exception as e:
+        return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_NAO_INTERPRETAVEL,
+                's_values_before': s_values_before, 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
+                'evidencia': f"não foi possível interpretar 1+ valores de S observados "
+                              f"({s_values_before!r}) como período mensal ({type(e).__name__}: {e})."}
+
+    indices_match = [i for i, p in enumerate(periodos) if p == origem]
+    if not indices_match:
+        return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_AUSENTE,
+                's_values_before': s_values_before, 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
+                'evidencia': f"origem pedida ({origem}) não está entre os valores de S observados "
+                              f"na janela RANGEEDGES ({s_values_before!r})."}
+    if len(indices_match) > 1:
+        return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DUPLICADO,
+                's_values_before': s_values_before, 's_values_after': [], 'da_selecionado': None,
+                'ds_selecionado': None,
+                'evidencia': f"origem pedida ({origem}) aparece {len(indices_match)} vezes entre os "
+                              f"valores de S observados ({s_values_before!r}) — dado ambíguo, nunca "
+                              f"escolhida por posição."}
+
+    valor_alvo = valores_brutos[indices_match[0]]
+    # Item 4 — seleção EXCLUSIVA pela coordenada observada, nunca por
+    # índice/posição nem por proximidade (sem method='nearest').
+    da_selecionado = da.sel({dim_s: valor_alvo}) if dim_s in da.dims else da
+
+    if dim_s in getattr(da_selecionado, 'coords', {}):
+        valores_pos = np.atleast_1d(np.asarray(da_selecionado.coords[dim_s].values))
+    else:
+        valores_pos = np.atleast_1d(valor_alvo)
+    s_values_after = [str(v) for v in valores_pos]
+
+    if valores_pos.size > 1:
+        return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_MULTIPLA_APOS_SELECAO,
+                's_values_before': s_values_before, 's_values_after': s_values_after, 'da_selecionado': None,
+                'ds_selecionado': None,
+                'evidencia': f"seleção por coordenada exata ainda devolveu {valores_pos.size} valores "
+                              f"de S ({s_values_after!r}) — nunca assume o primeiro como correto."}
+
+    periodo_pos = pd.Period(str(valores_pos[0])[:7], 'M')
+    if periodo_pos != origem:
+        return {'status': INIT_SELECTION_STATUS_RANGEEDGES_FAIL_DIVERGENTE_APOS_SELECAO,
+                's_values_before': s_values_before, 's_values_after': s_values_after, 'da_selecionado': None,
+                'ds_selecionado': None,
+                'evidencia': f"após a seleção por coordenada exata, o valor observado ({periodo_pos}) "
+                              f"diverge da origem pedida ({origem})."}
+
+    # Item novo (revisão de acompanhamento) — a MESMA coordenada exata
+    # usada para filtrar `da` é aplicada ao `ds` inteiro, quando
+    # informado, para que qualquer variável auxiliar (ex.: `target`)
+    # também fique restrita à inicialização selecionada antes de
+    # qualquer validação temporal downstream (nunca só `da`/`prec`,
+    # que não inclui variáveis auxiliares como coordenadas próprias).
+    if ds is not None:
+        ds_selecionado = ds.sel({dim_s: valor_alvo}) if dim_s in getattr(ds, 'dims', ()) else ds
+    else:
+        ds_selecionado = None
+
+    return {'status': INIT_SELECTION_STATUS_RANGEEDGES_OK,
+            's_values_before': s_values_before, 's_values_after': s_values_after,
+            'da_selecionado': da_selecionado, 'ds_selecionado': ds_selecionado,
+            'evidencia': f"origem {origem} selecionada por coordenada exata (RANGEEDGES devolveu "
+                          f"{len(s_values_before)} valor(es) na janela: {s_values_before!r}; "
+                          f"selecionado exclusivamente {s_values_after!r})."}
 
 
 def _avaliar_selecao_inicializacao(ds, rota):
@@ -373,11 +577,23 @@ def _avaliar_selecao_inicializacao(ds, rota):
     s_coord = da.coords[dim_s]
     tamanho = int(s_coord.size)
     if tamanho > 1:
+        # Revisão pós-execução #4 (investigação da run 36028568952,
+        # item 5) — quando há mais de 1 inicialização, o diagnóstico
+        # precisa dos VALORES observados (nunca só a contagem) para
+        # nunca escolher o primeiro automaticamente. `str(v)[:7]` seria
+        # ambíguo/perderia precisão para calendários não-padrão; guarda
+        # a representação bruta de cada elemento do eixo, na ordem
+        # observada, sem qualquer seleção implícita.
+        try:
+            valores_brutos_multiplos = [str(v) for v in np.asarray(s_coord.values).ravel().tolist()]
+        except Exception:
+            valores_brutos_multiplos = []
         return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
                 'init_value_observed_on_variable': None,
                 'init_axis_size_observed_on_variable': tamanho,
                 'init_selection_status': INIT_SELECTION_STATUS_FAIL_MULTIPLE,
-                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s,
+                'init_values_observed_on_variable_multiplos': valores_brutos_multiplos}
 
     try:
         bruto = np.asarray(s_coord.values).flat[0]
@@ -523,27 +739,7 @@ def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date, selec
             'init_value_requested': str(init_date),
             'init_value_observed_on_variable': selecao_init['init_value_observed_on_variable'],
             'init_axis_size_observed_on_variable': selecao_init['init_axis_size_observed_on_variable'],
-            'init_selection_status': status_init,
-            # Seção 5 (revisão pós-execução #3, correção 2/item 4) —
-            # método/URL/resultado da verificação de controle
-            # independente, quando aplicável (só preenchido no caminho
-            # S-ausente-da-variável). init_verification_method/
-            # _control_url/_result vêm do diagnóstico de comparação
-            # (Seção 1/3) e/ou da tentativa de confirmação DIRETA (Seção
-            # 2) — os 5 campos abaixo tornam essas duas fontes
-            # distinguíveis no artifact (item 4 da tarefa: URL de
-            # controle já coberto por _control_url; URL original fica no
-            # campo `source_url` do resultado agregado, fora desta
-            # função pura).
-            'init_verification_method': selecao_init.get('init_verification_method', ''),
-            'init_verification_control_url': selecao_init.get('init_verification_control_url', ''),
-            'init_verification_result': selecao_init.get('init_verification_result', ''),
-            'init_verification_direct_url': selecao_init.get('init_verification_direct_url', ''),
-            'init_verification_s_observed': selecao_init.get('init_verification_s_observed'),
-            'init_verification_s_count': selecao_init.get('init_verification_s_count'),
-            'init_verification_comparison_outcome': selecao_init.get(
-                'init_verification_comparison_outcome', ''),
-            'init_verification_exact_outcome': selecao_init.get('init_verification_exact_outcome', '')}
+            'init_selection_status': status_init}
 
 
 def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao',
@@ -566,10 +762,6 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
     init_value_observed_on_variable = None
     init_axis_size_observed_on_variable = None
     init_selection_status = None
-    init_verification_method = init_verification_control_url = init_verification_result = ''
-    init_verification_direct_url = ''
-    init_verification_s_observed = init_verification_s_count = None
-    init_verification_comparison_outcome = init_verification_exact_outcome = ''
 
     # Seção 2/8 — em RAW_NUMERIC_CF (decode_times=False) os valores de
     # tempo do dataset são numéricos crus, sem decodificação de
@@ -590,11 +782,7 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
                 'lead_standard_name_observed': None,
                 'init_selection_method': INIT_SELECTION_METHOD_NONE, 'init_value_requested': str(init_date),
                 'init_value_observed_on_variable': None, 'init_axis_size_observed_on_variable': None,
-                'init_selection_status': None, 'init_verification_method': '',
-                'init_verification_control_url': '', 'init_verification_result': '',
-                'init_verification_direct_url': '', 'init_verification_s_observed': None,
-                'init_verification_s_count': None, 'init_verification_comparison_outcome': '',
-                'init_verification_exact_outcome': ''}
+                'init_selection_status': None}
 
     l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
     texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
@@ -652,14 +840,6 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
         init_value_observed_on_variable = resultado_b['init_value_observed_on_variable']
         init_axis_size_observed_on_variable = resultado_b['init_axis_size_observed_on_variable']
         init_selection_status = resultado_b['init_selection_status']
-        init_verification_method = resultado_b['init_verification_method']
-        init_verification_control_url = resultado_b['init_verification_control_url']
-        init_verification_result = resultado_b['init_verification_result']
-        init_verification_direct_url = resultado_b['init_verification_direct_url']
-        init_verification_s_observed = resultado_b['init_verification_s_observed']
-        init_verification_s_count = resultado_b['init_verification_s_count']
-        init_verification_comparison_outcome = resultado_b['init_verification_comparison_outcome']
-        init_verification_exact_outcome = resultado_b['init_verification_exact_outcome']
         evidencia.append(resultado_b['evidence'])
         mapping_status = resultado_b['status']
         if mapping_status == 'OK':
@@ -674,15 +854,7 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
             'init_selection_method': init_selection_method, 'init_value_requested': str(init_date),
             'init_value_observed_on_variable': init_value_observed_on_variable,
             'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
-            'init_selection_status': init_selection_status,
-            'init_verification_method': init_verification_method,
-            'init_verification_control_url': init_verification_control_url,
-            'init_verification_result': init_verification_result,
-            'init_verification_direct_url': init_verification_direct_url,
-            'init_verification_s_observed': init_verification_s_observed,
-            'init_verification_s_count': init_verification_s_count,
-            'init_verification_comparison_outcome': init_verification_comparison_outcome,
-            'init_verification_exact_outcome': init_verification_exact_outcome}
+            'init_selection_status': init_selection_status}
 
 
 def contar_membros_nao_missing(valores_por_membro):

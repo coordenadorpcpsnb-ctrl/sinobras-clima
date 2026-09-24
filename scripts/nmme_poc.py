@@ -411,399 +411,246 @@ def abrir_dataset_com_fallback_temporal(caminho, abrir_fn, init_dimension='S'):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Revisão pós-execução #3, correção 2 (risco residual + correção da
-# revisão) — desenho em DUAS camadas, nenhuma delas isolada basta para
-# `INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED`:
-#
-# 1) CONFIRMAÇÃO DIRETA (`tentar_confirmar_origem_diretamente`) — tenta
-#    reobter a MESMA origem pedida com S/(mes ano)/(mes ano)/RANGEEDGES
-#    em vez de S/(mes ano)/VALUE (nmme_download._clausula_selecao_s);
-#    RANGEEDGES, diferente de VALUE, documentadamente preserva a
-#    dimensão como uma faixa em vez de removê-la — com os dois limites
-#    idênticos, a faixa colapsa a 1 ponto de grade SEM remover S. Se a
-#    coordenada S sobreviver (scalar ou singleton-dim), a origem só é
-#    considerada confirmada se DUAS condições se confirmarem (correção
-#    3, nenhuma isolada basta): (a) o valor único observado é
-#    EXATAMENTE ano-mês pedidos, nunca só "tem 1 valor" — divergência
-#    vira `VERIFICATION_OUTCOME_ORIGIN_MISMATCH`, reprovando a
-#    confirmação; (b) os dados de precipitação de RANGEEDGES concordam,
-#    dentro de tolerância mínima, com os da consulta VALUE original (a
-#    que de fato alimenta o RAW) para o mesmo ponto/membros/leads
-#    (`_verificar_consistencia_value_rangeedges`) — divergência vira
-#    `VERIFICATION_OUTCOME_DATA_INCONSISTENT`, mesmo com S=data pedida
-#    confirmado exatamente. Só com as duas confirmadas o outcome vira
-#    COORDENADA OBSERVADA na resposta (nunca pela URL solicitada)
-#    (`VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED` — o único outcome
-#    que pode virar OK_INGRID_VALUE_VERIFIED). Se RANGEEDGES também
-#    eliminar S, tenta um metadado confiável
-#    (`_buscar_metadado_confiavel_de_inicializacao` — nesta
-#    investigação, nenhuma evidência de que o IRIDL emite um atributo
-#    assim foi encontrada; placeholder honesto, devolve None), sujeito
-#    às mesmas duas condições.
-#
-# 2) DIAGNÓSTICO DE COMPARAÇÃO (`verificar_selecao_ingrid_value_por_
-#    consulta_controle`, preservado por instrução explícita — Seção 3
-#    da correção) — consulta de controle com origem DIFERENTE da
-#    pedida e compara os valores retornados. Reclassificado nesta
-#    correção: "formatos diferentes não comprovam seleção correta;
-#    valores divergentes comprovam só que as respostas diferem, não que
-#    correspondem exatamente às inicializações pedidas; valores
-#    idênticos são um alerta, não prova definitiva" (Seção 1 da
-#    correção). Por isso NUNCA devolve um outcome que sozinho vire
-#    OK_INGRID_VALUE_VERIFIED nem force MISMATCH — só um dos 3
-#    diagnósticos objetivos (DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
-#    IDENTICAL_RESPONSES_SUSPECT, INCOMPARABLE_RESPONSES), sempre
-#    complementar à confirmação direta (item 3, nunca decisivo
-#    isoladamente).
-#
-# Ambas precisam de baixar_fn/abrir_fn (rede real ou dublês injetados
-# nos testes) — por isso vivem aqui, fora da função pura de avaliação
-# (nmme_processar._avaliar_selecao_inicializacao), que só inspeciona um
-# Dataset já aberto.
+# Revisão pós-execução #5 (RANGEEDGES como fonte principal) — as funções
+# que viviam aqui (tentar_confirmar_origem_diretamente,
+# verificar_selecao_ingrid_value_por_consulta_controle,
+# _verificar_consistencia_value_rangeedges,
+# _buscar_metadado_confiavel_de_inicializacao) implementavam a
+# verificação de uma seleção via Ingrid VALUE que a run real
+# 36032400919 mostrou não ser confiável (devolveu 1982-01 para
+# 2005-01 pedido). REMOVIDAS nesta revisão — ficaram inalcançáveis
+# depois que executar_poc_real_cfsv2 passou a usar RANGEEDGES como
+# única fonte primária, com seleção explícita por coordenada
+# (nmme_processar.selecionar_inicializacao_por_coordenada), nunca mais
+# VALUE (Seção "não utilizar VALUE como fonte de dados"). Histórico
+# completo continua disponível nos commits anteriores desta branch e
+# em claude/fase2c1b-diagnostico-s-divergente. diagnosticar_origem_s_divergente
+# (abaixo) foi mantida e corrigida (item 10) por instrução explícita,
+# mas também não é mais chamada pelo pipeline principal.
 # ══════════════════════════════════════════════════════════════════════════
 
-def _buscar_metadado_confiavel_de_inicializacao(ds, rota, ano, mes):
-    """Item 2 (correção, fallback) — procura, nos atributos do dataset/
-    variável, um metadado que identifique EXPLICITAMENTE a
-    inicialização selecionada, para o caso em que RANGEEDGES também
-    eliminar a dimensão S. Nunca inventa nome de atributo: só
-    reconheceria uma convenção CF/Ingrid já documentada para esse fim.
-    Nenhuma evidência de que o IRIDL de fato emite um atributo assim
-    foi encontrada nesta investigação (sem acesso de rede real nesta
-    tarefa) — placeholder honesto, devolve None na ausência de
-    evidência, nunca assume um nome plausível."""
-    return None
 
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão pós-execução #4 (investigação da run 36028568952) — a run real
+# encontrou um caso NÃO coberto pelas correções 1-3: S PRESENTE na
+# variável 'prec' (1 único valor, `init_selection_status` já
+# OK_SCALAR/OK_SINGLETON_DIM), mas esse valor (1982-01) diverge da
+# origem pedida (2005-01). `tentar_confirmar_origem_diretamente` só
+# disparava quando S estava AUSENTE (UNCONFIRMED_VALUE_UNVERIFIED) —
+# esse caso, por ter S presente, já é classificado MISMATCH direto por
+# `nmme_processar._avaliar_semantica_forecast_period`
+# (`periodo_observado != init_date`), e essa classificação NUNCA muda
+# por causa do diagnóstico abaixo (Seção 1/9 desta investigação:
+# nenhuma tentativa de aprovação automática nova — o diagnóstico é
+# estritamente aditivo/investigativo, roda DEPOIS da classificação já
+# decidida, só para auditoria).
+# ══════════════════════════════════════════════════════════════════════════
 
-# Revisão pós-execução #3, correção 3 (item 2) — as duas consultas pedem
-# EXATAMENTE a mesma origem (só a cláusula de S muda, VALUE vs.
-# RANGEEDGES), então os valores de precipitação devem ser praticamente
-# idênticos; a tolerância abaixo é deliberadamente mínima — só absorve
-# arredondamento de serialização entre duas respostas HTTP
-# independentes, nunca uma diferença real de dado. Não é uma tolerância
-# de "proximidade climatológica" nem de skill — é tolerância de
-# reprodutibilidade bit-a-bit de duas consultas ao MESMO arquivo-fonte.
-TOLERANCIA_RELATIVA_VALUE_RANGEEDGES = 1e-6
-TOLERANCIA_ABSOLUTA_VALUE_RANGEEDGES = 1e-9
-
-
-def _verificar_consistencia_value_rangeedges(ponto_value, ds_direto, rota, lat, lon):
-    """Item 2 (correção 3) — a confirmação direta via RANGEEDGES só
-    pode aprovar o POC se os dados de precipitação que ela devolve são
-    CONSISTENTES com os dados que a consulta VALUE original (a
-    efetivamente usada para montar o RAW) devolveu, para o MESMO ponto,
-    os MESMOS membros e os MESMOS leads — confirmar só a coordenada S
-    (item 1) nunca basta sozinho.
-
-    Alternativa avaliada e não adotada nesta correção: usar os dados de
-    RANGEEDGES diretamente como fonte do RAW (em vez de VALUE), o que
-    dispensaria esta comparação. Não implementada porque trocaria a
-    fonte de dados de todo o pipeline (RAW, membros, unidades) por uma
-    consulta usada até aqui só para confirmação — um raio de mudança
-    maior que o necessário para o problema relatado — e porque VALUE já
-    é a consulta validada por todos os guardrails existentes
-    (validar_acesso_dataset_real, validar_membros_poc etc.) enquanto
-    RANGEEDGES nunca passou por eles. Preservar VALUE como fonte única
-    do RAW e usar esta comparação como gate de aprovação é a mudança
-    mínima que atende ao pedido: reprovar quando os dados divergem,
-    mesmo com S confirmado."""
-    import numpy as np
-
-    if rota.variable_name not in getattr(ds_direto, 'variables', {}):
-        return {'consistent': False,
-                'reason': f"variável {rota.variable_name!r} ausente na resposta RANGEEDGES — "
-                          f"consistência com VALUE não pôde ser verificada."}
-    try:
-        ponto_direto = ds_direto[rota.variable_name].sel(
-            {rota.lon_dimension: lon, rota.lat_dimension: lat}, method='nearest')
-    except Exception as e:
-        return {'consistent': False,
-                'reason': f"não foi possível selecionar o ponto na resposta RANGEEDGES "
-                          f"({type(e).__name__}: {e})."}
-
-    membros_value = (sorted(ponto_value[rota.member_dimension].values.tolist())
-                       if rota.member_dimension in ponto_value.dims else [0])
-    membros_direto = (sorted(ponto_direto[rota.member_dimension].values.tolist())
-                        if rota.member_dimension in ponto_direto.dims else [0])
-    if membros_value != membros_direto:
-        return {'consistent': False,
-                'reason': f"IDs de membros divergentes entre VALUE ({membros_value}) e RANGEEDGES "
-                          f"({membros_direto}) — dimensões incompatíveis."}
-
-    try:
-        l_value = (sorted(float(v) for v in ponto_value[rota.lead_dimension].values)
-                    if rota.lead_dimension in ponto_value.dims else [])
-        l_direto = (sorted(float(v) for v in ponto_direto[rota.lead_dimension].values)
-                     if rota.lead_dimension in ponto_direto.dims else [])
-    except Exception as e:
-        return {'consistent': False,
-                'reason': f"não foi possível ler os valores de {rota.lead_dimension} para comparação "
-                          f"({type(e).__name__}: {e})."}
-    if l_value != l_direto:
-        return {'consistent': False,
-                'reason': f"grade de {rota.lead_dimension} divergente entre VALUE ({l_value}) e "
-                          f"RANGEEDGES ({l_direto}) — dimensões incompatíveis."}
-
-    for l_sel in l_value:
-        fatia_value = (ponto_value.sel({rota.lead_dimension: l_sel})
-                         if rota.lead_dimension in ponto_value.dims else ponto_value)
-        fatia_direto = (ponto_direto.sel({rota.lead_dimension: l_sel})
-                          if rota.lead_dimension in ponto_direto.dims else ponto_direto)
-        for m in membros_value:
-            v_val = (fatia_value.sel({rota.member_dimension: m})
-                       if rota.member_dimension in fatia_value.dims else fatia_value)
-            v_dir = (fatia_direto.sel({rota.member_dimension: m})
-                       if rota.member_dimension in fatia_direto.dims else fatia_direto)
-            try:
-                x = float(np.asarray(v_val.values).squeeze())
-                y = float(np.asarray(v_dir.values).squeeze())
-            except Exception as e:
-                return {'consistent': False,
-                        'reason': f"valor não escalar em {rota.lead_dimension}={l_sel}/"
-                                  f"{rota.member_dimension}={m} ao comparar VALUE/RANGEEDGES "
-                                  f"({type(e).__name__}: {e})."}
-            if not (np.isfinite(x) and np.isfinite(y)):
-                return {'consistent': False,
-                        'reason': f"valor não finito em {rota.lead_dimension}={l_sel}/"
-                                  f"{rota.member_dimension}={m} (VALUE={x}, RANGEEDGES={y}) — "
-                                  f"valores válidos exigidos para a comparação."}
-            if not np.isclose(x, y, rtol=TOLERANCIA_RELATIVA_VALUE_RANGEEDGES,
-                                atol=TOLERANCIA_ABSOLUTA_VALUE_RANGEEDGES):
-                return {'consistent': False,
-                        'reason': f"valores divergem em {rota.lead_dimension}={l_sel}/"
-                                  f"{rota.member_dimension}={m}: VALUE={x!r} vs RANGEEDGES={y!r} "
-                                  f"(diferença {abs(x - y):.3g}, fora da tolerância "
-                                  f"rtol={TOLERANCIA_RELATIVA_VALUE_RANGEEDGES:.0e}/"
-                                  f"atol={TOLERANCIA_ABSOLUTA_VALUE_RANGEEDGES:.0e})."}
-    return {'consistent': True,
-            'reason': f"{len(l_value)} leads x {len(membros_value)} membros comparados entre VALUE e "
-                      f"RANGEEDGES — valores idênticos dentro da tolerância."}
-
-
-def tentar_confirmar_origem_diretamente(rota, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn,
-                                           ponto_original=None):
-    """Item 1/2 (correção 3) — única via que pode produzir
-    `VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED`, e só quando as DUAS
-    condições abaixo se confirmam (nenhuma isolada basta):
-
-    1. A coordenada S sobrevivente em RANGEEDGES tem exatamente 1 valor
-       E esse valor é IGUAL a ano/mês pedidos — não bastava mais ter
-       "só 1 valor" (a revisão apontou que isso não garante que o único
-       valor seja a origem certa); divergência vira
-       `VERIFICATION_OUTCOME_ORIGIN_MISMATCH`, sempre reprovando a
-       confirmação (nunca tratada como inconclusiva — é uma contradição
-       objetiva observada).
-    2. Quando `ponto_original` é informado (o ponto já selecionado da
-       consulta VALUE, a que de fato alimenta o RAW), os dados de
-       precipitação de RANGEEDGES precisam ser consistentes com os de
-       VALUE (`_verificar_consistencia_value_rangeedges`) — divergência
-       vira `VERIFICATION_OUTCOME_DATA_INCONSISTENT`, mesmo com S=data
-       pedida confirmado exatamente (Seção 2 — nunca aprovar só pela
-       coordenada).
-
-    Reusa `nmme_processar._avaliar_selecao_inicializacao` sobre a
-    resposta RANGEEDGES (mesma função que já classifica scalar/
-    singleton/multiple/ausente para a consulta VALUE original) em vez
-    de duplicar essa lógica de detecção."""
-    try:
-        url_direta = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1],
-                                                 preservar_dimensao_s=True)
-    except ValueError as e:
-        return {'outcome': 'NAO_TENTADO', 'method': 'NONE', 'url': '',
-                's_observed': None, 's_count': 0,
-                'result': f'não foi possível montar a URL de confirmação direta (RANGEEDGES): {e}'}
-
-    destino_direto = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
-                                          ano, mes, url=url_direta)
-    try:
-        caminho_direto, _ = baixar_fn(url_direta, destino_direto)
-        ds_direto, _, _ = abrir_dataset_com_fallback_temporal(caminho_direto, abrir_fn, rota.init_dimension)
-    except Exception as e:
-        return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-                's_observed': None, 's_count': 0,
-                'result': f'consulta de confirmação direta (RANGEEDGES) falhou ({type(e).__name__}: {e}) '
-                          f'— origem não pôde ser confirmada diretamente.'}
-
-    if rota.variable_name not in getattr(ds_direto, 'variables', {}):
-        return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-                's_observed': None, 's_count': 0,
-                'result': f'variável {rota.variable_name!r} ausente na resposta de confirmação direta — '
-                          f'origem não pôde ser confirmada diretamente.'}
-
-    selecao_direta = nproc._avaliar_selecao_inicializacao(ds_direto, rota)
-    s_count = selecao_direta['init_axis_size_observed_on_variable']
-    s_observado = selecao_direta['init_value_observed_on_variable']
-    status_direto = selecao_direta['init_selection_status']
-
-    if status_direto in (nproc.INIT_SELECTION_STATUS_OK_SCALAR, nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM):
-        # Item 1 — 1 único valor não basta: precisa ser EXATAMENTE a
-        # origem pedida (ano-mês), nunca só "1 inicialização qualquer".
-        origem_esperada = f'{ano:04d}-{mes:02d}'
-        if s_observado != origem_esperada:
-            return {'outcome': nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH,
-                    'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-                    's_observed': s_observado, 's_count': s_count,
-                    'result': f'RANGEEDGES preservou a dimensão S com 1 único valor, mas esse valor '
-                              f'({s_observado!r}) DIVERGE da origem pedida ({origem_esperada!r}) — '
-                              f'contradição objetiva observada na coordenada, confirmação direta '
-                              f'reprovada (item 1), nunca tratada como EXACT_ORIGIN_CONFIRMED só por '
-                              f'ter 1 valor.'}
-        # Item 2 — S confirmado exatamente; ainda falta confirmar que o
-        # PAYLOAD de precipitação de RANGEEDGES concorda com o de VALUE
-        # (a consulta que de fato alimenta o RAW) antes de aprovar.
-        if ponto_original is not None:
-            consistencia = _verificar_consistencia_value_rangeedges(ponto_original, ds_direto, rota, lat, lon)
-            if not consistencia['consistent']:
-                return {'outcome': nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT,
-                        'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-                        's_observed': s_observado, 's_count': s_count,
-                        'result': f'S confirmado exatamente ({s_observado!r} == {origem_esperada!r}), '
-                                  f'mas os dados de precipitação de RANGEEDGES NÃO são consistentes com '
-                                  f'os da consulta VALUE original (item 2): {consistencia["reason"]} — '
-                                  f'confirmação direta reprovada; o POC não pode ser aprovado com essa '
-                                  f'divergência, mesmo com S=data pedida confirmado.'}
-        return {'outcome': nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED,
-                'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-                's_observed': s_observado, 's_count': s_count,
-                'result': f'S/(mes ano)/(mes ano)/RANGEEDGES preservou a dimensão S com valor '
-                          f'{s_observado!r}, EXATAMENTE igual à origem pedida ({origem_esperada!r}) '
-                          f'(item 1)' + (', e os dados de precipitação concordam com a consulta VALUE '
-                          'original dentro da tolerância (item 2)' if ponto_original is not None else
-                          ', consistência com VALUE não verificada (ponto_original não informado)') +
-                          f' — origem confirmada diretamente pela coordenada observada na resposta, '
-                          f'não pela URL solicitada (Seção 2).'}
-
-    if status_direto == nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE:
-        return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-                's_observed': s_observado, 's_count': s_count,
-                'result': f'RANGEEDGES devolveu {s_count} inicializações associadas à variável '
-                          f'(esperado 1) — confirmação direta inconclusiva.'}
-
-    # S ainda ausente da variável mesmo com RANGEEDGES (ou valor
-    # observado não pôde ser interpretado como data — Seção 3 do item
-    # 1) — item 2 original, fallback de metadado confiável, antes de
-    # desistir da confirmação direta.
-    metadado = _buscar_metadado_confiavel_de_inicializacao(ds_direto, rota, ano, mes)
-    if metadado is not None:
-        origem_esperada = f'{ano:04d}-{mes:02d}'
-        if metadado != origem_esperada:
-            return {'outcome': nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH,
-                    'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
-                    's_observed': metadado, 's_count': 1,
-                    'result': f'metadado confiável identifica a inicialização como {metadado!r}, '
-                              f'DIVERGENTE da origem pedida ({origem_esperada!r}) — confirmação direta '
-                              f'reprovada (item 1).'}
-        if ponto_original is not None:
-            consistencia = _verificar_consistencia_value_rangeedges(ponto_original, ds_direto, rota, lat, lon)
-            if not consistencia['consistent']:
-                return {'outcome': nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT,
-                        'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
-                        's_observed': metadado, 's_count': 1,
-                        'result': f'metadado confirma a origem ({metadado!r}), mas os dados de '
-                                  f'precipitação de RANGEEDGES NÃO são consistentes com os de VALUE '
-                                  f'(item 2): {consistencia["reason"]}.'}
-        return {'outcome': nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED,
-                'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
-                's_observed': metadado, 's_count': 1,
-                'result': f'S ausente da variável mesmo com RANGEEDGES, mas um atributo de metadado '
-                          f'confiável identifica explicitamente a inicialização selecionada '
-                          f'({metadado!r}), igual à origem pedida.'}
-    return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
-            's_observed': None, 's_count': s_count,
-            'result': 'RANGEEDGES não preservou a dimensão S (ou o valor observado não pôde ser '
-                      'interpretado como data) e nenhum metadado confiável identifica explicitamente a '
-                      'inicialização selecionada — confirmação direta não foi possível (Seção 2).'}
-
-
-def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sistema, ano, mes, lat, lon,
-                                                             leads, baixar_fn, abrir_fn):
-    """Item 1/3 (correção) — NUNCA decide `poc_status` nem
-    `init_selection_status` sozinha; devolve só um dos 3 diagnósticos
-    objetivos abaixo, sempre complementar à confirmação DIRETA
-    (`tentar_confirmar_origem_diretamente`). "Formatos diferentes não
-    comprovam seleção correta; valores divergentes comprovam só que as
-    respostas diferem; valores idênticos são um alerta, não prova
-    definitiva" (Seção 1 da correção) — por isso os outcomes possíveis
-    são só DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
-    IDENTICAL_RESPONSES_SUSPECT e INCOMPARABLE_RESPONSES; nunca
-    EXACT_ORIGIN_CONFIRMED (essa só vem da confirmação direta) nem um
-    veredito de reprovação definitiva."""
-    import numpy as np
-
-    origens_tentadas = []
-    url_controle = None
-    for ano_controle in (ano - 1, ano + 1):
+def _baixar_com_status_http(url, destino, sleep_fn=None, max_tentativas=None):
+    """Diagnóstico (item 4) — variante de `nmme_download.baixar_arquivo`
+    que também devolve o status HTTP OBSERVADO (mesmo em sucesso, nunca
+    só inferido de "funcionou = 200"), sem cache (é uma consulta de
+    diagnóstico pontual, não parte do pipeline principal). Nunca usada
+    pelo download do RAW nem pela confirmação direta original —
+    `baixar_arquivo`/`tentar_confirmar_origem_diretamente` continuam
+    com a mesma assinatura de sempre, sem mudança de comportamento.
+    Em falha de rede/timeout (sem resposta HTTP nenhuma), `status_http`
+    volta `None` — nunca inventa um código."""
+    import time as _time
+    import requests
+    sleep_fn = sleep_fn or _time.sleep
+    max_tentativas = max_tentativas or ndl.MAX_TENTATIVAS
+    destino = Path(destino)
+    ultimo_erro = None
+    status_http = None
+    for tentativa in range(1, max_tentativas + 1):
         try:
-            url_controle = ndl.montar_url_para_rota(rota, ano_controle, mes, lat, lon, leads[0], leads[-1])
-            break
-        except ValueError:
-            origens_tentadas.append(f'{ano_controle:04d}-{mes:02d}')
-            url_controle = None
-    if url_controle is None:
-        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
-                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': '',
-                'result': f'nenhuma origem de controle dentro do S grid nativo desta rota (tentativas: '
-                          f'{origens_tentadas}) — diagnóstico de comparação incomparável, nunca tratado '
-                          f'como confirmação ou contradição (Seção 1/4).'}
+            resp = requests.get(url, timeout=ndl.TIMEOUT_SEGUNDOS)
+            status_http = resp.status_code
+            resp.raise_for_status()
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_bytes(resp.content)
+            return destino, status_http
+        except requests.exceptions.HTTPError as e:
+            # Seção 4 — status HTTP de erro é em si uma evidência
+            # objetiva (ex.: 4xx sugere sintaxe rejeitada pelo
+            # servidor) — nunca retentar 4xx como se fosse transitório.
+            status_http = getattr(getattr(e, 'response', None), 'status_code', status_http)
+            return None, status_http
+        except Exception as e:
+            ultimo_erro = e
+            if tentativa < max_tentativas:
+                espera = ndl.ESPERAS_RETRY_SEGUNDOS[min(tentativa - 1, len(ndl.ESPERAS_RETRY_SEGUNDOS) - 1)]
+                sleep_fn(espera)
+    raise RuntimeError(f"consulta de diagnóstico falhou após {max_tentativas} tentativas ({url}): "
+                        f"{ultimo_erro}")
 
-    destino_controle = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
-                                            ano_controle, mes, url=url_controle)
+
+def diagnosticar_origem_s_divergente(rota, sistema, ano, mes, lat, lon, leads, selecao_init_original,
+                                        baixar_com_status_fn=None, abrir_fn=None):
+    """Item 1/2/3/4/5/6/7 (investigação da run 36028568952) — só deve
+    ser chamada quando `selecao_init_original` já tem S PRESENTE na
+    variável com status OK_SCALAR/OK_SINGLETON_DIM E
+    `init_periodo_observado` diferente da origem pedida (o chamador
+    decide isso, esta função não recalcula). Tenta a MESMA confirmação
+    direta via RANGEEDGES (S/(mes ano)/(mes ano)/RANGEEDGES) já usada
+    para o caso S-ausente, mas aqui PURAMENTE como diagnóstico — o
+    resultado NUNCA reclassifica `mapping_status`/`init_selection_
+    status` (que já é MISMATCH, decidido antes desta função ser
+    chamada) nem `poc_status` (item 9: nenhuma aprovação automática
+    nova). Devolve um dict com os 8 campos de auditoria pedidos (item
+    4) mais a classificação objetiva (item 7):
+
+    - SYNTAX_ERROR: o servidor respondeu com HTTP 4xx — evidência de
+      que a URL construída foi rejeitada, não uma suposição sobre
+      semântica de operador.
+    - SELECTION_IGNORED_BY_SERVER: a resposta veio OK (HTTP 2xx), mas o
+      valor de S observado ainda NÃO é a origem pedida (igual ou
+      diferente do valor errado já visto em VALUE) — evidência de que
+      o servidor não aplicou a restrição de RANGEEDGES.
+    - COORD_INTERPRETATION_ISSUE: a resposta veio OK, mas não foi
+      possível interpretar a coordenada S retornada (parsing falhou) —
+      lacuna nossa, não evidência sobre o servidor.
+    - EXACT_MATCH_DESPITE_VALUE_MISMATCH: RANGEEDGES devolveu
+      EXATAMENTE a origem pedida (1 único valor, igual a ano-mês) —
+      achado relevante (RANGEEDGES e VALUE divergem para a mesma
+      origem), mas NUNCA aprova o POC sozinho.
+    - INCONCLUSIVE: falha de rede/timeout ou qualquer outra exceção sem
+      relação clara com sintaxe/seleção/interpretação."""
+    import numpy as np
+
+    origem_esperada = f'{ano:04d}-{mes:02d}'
     try:
-        caminho_controle, _ = baixar_fn(url_controle, destino_controle)
-        ds_controle, _, _ = abrir_dataset_com_fallback_temporal(caminho_controle, abrir_fn,
-                                                                    rota.init_dimension)
-    except Exception as e:
-        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
-                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                'result': f'consulta de controle falhou ({type(e).__name__}: {e}) — diagnóstico de '
-                          f'comparação incomparável, nunca tratado como confirmação (Seção 1/4).'}
+        url_diagnostico = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1],
+                                                       preservar_dimensao_s=True)
+    except ValueError as e:
+        return {'executado': False, 'url': '', 'http_status': None,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_NAO_EXECUTADO,
+                'resultado': f'não foi possível montar a URL de diagnóstico (RANGEEDGES): {e}'}
 
-    if rota.variable_name not in getattr(ds_controle, 'variables', {}):
-        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
-                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                'result': f'variável {rota.variable_name!r} ausente na resposta de controle — '
-                          f'diagnóstico de comparação incomparável.'}
+    baixar_com_status_fn = baixar_com_status_fn or _baixar_com_status_http
+    if abrir_fn is None:
+        import xarray as xr
+        abrir_fn = xr.open_dataset
+    # Path de cache distinto da confirmação direta "S ausente" (mesma
+    # URL base seria possível nas duas, mas os dois diagnósticos nunca
+    # coexistem na mesma execução — string extra é só defesa contra
+    # colisão, não é usada na consulta HTTP em si).
+    destino_diagnostico = ndl.caminho_cache(sistema, rota.data_backend, rota.dataset_representation,
+                                               ano, mes, url=f'{url_diagnostico}|diagnostico_s_divergente')
 
     try:
-        valores_original = np.asarray(ds_original[rota.variable_name].values, dtype=float)
-        valores_controle = np.asarray(ds_controle[rota.variable_name].values, dtype=float)
-        if valores_original.shape != valores_controle.shape:
-            # Item 1 da correção — formatos diferentes NÃO comprovam
-            # seleção correta por si só; é só mais um sinal de resposta
-            # distinta, tratado igual a "valores divergentes" abaixo,
-            # nunca promovido a confirmação.
-            return {'outcome': nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
-                    'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                    'result': f'formato da resposta de controle ({valores_controle.shape}) difere do '
-                              f'formato da resposta original ({valores_original.shape}) — as respostas '
-                              f'diferem, mas isso NÃO comprova, isoladamente, que a original corresponde '
-                              f'exatamente à inicialização pedida (Seção 1).'}
-        comparaveis = np.isfinite(valores_original) & np.isfinite(valores_controle)
-        if not comparaveis.any():
-            return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
-                    'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                    'result': 'nenhum valor finito comparável entre as duas respostas — diagnóstico de '
-                              'comparação incomparável.'}
-        identicos = bool(np.allclose(valores_original[comparaveis], valores_controle[comparaveis]))
+        caminho_diagnostico, http_status = baixar_com_status_fn(url_diagnostico, destino_diagnostico)
     except Exception as e:
-        return {'outcome': nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES,
-                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                'result': f'comparação entre as duas respostas falhou ({type(e).__name__}: {e}) — '
-                          f'diagnóstico de comparação incomparável.'}
+        return {'executado': True, 'url': url_diagnostico, 'http_status': None,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_INCONCLUSIVE,
+                'resultado': f'consulta de diagnóstico (RANGEEDGES) falhou sem resposta HTTP '
+                              f'({type(e).__name__}: {e}) — inconclusivo, não é evidência de sintaxe '
+                              f'nem de seleção ignorada.'}
 
-    if identicos:
-        return {'outcome': nproc.VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT,
-                'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-                'result': f'dados da consulta de controle (origem {ano_controle:04d}-{mes:02d}) são '
-                          f'IDÊNTICOS aos da consulta original (origem {ano:04d}-{mes:02d}) — alerta '
-                          f'de que o servidor pode estar ignorando a seleção de S, mas isso sozinho NÃO '
-                          f'é prova definitiva (Seção 1); só a confirmação direta decide.'}
-    return {'outcome': nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED,
-            'method': 'INGRID_VALUE_CONTROL_QUERY', 'control_url': url_controle,
-            'result': f'dados da consulta de controle (origem {ano_controle:04d}-{mes:02d}) DIVERGEM '
-                      f'dos da consulta original (origem {ano:04d}-{mes:02d}) — comprova só que as '
-                      f'respostas diferem, NÃO que a original corresponde exatamente à inicialização '
-                      f'pedida (Seção 1); só a confirmação direta decide.'}
+    if caminho_diagnostico is None:
+        # Item 7 — HTTP 4xx: o servidor rejeitou o request explicitamente.
+        return {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_SYNTAX_ERROR,
+                'resultado': f'servidor respondeu HTTP {http_status} para a URL de diagnóstico — '
+                              f'evidência objetiva de falha de sintaxe/request rejeitado, nunca tratada '
+                              f'como problema de seleção ou de interpretação de coordenadas.'}
+
+    try:
+        ds_diagnostico, _, info_calendar = abrir_dataset_com_fallback_temporal(
+            caminho_diagnostico, abrir_fn, rota.init_dimension)
+    except Exception as e:
+        return {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                'calendar_original': None, 'calendar_normalized': None,
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE,
+                'resultado': f'resposta HTTP {http_status} recebida, mas o arquivo não pôde ser aberto/'
+                              f'decodificado ({type(e).__name__}: {e}) — problema de interpretação do '
+                              f'nosso lado, não evidência sobre o comportamento do servidor.'}
+
+    if rota.variable_name not in getattr(ds_diagnostico, 'variables', {}):
+        return {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                'calendar_original': info_calendar['calendar_original'],
+                'calendar_normalized': info_calendar['calendar_normalized'],
+                's_axis_size': None, 's_values_observed': [],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE,
+                'resultado': f'variável {rota.variable_name!r} ausente na resposta de diagnóstico — '
+                              f'não é possível ler a coordenada S associada a ela.'}
+
+    selecao_diagnostico = nproc._avaliar_selecao_inicializacao(ds_diagnostico, rota)
+    status_diag = selecao_diagnostico['init_selection_status']
+    s_count = selecao_diagnostico['init_axis_size_observed_on_variable']
+    base_resultado = {'executado': True, 'url': url_diagnostico, 'http_status': http_status,
+                       'calendar_original': info_calendar['calendar_original'],
+                       'calendar_normalized': info_calendar['calendar_normalized'],
+                       's_axis_size': s_count}
+
+    if status_diag in (nproc.INIT_SELECTION_STATUS_OK_SCALAR, nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM):
+        s_observado = selecao_diagnostico['init_value_observed_on_variable']
+        if s_observado == origem_esperada:
+            # Item 7 — achado forte: RANGEEDGES confirma exatamente a
+            # origem que VALUE não confirmou. NUNCA vira aprovação
+            # (item 9) — só registra a divergência de comportamento
+            # entre os dois operadores para investigação humana.
+            return {**base_resultado, 's_values_observed': [s_observado],
+                    'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_EXACT_MATCH_DESPITE_VALUE_MISMATCH,
+                    'resultado': f'RANGEEDGES devolveu exatamente {s_observado!r} == origem pedida '
+                                  f'({origem_esperada!r}), enquanto a consulta VALUE original havia '
+                                  f'devolvido {selecao_init_original.get("init_value_observed_on_variable")!r} '
+                                  f'— os dois operadores se comportam DIFERENTE para a mesma origem. Não '
+                                  f'promove aprovação (item 9); mapping_status já decidido como MISMATCH '
+                                  f'permanece inalterado.'}
+        return {**base_resultado, 's_values_observed': [s_observado],
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER,
+                'resultado': f'RANGEEDGES respondeu HTTP {http_status} com 1 único valor de S '
+                              f'({s_observado!r}), mas ainda DIFERENTE da origem pedida '
+                              f'({origem_esperada!r}) — evidência de que o servidor não aplicou a '
+                              f'restrição de S (nem via VALUE nem via RANGEEDGES).'}
+
+    if status_diag == nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE:
+        valores = selecao_diagnostico.get('init_values_observed_on_variable_multiplos', [])
+        # Item 10 (revisão pós-execução #5, correção da run real
+        # 36032400919) — >1 valor de S NÃO é, por si só, evidência de
+        # que o servidor ignorou a seleção: a run real mostrou
+        # RANGEEDGES devolvendo jan+fev/2005 para limites idênticos a
+        # jan/2005, com a origem pedida presente entre os valores. Só
+        # quando a origem pedida está AUSENTE dos múltiplos valores é
+        # que "ignorado" é a leitura correta; quando está presente, é
+        # uma JANELA que contém a origem certa (achado esperado do
+        # operador, não uma falha do servidor).
+        try:
+            origem_esperada_periodo = pd.Period(origem_esperada, 'M')
+            periodos_observados = [pd.Period(str(v)[:7], 'M') for v in valores]
+            origem_presente_na_janela = origem_esperada_periodo in periodos_observados
+        except Exception:
+            origem_presente_na_janela = False
+        if origem_presente_na_janela:
+            return {**base_resultado, 's_values_observed': valores,
+                    'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_RANGE_WINDOW_MULTIPLE_INITIALIZATIONS,
+                    'resultado': f'RANGEEDGES devolveu {s_count} inicializações associadas à variável '
+                                  f'(valores observados: {valores!r}), mas a origem pedida '
+                                  f'({origem_esperada!r}) ESTÁ presente entre elas — é uma janela que '
+                                  f'contém a origem certa, não uma seleção ignorada; nenhuma escolhida '
+                                  f'automaticamente (item 5).'}
+        return {**base_resultado, 's_values_observed': valores,
+                'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_SELECTION_IGNORED_BY_SERVER,
+                'resultado': f'RANGEEDGES devolveu {s_count} inicializações associadas à variável '
+                              f'(valores observados: {valores!r}), e a origem pedida ({origem_esperada!r}) '
+                              f'NÃO está entre elas — evidência de que o servidor não restringiu S à '
+                              f'origem pedida (nenhuma escolhida automaticamente, item 5).'}
+
+    # S ausente/valor não interpretável mesmo com RANGEEDGES.
+    return {**base_resultado, 's_values_observed': [],
+            'classificacao': nproc.S_DIVERGENTE_DIAGNOSTICO_COORD_INTERPRETATION_ISSUE,
+            'resultado': f'resposta HTTP {http_status} recebida, mas a coordenada S não pôde ser lida/'
+                          f'interpretada na resposta de diagnóstico ({status_diag}) — problema de '
+                          f'interpretação, não confirma nem refuta o comportamento do servidor.'}
 
 
 def validar_acesso_dataset_real(ds, rota):
@@ -926,7 +773,7 @@ def validar_membros_poc(rota, member_ids_axis, member_count_non_missing_por_lead
 
 def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO, sistema=None,
                               esquema_temporal='lead1_igual_mes_inicializacao',
-                              baixar_fn=None, abrir_fn=None):
+                              baixar_fn=None, abrir_fn=None, baixar_com_status_fn=None):
     """Seção 1-11 (Fase 2C.1b) — primeiro POC REAL, só CFSv2, origem
     2005-01, H1-H6. Tenta as rotas na ordem de
     nmme_download.ordem_tentativa_member_level (CCSR se pronta;
@@ -935,7 +782,28 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     calcula skill, nunca usa CHIRPS, nunca baixa série histórica
     completa nem o globo (Seção 4). Devolve um dict de resultado —
     nunca levanta por SERVICE_UNAVAILABLE (Seção 15: reprova o acesso
-    explicitamente em vez de propagar uma exceção não tratada)."""
+    explicitamente em vez de propagar uma exceção não tratada).
+
+    `baixar_com_status_fn` (revisão pós-execução #4, item 4): não é
+    mais usado pelo pipeline principal (o diagnóstico que precisava
+    dele foi desativado na revisão #5 — Seção RANGEEDGES-fonte-
+    principal); mantido só para não quebrar a assinatura de chamadores
+    existentes.
+
+    Revisão pós-execução #5 (RANGEEDGES como fonte principal) — a run
+    real 36032400919 mostrou que o operador Ingrid VALUE pode devolver
+    uma origem TOTALMENTE errada (1982-01 para 2005-01 pedido) sem
+    nenhum erro HTTP. Este pipeline não usa mais VALUE: a URL é montada
+    com `preservar_dimensao_s=True` (S/(mes ano)/(mes ano)/RANGEEDGES),
+    que empiricamente devolve uma JANELA pequena (observado: o mês
+    pedido + o vizinho seguinte, nunca necessariamente 1 único ponto —
+    Seção 6, "não presumir que os mesmos limites em RANGEEDGES
+    necessariamente selecionam uma única inicialização"). A seleção da
+    inicialização exata é feita EXPLICITAMENTE em Python, por
+    coordenada observada (nunca por posição/índice/proximidade —
+    `nmme_processar.selecionar_inicializacao_por_coordenada`), ANTES de
+    qualquer extração de RAW — garante que nenhuma linha RAW possa vir
+    de um mês vizinho presente na janela (Seção 7/9 da correção)."""
     from _c3s_utils import MUNICIPIOS
     import numpy as np
 
@@ -966,7 +834,12 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         try:
             if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
                 raise AcessoRotaError(f"CCSR_BETA está {rota.status} — não tentado (Seção 12).")
-            url = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1])
+            # Revisão pós-execução #5 — RANGEEDGES é a única fonte
+            # primária agora (nunca VALUE); a seleção exata da
+            # inicialização acontece depois, em Python, por coordenada
+            # observada.
+            url = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1],
+                                              preservar_dimensao_s=True)
             # Seção 3/4 (revisão pós-execução #1) — path de cache
             # INDEPENDENTE por backend+representação (nunca mais
             # compartilhado entre Representação A e B do mesmo mês, que
@@ -1055,6 +928,40 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     var_encontrada, units_observado = fatos['variable_observed'], fatos['units_observed']
     da = ds[var_encontrada]
 
+    # Revisão pós-execução #5 (RANGEEDGES como fonte principal, itens
+    # 2-5) — seleção EXPLÍCITA e validada da inicialização, ANTES de
+    # qualquer seleção de ponto/lead/membro, para garantir que nenhuma
+    # linha RAW possa vir de um mês vizinho presente na janela
+    # RANGEEDGES (item "confirmar que nenhuma linha RAW é produzida a
+    # partir de fevereiro de 2005", por exemplo). Reprova explicitamente
+    # aqui, nunca segue adiante com uma inicialização ambígua/ausente/
+    # divergente (Seção 1/9 — nenhuma aprovação automática).
+    selecao_rangeedges = nproc.selecionar_inicializacao_por_coordenada(da, rota_usada, ano, mes, ds=ds)
+    if selecao_rangeedges['status'] != nproc.INIT_SELECTION_STATUS_RANGEEDGES_OK:
+        return {**resultado_base, 'poc_status': f"REPROVADO_INICIALIZACAO_{selecao_rangeedges['status']}",
+                'backend_used': rota_usada.data_backend,
+                'dataset_representation_used': rota_usada.dataset_representation,
+                'backend_fallback_ocorreu': rota_usada.data_backend != backend_requested
+                                             or rota_usada.dataset_representation != representation_requested,
+                'fallback_reason': '', 'representation_changed': False,
+                'source_url': url_usada,
+                'inicializacao_fonte_principal': 'RANGEEDGES',
+                'inicializacao_selecao_metodo': nproc.INIT_SELECTION_METHOD_RANGEEDGES_WINDOW_COORDINATE_MATCH,
+                'inicializacao_selecao_status': selecao_rangeedges['status'],
+                'inicializacao_selecao_valores_antes': selecao_rangeedges['s_values_before'],
+                'inicializacao_selecao_valores_depois': selecao_rangeedges['s_values_after'],
+                'inicializacao_selecao_evidencia': selecao_rangeedges['evidencia'],
+                'raw_df': pd.DataFrame(), 'temporal_audit_df': pd.DataFrame(), 'checklist': {}}
+    da = selecao_rangeedges['da_selecionado']
+    # Revisão de acompanhamento (ajuste pontual pós-#5) — todas as
+    # validações temporais posteriores (`avaliar_mapeamento_temporal`,
+    # inclusive o Método A de variável auxiliar de data-alvo) passam a
+    # usar o Dataset INTEIRO já restrito à mesma inicialização
+    # selecionada acima, nunca o `ds` original (que pode ter mais de 1
+    # inicialização na janela RANGEEDGES). `ds_selecionado` preserva os
+    # atributos de S e L intactos (`.sel()` não os descarta).
+    ds_temporal = selecao_rangeedges['ds_selecionado']
+
     ponto = da.sel({rota_usada.lon_dimension: lon, rota_usada.lat_dimension: lat}, method='nearest')
     selected_lon = float(ponto[rota_usada.lon_dimension].item())
     selected_lat = float(ponto[rota_usada.lat_dimension].item())
@@ -1063,44 +970,14 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     membros_eixo = (list(ponto[rota_usada.member_dimension].values)
                      if rota_usada.member_dimension in ponto.dims else [0])
 
-    # Seção 3 (revisão pós-execução #3, risco residual) — S não varia
-    # por lead, então a seleção de inicialização (e a eventual consulta
-    # de controle, que acessa a rede) é computada UMA VEZ por execução,
-    # nunca recalculada/reconsultada 6x. Só dispara a consulta de
-    # controle quando a via documental (VALUE) não é, sozinha,
-    # suficiente — nunca promove UNCONFIRMED_VALUE_UNVERIFIED para OK
-    # sem essa verificação (Seção 4).
-    selecao_init = nproc._avaliar_selecao_inicializacao(ds, rota_usada)
-    if (time_decode_mode_usada != nproc.TIME_DECODE_MODE_RAW_NUMERIC_CF
-            and selecao_init['init_selection_status']
-            == nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED):
-        # Seção 3 (revisão pós-execução #3, correção 2) — duas camadas,
-        # sempre as duas: a confirmação DIRETA (item 2) é a única que
-        # pode promover o status para OK_INGRID_VALUE_VERIFIED; o
-        # diagnóstico de comparação (item 3) continua rodando como
-        # complementar, mas nunca decide isoladamente (item 1/3 — nem
-        # para aprovar, nem para reprovar).
-        direta = tentar_confirmar_origem_diretamente(
-            rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn, ponto_original=ponto)
-        diagnostico = verificar_selecao_ingrid_value_por_consulta_controle(
-            ds, rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn)
-        exact_ok = direta['outcome'] == nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED
-        status_final = (nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED if exact_ok
-                         else nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
-        metodo_final = direta['method'] if (exact_ok or direta['method'] != 'NONE') else diagnostico['method']
-        resultado_texto = (
-            f"Confirmação direta (RANGEEDGES/metadado — item 2): {direta['result']} | Diagnóstico de "
-            f"comparação (item 3, complementar, nunca decisivo isoladamente): {diagnostico['result']}")
-        selecao_init = {**selecao_init,
-                         'init_selection_status': status_final,
-                         'init_verification_method': metodo_final,
-                         'init_verification_control_url': diagnostico['control_url'],
-                         'init_verification_result': resultado_texto,
-                         'init_verification_direct_url': direta['url'],
-                         'init_verification_s_observed': direta['s_observed'],
-                         'init_verification_s_count': direta['s_count'],
-                         'init_verification_comparison_outcome': diagnostico['outcome'],
-                         'init_verification_exact_outcome': direta['outcome']}
+    # Item 8/9 — reusa a função pura já existente e testada
+    # (`_avaliar_selecao_inicializacao`) sobre a variável JÁ FILTRADA
+    # para 1 única inicialização (item 4 acima); como S agora é
+    # genuinamente scalar/singleton com o valor certo, ela confirma
+    # OK_SCALAR/OK_SINGLETON_DIM — preserva toda a verificação da
+    # semântica documentada de L em `avaliar_mapeamento_temporal`/
+    # `_avaliar_semantica_forecast_period` sem precisar reescrevê-la.
+    selecao_init = nproc._avaliar_selecao_inicializacao(da.to_dataset(name=var_encontrada), rota_usada)
 
     raw_linhas, temporal_linhas = [], []
     n_validos_por_lead, ids_nao_missing_por_lead = [], []
@@ -1108,13 +985,9 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
     init_selection_method = init_value_observed_on_variable = None
     init_axis_size_observed_on_variable = init_selection_status = None
-    init_verification_method = init_verification_control_url = init_verification_result = None
-    init_verification_direct_url = None
-    init_verification_s_observed = init_verification_s_count = None
-    init_verification_comparison_outcome = init_verification_exact_outcome = None
     for lead in leads:
         target_month = nproc.leadtime_para_mes_alvo_nmme(init_date, lead, esquema_temporal)
-        mapeamento = nproc.avaliar_mapeamento_temporal(ds, lead, init_date, esquema_temporal,
+        mapeamento = nproc.avaliar_mapeamento_temporal(ds_temporal, lead, init_date, esquema_temporal,
                                                           time_decode_mode=time_decode_mode_usada,
                                                           rota=rota_usada, selecao_init=selecao_init)
         mapping_confirmation_methods.append(mapeamento['mapping_confirmation_method'])
@@ -1132,22 +1005,6 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             init_axis_size_observed_on_variable = mapeamento['init_axis_size_observed_on_variable']
         if init_selection_status is None:
             init_selection_status = mapeamento['init_selection_status']
-        if not init_verification_method:
-            init_verification_method = mapeamento['init_verification_method']
-        if not init_verification_control_url:
-            init_verification_control_url = mapeamento['init_verification_control_url']
-        if not init_verification_result:
-            init_verification_result = mapeamento['init_verification_result']
-        if not init_verification_direct_url:
-            init_verification_direct_url = mapeamento['init_verification_direct_url']
-        if init_verification_s_observed is None:
-            init_verification_s_observed = mapeamento['init_verification_s_observed']
-        if init_verification_s_count is None:
-            init_verification_s_count = mapeamento['init_verification_s_count']
-        if not init_verification_comparison_outcome:
-            init_verification_comparison_outcome = mapeamento['init_verification_comparison_outcome']
-        if not init_verification_exact_outcome:
-            init_verification_exact_outcome = mapeamento['init_verification_exact_outcome']
         L_sel = mapeamento['source_L']
         fatia_lead = (ponto.sel({rota_usada.lead_dimension: L_sel})
                        if rota_usada.lead_dimension in ponto.dims else ponto)
@@ -1181,21 +1038,15 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
             'init_value_observed_on_variable': mapeamento['init_value_observed_on_variable'],
             'init_axis_size_observed_on_variable': mapeamento['init_axis_size_observed_on_variable'],
             'init_selection_status': mapeamento['init_selection_status'],
-            # Seção 5 (revisão pós-execução #3, correção 2/item 4) —
-            # método/URL/resultado da verificação de controle
-            # independente (só preenchido quando S foi removido da
-            # variável e a via documental por si só não bastou), mais
-            # os campos que distinguem a confirmação DIRETA
-            # (RANGEEDGES/metadado — item 2) do diagnóstico de
-            # comparação (item 1/3, nunca decisivo isoladamente).
-            'init_verification_method': mapeamento['init_verification_method'],
-            'init_verification_control_url': mapeamento['init_verification_control_url'],
-            'init_verification_result': mapeamento['init_verification_result'],
-            'init_verification_direct_url': mapeamento['init_verification_direct_url'],
-            'init_verification_s_observed': mapeamento['init_verification_s_observed'],
-            'init_verification_s_count': mapeamento['init_verification_s_count'],
-            'init_verification_comparison_outcome': mapeamento['init_verification_comparison_outcome'],
-            'init_verification_exact_outcome': mapeamento['init_verification_exact_outcome'],
+            # Revisão pós-execução #5 (RANGEEDGES como fonte principal,
+            # item 9) — identifica RANGEEDGES como fonte principal e o
+            # método de seleção temporal explícita, mais os valores de S
+            # observados antes/depois da seleção (item 5 — nunca só o
+            # escolhido).
+            'inicializacao_fonte_principal': 'RANGEEDGES',
+            'inicializacao_selecao_metodo': nproc.INIT_SELECTION_METHOD_RANGEEDGES_WINDOW_COORDINATE_MATCH,
+            'inicializacao_selecao_valores_antes': '; '.join(selecao_rangeedges['s_values_before']),
+            'inicializacao_selecao_valores_depois': '; '.join(selecao_rangeedges['s_values_after']),
             'notes': f'esquema={esquema_temporal}, representação={rota_usada.dataset_representation}'})
 
     raw_df = pd.DataFrame(raw_linhas)
@@ -1311,24 +1162,20 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         'init_value_observed_on_variable': init_value_observed_on_variable,
         'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
         'init_selection_status': init_selection_status,
-        # Seção 3/5 (revisão pós-execução #3, correção 2/item 4) —
-        # método/URL/resultado da verificação de controle independente
-        # que corrobora ou refuta a documentação do operador Ingrid
-        # VALUE quando S é removido da variável (nunca confirma só pela
-        # documentação — Seção 2/3/4). init_verification_direct_url/
-        # _s_observed/_s_count/_comparison_outcome/_exact_outcome
-        # distinguem a confirmação DIRETA (RANGEEDGES/metadado, item 2
-        # — única via que pode confirmar empiricamente a origem) do
-        # diagnóstico de comparação (item 1/3, sempre complementar,
-        # nunca decisivo isoladamente).
-        'init_verification_method': init_verification_method,
-        'init_verification_control_url': init_verification_control_url,
-        'init_verification_result': init_verification_result,
-        'init_verification_direct_url': init_verification_direct_url,
-        'init_verification_s_observed': init_verification_s_observed,
-        'init_verification_s_count': init_verification_s_count,
-        'init_verification_comparison_outcome': init_verification_comparison_outcome,
-        'init_verification_exact_outcome': init_verification_exact_outcome,
+        # Revisão pós-execução #5 (RANGEEDGES como fonte principal,
+        # itens 1-9) — RANGEEDGES é a ÚNICA fonte primária (nunca VALUE
+        # — Seção 6); a inicialização foi selecionada EXPLICITAMENTE em
+        # Python por coordenada observada (nunca posição/índice/
+        # proximidade — nmme_processar.selecionar_inicializacao_por_
+        # coordenada). s_values_before/depois (item 5) mostram todos os
+        # valores de S observados na janela ANTES da seleção e o único
+        # valor selecionado DEPOIS — nunca só o escolhido.
+        'inicializacao_fonte_principal': 'RANGEEDGES',
+        'inicializacao_selecao_metodo': nproc.INIT_SELECTION_METHOD_RANGEEDGES_WINDOW_COORDINATE_MATCH,
+        'inicializacao_selecao_status': selecao_rangeedges['status'],
+        'inicializacao_selecao_valores_antes': selecao_rangeedges['s_values_before'],
+        'inicializacao_selecao_valores_depois': selecao_rangeedges['s_values_after'],
+        'inicializacao_selecao_evidencia': selecao_rangeedges['evidencia'],
         'mapping_reference': list(rota_usada.mapping_reference),
         'temporal_mapping_status': ('OK' if temporal_audit_df['mapping_status'].eq('OK').all()
                                      else 'UNCONFIRMED'),
@@ -1346,6 +1193,17 @@ def avaliar_aprovacao_poc(resultado):
     if resultado.get('poc_status') == 'REPROVADO_ACESSO':
         return {'poc_status': 'REPROVADO_ACESSO',
                 'checklist': {'download_bem_sucedido': False}}
+    # Revisão pós-execução #5 (RANGEEDGES como fonte principal) —
+    # reprovação na seleção EXPLÍCITA da inicialização (ausente/
+    # duplicada/múltipla após seleção/divergente após seleção) precisa
+    # do mesmo tratamento especial que REPROVADO_ACESSO: o download
+    # funcionou (por isso chegou até aqui), mas raw_df/temporal_audit_df
+    # ficam vazios de propósito — sem este atalho, o checklist genérico
+    # abaixo recalcularia um REPROVADO_H1_A_H6_PRESENTES menos preciso,
+    # perdendo o motivo real (Seção 1/9 — nunca aprova automaticamente).
+    if str(resultado.get('poc_status', '')).startswith('REPROVADO_INICIALIZACAO_'):
+        return {'poc_status': resultado['poc_status'],
+                'checklist': {'download_bem_sucedido': True, 'inicializacao_selecionada_corretamente': False}}
 
     raw_df, temporal_df = resultado['raw_df'], resultado['temporal_audit_df']
     checklist = {
@@ -1553,22 +1411,16 @@ def montar_metadata(sistemas=None, resultado_poc=None):
         'init_axis_size_observed_on_variable': r.get('init_axis_size_observed_on_variable',
                                                         'NAO_EXECUTADO_NESTA_TAREFA'),
         'init_selection_status': r.get('init_selection_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        # Seção 3/5 (revisão pós-execução #3, correção 2/item 4) —
-        # método/URL/resultado da verificação de controle independente,
-        # mais os campos que distinguem a confirmação DIRETA
-        # (RANGEEDGES/metadado) do diagnóstico de comparação
-        # (complementar, nunca decisivo isoladamente).
-        'init_verification_method': r.get('init_verification_method', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_control_url': r.get('init_verification_control_url',
-                                                  'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_result': r.get('init_verification_result', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_direct_url': r.get('init_verification_direct_url', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_s_observed': r.get('init_verification_s_observed', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_s_count': r.get('init_verification_s_count', 'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_comparison_outcome': r.get('init_verification_comparison_outcome',
+        # Revisão pós-execução #5 (RANGEEDGES como fonte principal,
+        # item 9) — identifica RANGEEDGES como fonte principal e o
+        # método/status/valores da seleção explícita da inicialização.
+        'inicializacao_fonte_principal': r.get('inicializacao_fonte_principal', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'inicializacao_selecao_metodo': r.get('inicializacao_selecao_metodo', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'inicializacao_selecao_status': r.get('inicializacao_selecao_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
+        'inicializacao_selecao_valores_antes': r.get('inicializacao_selecao_valores_antes',
+                                                         'NAO_EXECUTADO_NESTA_TAREFA'),
+        'inicializacao_selecao_valores_depois': r.get('inicializacao_selecao_valores_depois',
                                                           'NAO_EXECUTADO_NESTA_TAREFA'),
-        'init_verification_exact_outcome': r.get('init_verification_exact_outcome',
-                                                     'NAO_EXECUTADO_NESTA_TAREFA'),
         'mapping_reference': r.get('mapping_reference', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'poc_status': r.get('poc_status', 'NAO_EXECUTADO_NESTA_TAREFA'),
         'data_execucao': datetime.now(timezone.utc).isoformat(),
@@ -1771,20 +1623,16 @@ def escrever_saidas(sistemas=None, resultado_poc=None):
         # init_selection_* (Seção 7, execução real #3): auditoria da
         # seleção de inicialização por lead, lida da coordenada S da
         # variável REAL, nunca do eixo S global do Dataset.
-        # init_verification_* (revisão pós-execução #3, correção 2/item
-        # 4): método/URL/resultado da verificação de controle
-        # independente (só preenchido quando S foi removido da
-        # variável), com os campos que distinguem a confirmação DIRETA
-        # (RANGEEDGES/metadado — única via que pode confirmar
-        # empiricamente a origem) do diagnóstico de comparação
-        # (complementar, nunca decisivo isoladamente).
+        # inicializacao_* (revisão pós-execução #5, RANGEEDGES como
+        # fonte principal, item 9): identifica RANGEEDGES como fonte
+        # principal e o método/status/valores (antes e depois) da
+        # seleção explícita e validada da inicialização.
         'centre', 'model_name', 'init_date', 'H_lead', 'source_L', 'target_month',
         'mapping_status', 'evidence', 'mapping_confirmation_method',
         'init_selection_method', 'init_value_requested', 'init_value_observed_on_variable',
         'init_axis_size_observed_on_variable', 'init_selection_status',
-        'init_verification_method', 'init_verification_control_url', 'init_verification_result',
-        'init_verification_direct_url', 'init_verification_s_observed', 'init_verification_s_count',
-        'init_verification_comparison_outcome', 'init_verification_exact_outcome',
+        'inicializacao_fonte_principal', 'inicializacao_selecao_metodo',
+        'inicializacao_selecao_valores_antes', 'inicializacao_selecao_valores_depois',
         'notes']))
     access_audit_df = r.get('access_audit_df', pd.DataFrame(columns=[
         # Seção 11 (revisão pós-execução #1) — colunas de auditoria por
@@ -1844,6 +1692,13 @@ def main():
         print(f"poc_status={aprovacao['poc_status']}")
         for chave, valor in aprovacao['checklist'].items():
             print(f"  - {chave}: {valor}")
+        # Revisão pós-execução #5 (RANGEEDGES como fonte principal,
+        # item 9) — impresso no log do job (nunca só no artifact CSV)
+        # para que a seleção fique visível mesmo sem baixar o artifact.
+        print(f"\ninicializacao_fonte_principal={resultado.get('inicializacao_fonte_principal')} "
+              f"inicializacao_selecao_metodo={resultado.get('inicializacao_selecao_metodo')}")
+        print(f"  valores de S antes da seleção: {resultado.get('inicializacao_selecao_valores_antes')}")
+        print(f"  valores de S depois da seleção: {resultado.get('inicializacao_selecao_valores_depois')}")
         if aprovacao['poc_status'] != 'APROVADO':
             raise SystemExit(f"POC real REPROVADO ({aprovacao['poc_status']}) — ver "
                               f"artifacts/nmme_poc/nmme_poc_access_audit.csv e "
