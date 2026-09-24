@@ -457,10 +457,24 @@ class TemporalAuditTestCase(unittest.TestCase):
     def test_k_colunas_exatas(self):
         r = _executar(abrir_fn=lambda c: _ds_representacao_b())
         # mapping_confirmation_method (Seção 5, execução real #2) — qual
-        # dos dois métodos confirmou (ou não) cada lead.
+        # dos dois métodos confirmou (ou não) cada lead. init_selection_*
+        # (Seção 7, execução real #3) — auditoria da seleção de
+        # inicialização por lead. init_verification_* (revisão pós-
+        # execução #3, correção 2/item 4) — método/URL/resultado da
+        # verificação de controle independente, mais os campos que
+        # distinguem a confirmação DIRETA (RANGEEDGES/metadado) do
+        # diagnóstico de comparação (complementar, nunca decisivo
+        # isoladamente).
         colunas_esperadas = {'centre', 'model_name', 'init_date', 'H_lead', 'source_L',
                               'target_month', 'mapping_status', 'evidence',
-                              'mapping_confirmation_method', 'notes'}
+                              'mapping_confirmation_method', 'init_selection_method',
+                              'init_value_requested', 'init_value_observed_on_variable',
+                              'init_axis_size_observed_on_variable', 'init_selection_status',
+                              'init_verification_method', 'init_verification_control_url',
+                              'init_verification_result', 'init_verification_direct_url',
+                              'init_verification_s_observed', 'init_verification_s_count',
+                              'init_verification_comparison_outcome', 'init_verification_exact_outcome',
+                              'notes'}
         self.assertEqual(colunas_esperadas, set(r['temporal_audit_df'].columns))
 
     def test_k_uma_linha_por_lead(self):
@@ -975,6 +989,621 @@ class Execucao2ReproducaoTestCase(unittest.TestCase):
 
             aprovacao = npoc.avaliar_aprovacao_poc(r)
             self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+
+class MesParaIngridTestCase(unittest.TestCase):
+    """Execução real #3 (run 35910675855, Seção 1/2) — a sintaxe Ingrid
+    correta para seleção mensal de S usa o nome abreviado do mês
+    ('Jan', 'Dec'), nunca o número ('01', '12'). O request malformado
+    anterior não gerava erro HTTP — o servidor devolvia silenciosamente
+    o primeiro valor do eixo S global do catálogo (1982-01) em vez da
+    origem pedida (2005-01)."""
+
+    def test_1_2005_01_gera_jan_2005_nunca_01_2005(self):
+        url = ndl.montar_url_iri_cfsv2_nmme_harmonized(2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'])
+        self.assertIn('S/(Jan%202005)/VALUE/', url)
+        self.assertNotIn('01%202005', url)
+
+    def test_2_dezembro_gera_dec(self):
+        url = ndl.montar_url_iri_cfsv2_nmme_harmonized(2005, 12, SAO_BENTO['lat'], SAO_BENTO['lon'])
+        self.assertIn('S/(Dec%202005)/VALUE/', url)
+        self.assertNotIn('12%202005', url)
+
+    def test_mes_para_ingrid_jan_may_sep_dec(self):
+        self.assertEqual(ndl.mes_para_ingrid(1), 'Jan')
+        self.assertEqual(ndl.mes_para_ingrid(5), 'May')
+        self.assertEqual(ndl.mes_para_ingrid(9), 'Sep')
+        self.assertEqual(ndl.mes_para_ingrid(12), 'Dec')
+
+    def test_mes_para_ingrid_fora_da_faixa_falha(self):
+        with self.assertRaises(ValueError):
+            ndl.mes_para_ingrid(13)
+        with self.assertRaises(ValueError):
+            ndl.mes_para_ingrid(0)
+
+    def test_representacao_a_tambem_usa_sintaxe_correta(self):
+        """O mesmo bug existia no builder da Representação A (mesmo
+        padrão de código) — corrigido junto, não só na B."""
+        url = ndl.montar_url_iri_cfsv2_member_level(2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'])
+        self.assertIn('S/(Jan%202005)/VALUE/', url)
+        self.assertNotIn('01%202005', url)
+
+    def test_montar_url_iridl_generico_tambem_corrigido(self):
+        url = ndl.montar_url_iridl(CFSV2, 2005, 1, SAO_BENTO['lat'], SAO_BENTO['lon'],
+                                     variavel='prec')
+        self.assertIn('S/(Jan%202005)/VALUE/', url)
+        self.assertNotIn('01%202005', url)
+
+
+def _ds_selecao_s(modo='scalar', s_periodo='2005-01', n_valores_multiplos=3,
+                    ingrid_value_documentado_na_rota=False):
+    """Dataset sintético focado na dimensão S de 'prec', para os testes
+    de `_avaliar_selecao_inicializacao` (execução real #3, Seção 3).
+    `modo`: 'scalar' (0-d), 'singleton_dim' (dims=('S',), size=1),
+    'multiplo' (size>1 — simula o eixo não filtrado pelo bug real),
+    'ausente' (S não aparece em prec.coords — Ingrid VALUE pode ter
+    removido a dimensão)."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    membros = np.array([1, 2, 3, 4])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    rng = np.random.RandomState(41)
+
+    if modo == 'scalar':
+        da_S = xr.DataArray(pd.Timestamp(f'{s_periodo}-01'),
+                              attrs={'standard_name': 'forecast_reference_time'})
+        dados = 0.00003 + rng.rand(3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S}
+        prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'), coords=coords)
+    elif modo == 'singleton_dim':
+        da_S = xr.DataArray([pd.Timestamp(f'{s_periodo}-01')], dims=('S',),
+                              attrs={'standard_name': 'forecast_reference_time'})
+        dados = 0.00003 + rng.rand(1, 3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'S': da_S, 'X': lons, 'Y': lats, 'L': da_L, 'M': membros}
+        prec = xr.DataArray(dados, dims=('S', 'X', 'Y', 'L', 'M'), coords=coords)
+    elif modo == 'multiplo':
+        # eixo S com múltiplos valores (o primeiro é 1982-01, igual ao
+        # bug real observado) — nunca deve ser lido via flat[0].
+        datas_s = pd.date_range('1982-01-01', periods=n_valores_multiplos, freq='YS')
+        da_S = xr.DataArray(datas_s, dims=('S',), attrs={'standard_name': 'forecast_reference_time'})
+        dados = 0.00003 + rng.rand(n_valores_multiplos, 3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'S': da_S, 'X': lons, 'Y': lats, 'L': da_L, 'M': membros}
+        prec = xr.DataArray(dados, dims=('S', 'X', 'Y', 'L', 'M'), coords=coords)
+    elif modo == 'ausente':
+        dados = 0.00003 + rng.rand(3, 3, len(l_valores), len(membros)) * 0.00004
+        coords = {'X': lons, 'Y': lats, 'L': da_L, 'M': membros}
+        prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'), coords=coords)
+    else:
+        raise ValueError(modo)
+
+    prec.attrs['units'] = 'kg m-2 s-1'
+    return xr.Dataset({'prec': prec})
+
+
+class SelecaoInicializacaoTestCase(unittest.TestCase):
+    """Execução real #3 (Seção 3/4/5/6-E) — leitura da origem S
+    associada à variável REAL de precipitação, nunca do eixo S global
+    do Dataset como um todo (bug real: `ds['S'].values.flat[0]` podia
+    devolver 1982-01 mesmo com a origem pedida sendo 2005-01)."""
+
+    def test_3_s_scalar_confirma(self):
+        ds = _ds_selecao_s(modo='scalar')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_SCALAR)
+        self.assertEqual(r['init_value_observed_on_variable'], '2005-01')
+        self.assertEqual(r['init_axis_size_observed_on_variable'], 1)
+
+    def test_4_s_singleton_dim_confirma(self):
+        ds = _ds_selecao_s(modo='singleton_dim')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM)
+        self.assertEqual(r['init_value_observed_on_variable'], '2005-01')
+
+    def test_5_s_multiplos_valores_reprova(self):
+        ds = _ds_selecao_s(modo='multiplo', n_valores_multiplos=3)
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE)
+        self.assertEqual(r['init_axis_size_observed_on_variable'], 3)
+        self.assertIsNone(r['init_value_observed_on_variable'])
+
+    def test_6_7_nunca_usa_flat0_do_eixo_com_multiplos_valores(self):
+        """O primeiro valor do eixo S de múltiplos valores é 1982-01 —
+        exatamente o valor incorretamente devolvido pelo bug real. A
+        correção NUNCA usa esse valor como origem observada; reprova
+        objetivamente em vez de mascarar como confirmação."""
+        ds = _ds_selecao_s(modo='multiplo', n_valores_multiplos=5)
+        primeiro_valor_do_eixo = str(ds['prec'].coords['S'].values[0])[:7]
+        self.assertEqual(primeiro_valor_do_eixo, '1982-01')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertNotEqual(r.get('init_value_observed_on_variable'), '1982-01')
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE)
+        # via avaliar_mapeamento_temporal (Método B completo) — MISMATCH,
+        # nunca um OK silencioso.
+        r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                          rota=_rota_metodo_b())
+        self.assertEqual(r_completo['mapping_status'], 'MISMATCH')
+
+    def test_8_documentacao_sozinha_nao_confirma_fica_unconfirmed_ate_verificacao(self):
+        """Revisão pós-execução #3 (risco residual) — a documentação do
+        operador Ingrid VALUE, ISOLADAMENTE, não prova que o servidor
+        selecionou a inicialização pedida; fica UNCONFIRMED_VALUE_
+        UNVERIFIED (nunca OK) até uma verificação de controle
+        independente confirmar (Seção 2/3/4 — testada ponta a ponta em
+        VerificacaoControleValueTestCase)."""
+        import dataclasses
+        ds = _ds_selecao_s(modo='ausente')
+        rota_documentada = dataclasses.replace(_rota_metodo_b(),
+                                                  ingrid_value_init_selection_documented=True)
+        r = nproc._avaliar_selecao_inicializacao(ds, rota_documentada)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_selection_method'],
+                          nproc.INIT_SELECTION_METHOD_REQUEST_CONFIRMED_SELECTION)
+        r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                          rota=rota_documentada)
+        self.assertEqual(r_completo['mapping_status'], 'UNCONFIRMED')
+
+    def test_8b_sem_documentacao_s_ausente_fica_unconfirmed(self):
+        """A mesma ausência de S, mas SEM
+        ingrid_value_init_selection_documented=True na rota — nunca
+        confirma por padrão."""
+        ds = _ds_selecao_s(modo='ausente')
+        r = nproc._avaliar_selecao_inicializacao(ds, _rota_metodo_b())
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD)
+        r_completo = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'),
+                                                          rota=_rota_metodo_b())
+        self.assertEqual(r_completo['mapping_status'], 'UNCONFIRMED')
+
+    def test_9_l_fora_da_grade_continua_obrigatorio(self):
+        """Regressão — a correção da seleção S não afrouxa a exigência
+        de L=0.5..5.5 do Método B."""
+        ds = _ds_selecao_s(modo='scalar')
+        ds['L'] = ds['L'].assign_attrs(units='days')   # quebra só o requisito de L
+        r = nproc.avaliar_mapeamento_temporal(ds, 1, pd.Period('2005-01', 'M'), rota=_rota_metodo_b())
+        self.assertEqual(r['mapping_status'], 'UNCONFIRMED')
+
+
+class Execucao3ReproducaoTestCase(unittest.TestCase):
+    """Reprodução ponta a ponta da execução real #3 (run 35910675855) —
+    com a sintaxe Ingrid corrigida (Jan 2005) e a leitura de S corrigida
+    (variável real, nunca eixo global), o mesmo cenário real (sem
+    variável target, backend IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY, 24
+    membros) deve chegar a APROVADO (item 9/9-#10)."""
+
+    def _ds_execucao3(self, n_membros=24):
+        lon_sb_360 = SAO_BENTO['lon'] % 360.0
+        lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+        lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+        l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+        membros = np.arange(1, n_membros + 1)
+        rng = np.random.RandomState(51)
+        dados = 0.5 + rng.rand(3, 3, len(l_valores), n_membros) * 3.0
+        da_S = xr.DataArray(pd.Timestamp('2005-01-01'), attrs={'standard_name': 'forecast_reference_time'})
+        da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                              attrs={'units': 'months', 'standard_name': 'forecast_period'})
+        prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                              coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+        prec.attrs['units'] = 'mm/day'
+        return xr.Dataset({'prec': prec})
+
+    def test_10_run_sintetica_equivalente_a_execucao3_chega_a_aprovado(self):
+        ds = self._ds_execucao3()
+        r = _executar(abrir_fn=lambda c: ds)
+        self.assertEqual(r['poc_status'], 'PROCESSADO')
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
+        self.assertTrue((r['temporal_audit_df']['init_selection_status']
+                          == nproc.INIT_SELECTION_STATUS_OK_SCALAR).all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_10b_url_gerada_na_execucao_usa_sintaxe_correta(self):
+        chamadas = []
+
+        def baixar_registra(url, destino):
+            chamadas.append(url)
+            return ('/tmp/fake-exec3.nc', False)
+
+        ds = self._ds_execucao3()
+        _executar(abrir_fn=lambda c: ds, baixar_fn=baixar_registra)
+        self.assertTrue(any('S/(Jan%202005)/VALUE/' in u for u in chamadas))
+        self.assertFalse(any('01%202005' in u for u in chamadas))
+
+
+def _ds_execucao3_sem_s(valor_base=0.5, escala=3.0, semente=61, n_membros=24):
+    """Dataset sintético equivalente a `_ds_execucao3`, mas com S
+    REMOVIDO de 'prec' (Ingrid VALUE eliminou a dimensão) — S continua
+    presente no Dataset como um todo (variável decoy, dimensão própria,
+    nunca compartilhada com 'prec') só para satisfazer o check de
+    dimensões de `validar_acesso_dataset_real` (Seção 5/6), exatamente
+    como um NetCDF real poderia preservar um artefato vestigial de S em
+    outra variável enquanto 'prec' já foi recortado. Usado pelos testes
+    de verificação de controle (revisão pós-execução #3, risco
+    residual) — nunca cai para esse S decoy como substituto (é isso
+    que a correção anterior já garante, lendo de `da.coords`)."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros})
+    prec.attrs['units'] = 'mm/day'
+    decoy_com_s = xr.DataArray([1.0], dims=('S',),
+                                 coords={'S': [pd.Timestamp('2005-01-01')]})
+    return xr.Dataset({'prec': prec, 'decoy_com_s_vestigial': decoy_com_s})
+
+
+def _ds_com_s_scalar_confirmado(valor_base=0.5, escala=3.0, semente=61, n_membros=24,
+                                   s_valor='2005-01-01'):
+    """Variante de `_ds_execucao3_sem_s` com S SCALAR associado a
+    'prec' — usada como resposta da tentativa de confirmação DIRETA
+    (S/(Jan 2005)/(Jan 2005)/RANGEEDGES) quando ela tem sucesso em
+    preservar a dimensão S (Seção 2 da correção pós-execução #3)."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_S = xr.DataArray(pd.Timestamp(s_valor), attrs={'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+    prec.attrs['units'] = 'mm/day'
+    return xr.Dataset({'prec': prec})
+
+
+def _ds_com_s_scalar_nao_interpretavel(valor_base=0.5, escala=3.0, semente=61, n_membros=24):
+    """Variante de `_ds_com_s_scalar_confirmado` com S presente na
+    variável (1 único valor, não removido por RANGEEDGES) mas cujo
+    conteúdo NÃO é interpretável como data (correção 3, item 1 — "se
+    não for possível interpretar a data, retornar resultado
+    inconclusivo"). `pd.Period(str(bruto)[:7], 'M')` levanta ValueError
+    para essa string, reproduzindo o caminho de exceção real de
+    `nmme_processar._avaliar_selecao_inicializacao`."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_S = xr.DataArray('nao-e-uma-data', attrs={'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+    prec.attrs['units'] = 'mm/day'
+    return xr.Dataset({'prec': prec})
+
+
+class VerificacaoControleValueTestCase(unittest.TestCase):
+    """Revisão pós-execução #3, correção 2 (a revisão identificou dois
+    problemas na consulta de controle — corrigidos aqui). Desenho em
+    duas camadas:
+
+    - `tentar_confirmar_origem_diretamente` (item 2) — S/(Jan 2005)/
+      (Jan 2005)/RANGEEDGES tenta preservar a coordenada S; só um
+      sucesso aqui (EXACT_ORIGIN_CONFIRMED) pode promover
+      `init_selection_status` para OK_INGRID_VALUE_VERIFIED.
+    - `verificar_selecao_ingrid_value_por_consulta_controle` (item 1/3)
+      — diagnóstico de comparação com uma origem diferente, SEMPRE
+      complementar, NUNCA decisivo isoladamente: formatos diferentes,
+      valores divergentes e valores idênticos são todos tratados como
+      evidência insuficiente por si só (testado explicitamente abaixo).
+
+    Dispatch de 3 variantes de URL no dublê de rede: a URL de
+    confirmação direta contém a cláusula S/(Jan%202005)/(Jan%202005)/
+    RANGEEDGES (dois limites IGUAIS à origem pedida — diferente da
+    cláusula L, que também usa RANGEEDGES mas com limites de lead,
+    nunca (Jan 2005)/(Jan 2005)); a URL primária contém S/(Jan%202005)/
+    VALUE; qualquer outra é a consulta de controle (origem diferente)."""
+
+    @staticmethod
+    def _duplas_baixar_abrir(ds_primaria, ds_direta=None, ds_controle=None,
+                                direta_levanta=None, controle_levanta=None):
+        def baixar_fn(url, destino):
+            return (url, False)   # usa a própria URL como "caminho" p/ desambiguar no abrir_fn
+
+        def abrir_fn(caminho, **kwargs):
+            if 'S/(Jan%202005)/(Jan%202005)/RANGEEDGES' in caminho:
+                if direta_levanta is not None:
+                    raise direta_levanta
+                if ds_direta is None:
+                    raise OSError('confirmação direta não configurada neste dublê de teste')
+                return ds_direta
+            if 'S/(Jan%202005)/VALUE' in caminho:
+                return ds_primaria
+            if controle_levanta is not None:
+                raise controle_levanta
+            return ds_controle
+
+        return baixar_fn, abrir_fn
+
+    def test_confirmacao_direta_rangeedges_confirma_e_aprova(self):
+        """Único caminho que pode chegar a OK_INGRID_VALUE_VERIFIED/
+        APROVADO — RANGEEDGES preservou S como scalar == origem pedida
+        (item 2). O diagnóstico de comparação roda junto (item 3,
+        preservado) mas não é o que decide aqui."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        self.assertEqual(r['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertEqual(r['init_verification_method'], 'INGRID_S_SINGLETON_RANGEEDGES')
+        self.assertTrue(r['init_verification_direct_url'])
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')
+        self.assertEqual(r['init_verification_s_count'], 1)
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'OK').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_diferencas_de_precipitacao_no_diagnostico_nao_confirmam_sozinhas(self):
+        """Item 1/5 — valores divergentes na consulta de controle
+        comprovam só que as respostas diferem, NUNCA promovem sozinhos
+        a OK_INGRID_VALUE_VERIFIED quando a confirmação direta não teve
+        sucesso (aqui, RANGEEDGES não configurada -> falha)."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)   # valores DIFERENTES
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED)
+        self.assertNotEqual(r['init_verification_exact_outcome'],
+                             nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertIn('NÃO', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_valores_identicos_sao_so_alerta_nunca_reprovacao_definitiva(self):
+        """Item 1/5 — valores idênticos na consulta de controle são um
+        ALERTA (IDENTICAL_RESPONSES_SUSPECT), não a prova de que o
+        servidor ignorou S: nunca força mais um MISMATCH definitivo
+        (comportamento antigo, removido) — fica UNCONFIRMED, igual a
+        qualquer outra evidência insuficiente."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=61)   # MESMOS valores
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT)
+        self.assertIn('IDÊNTICOS', r['init_verification_result'])
+        self.assertIn('NÃO', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+        self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'MISMATCH').any())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_formato_diferente_entre_respostas_nao_comprova_selecao_correta(self):
+        """Item 1/5 — formatos diferentes entre a resposta original e a
+        de controle não comprovam, isoladamente, que a seleção foi
+        correta; tratado como mais um caso de DIFFERENT_RESPONSES_
+        ORIGIN_UNVERIFIED, nunca uma confirmação."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61, n_membros=24)
+        ds_controle = _ds_execucao3_sem_s(semente=61, n_membros=20)   # formato (shape) diferente
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED)
+        self.assertIn('formato', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_verificacao_inconclusiva_control_query_falha_fica_unconfirmed(self):
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(
+            ds_primaria, controle_levanta=OSError('controle indisponível (simulado)'))
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_selection_status'],
+                          nproc.INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED)
+        self.assertEqual(r['init_verification_comparison_outcome'],
+                          nproc.VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES)
+        self.assertIn('incomparável', r['init_verification_result'])
+        self.assertTrue((r['temporal_audit_df']['mapping_status'] == 'UNCONFIRMED').all())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_confirmacao_direta_falhando_registra_nao_conclusivo(self):
+        """Item 2 — a tentativa de confirmação direta que não conseguiu
+        preservar S (aqui: RANGEEDGES não configurada no dublê ->
+        exceção) fica NAO_CONCLUSIVO, nunca é tratada como
+        EXACT_ORIGIN_CONFIRMED por omissão."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(
+            ds_primaria, ds_controle=ds_controle,
+            direta_levanta=OSError('RANGEEDGES indisponível (simulado)'))
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_exact_outcome'], 'NAO_CONCLUSIVO')
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_verificacao_registra_todos_os_campos_de_diagnostico_no_temporal_audit(self):
+        """Item 4 — os 8 elementos pedidos ficam auditáveis: URL
+        original (`source_url`, já existente fora deste dict), URL de
+        controle, método de seleção de S, coordenada S observada,
+        quantidade de inicializações, resultado da comparação,
+        resultado da confirmação exata e a justificativa final."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertTrue(r['source_url'])   # URL original
+        linha = r['temporal_audit_df'].iloc[0]
+        for campo in ('init_verification_method', 'init_verification_control_url',
+                      'init_verification_result', 'init_verification_direct_url',
+                      'init_verification_s_observed', 'init_verification_s_count',
+                      'init_verification_comparison_outcome', 'init_verification_exact_outcome'):
+            self.assertIn(campo, linha.index, msg=f'{campo} ausente do temporal_audit_df')
+        self.assertTrue(linha['init_verification_control_url'])
+        self.assertTrue(linha['init_verification_direct_url'])
+        self.assertEqual(linha['init_verification_s_observed'], '2005-01')
+        self.assertEqual(linha['init_verification_s_count'], 1)
+        self.assertEqual(linha['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertTrue(linha['init_verification_result'])
+
+
+class ConfirmacaoDiretaExataTestCase(unittest.TestCase):
+    """Revisão pós-execução #3, correção 3 — a revisão apontou que a
+    confirmação direta via RANGEEDGES tinha dois problemas: (1) tratava
+    "S tem 1 único valor" como suficiente, sem checar se esse valor era
+    de fato a origem pedida; (2) nunca comparava o PAYLOAD de
+    precipitação de RANGEEDGES com o da consulta VALUE original (a que
+    alimenta o RAW de fato). Os testes abaixo cobrem os dois pontos
+    isoladamente e em combinação, sempre via `executar_poc_real_cfsv2`
+    ponta a ponta (não chamando `tentar_confirmar_origem_diretamente`
+    diretamente, para também exercitar `ponto_original` sendo passado
+    pela orquestração)."""
+
+    @staticmethod
+    def _duplas_baixar_abrir(ds_primaria, ds_direta=None, ds_controle=None):
+        return VerificacaoControleValueTestCase._duplas_baixar_abrir(
+            ds_primaria, ds_direta=ds_direta, ds_controle=ds_controle)
+
+    def test_s_unico_igual_a_2005_01_confirma(self):
+        """Item 3, caso 1 — S único e IGUAL à origem pedida (o caminho
+        já coberto por VerificacaoControleValueTestCase, reafirmado
+        aqui pelo nome exato pedido na revisão)."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')
+        self.assertEqual(r['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_s_unico_diferente_de_2005_01_gera_origin_mismatch(self):
+        """Item 3, caso 2 — S único, mas DIFERENTE da origem pedida
+        (2005-02 em vez de 2005-01): item 1 exige reprovar a
+        confirmação com ORIGIN_MISMATCH, nunca tratar "1 valor" como
+        suficiente."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-02-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-02')
+        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH)
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        self.assertIn('DIVERGE', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_s_nao_interpretavel_fica_inconclusivo(self):
+        """Item 3, caso 3 — S presente mas com conteúdo não
+        interpretável como data: nunca vira EXACT_ORIGIN_CONFIRMED nem
+        ORIGIN_MISMATCH (não dá para comparar o que não foi lido) — só
+        inconclusivo."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_nao_interpretavel(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertIsNone(r['init_verification_s_observed'])
+        self.assertEqual(r['init_verification_exact_outcome'], 'NAO_CONCLUSIVO')
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_value_e_rangeedges_com_dados_equivalentes_permite_aprovar(self):
+        """Item 3, caso 4 — mesma origem, mesmos membros/leads, valores
+        de precipitação NUMERICAMENTE equivalentes entre VALUE e
+        RANGEEDGES (mesma semente -> mesmos dados sintéticos):
+        consistência confirmada, nada impede a aprovação."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_value_e_rangeedges_com_dados_divergentes_nao_aprova(self):
+        """Item 3, caso 5 — mesma origem (S=2005-01 confirmado nos dois
+        lados), mas os VALORES de precipitação divergem (sementes
+        diferentes simulando respostas HTTP com payloads diferentes):
+        item 2 exige reprovar mesmo com S correto."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=99, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')   # S sozinho bateu
+        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT)
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        self.assertIn('divergem', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_diferencas_de_membros_entre_value_e_rangeedges_reprovam(self):
+        """Item 3, caso 6 — mesma origem, mas os IDs/dimensões de
+        membros de RANGEEDGES não batem com os de VALUE (24 vs. 20
+        membros): dimensões incompatíveis, nunca comparadas às cegas
+        nem aprovadas."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61, n_membros=24)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01', n_membros=20)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT)
+        self.assertIn('membros', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_confirmacao_direta_correta_sem_equivalencia_dos_dados_nao_aprova_poc(self):
+        """Item 3, caso 7 (explícito) — mesmo com a confirmação direta
+        "correta" quanto à origem (S == 2005-01, item 1 satisfeito), a
+        ausência de equivalência de dados (item 2) tem que impedir a
+        aprovação do POC inteiro, não só marcar um campo de auditoria:
+        checa também que mapping_status nunca vira 'OK' em nenhum lead
+        nesse cenário."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=99, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')
+        self.assertNotEqual(r['init_verification_exact_outcome'],
+                             nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'OK').any())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
 
 
 if __name__ == '__main__':

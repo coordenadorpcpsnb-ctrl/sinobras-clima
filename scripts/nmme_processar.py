@@ -262,38 +262,204 @@ STANDARD_NAME_S_FORECAST_REFERENCE_TIME = 'forecast_reference_time'
 STANDARD_NAME_L_FORECAST_PERIOD = 'forecast_period'
 LEAD_UNITS_MONTHS_ACEITAS = {'months', 'month'}
 
+# ══════════════════════════════════════════════════════════════════════════
+# Execução real #3 (run 35910675855, Seção 3/4/5) — bug real encontrado:
+# a leitura da origem observada usava ds[dim_s].values.flat[0] do eixo S
+# GLOBAL do Dataset (que pode preservar o eixo completo do catálogo-
+# fonte, 1982-2010, mesmo depois de 'prec' já ter sido recortado para 1
+# única origem) — o primeiro valor desse eixo global (1982-01) NÃO é
+# evidência de nada sobre a origem de fato usada pela variável real.
+# `_avaliar_selecao_inicializacao` corrige isso: inspeciona a coordenada
+# S tal como associada à variável REAL de precipitação
+# (rota.variable_name), nunca o eixo global do Dataset como um todo.
+# ══════════════════════════════════════════════════════════════════════════
 
-def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date):
-    """Método B (Seção 4) — os 7 requisitos são checados de forma
-    INDEPENDENTE e objetiva. Distingue duas classes de falha: falta de
-    EVIDÊNCIA (standard_name/units ausentes, rota sem documentação —
-    vira UNCONFIRMED, nunca uma afirmação) de CONTRADIÇÃO objetiva (S
-    observado diverge da origem pedida, ou a grade de L observada
-    diverge da esperada — vira MISMATCH, o mesmo tratamento que o
-    Método A já dava a uma variável auxiliar discordante)."""
+INIT_SELECTION_STATUS_OK_SCALAR = 'OK_SCALAR_COORD'
+INIT_SELECTION_STATUS_OK_SINGLETON_DIM = 'OK_SINGLETON_DIM'
+INIT_SELECTION_STATUS_FAIL_MULTIPLE = 'FAIL_MULTIPLE_INITIALIZATIONS'
+INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD = 'UNCONFIRMED_NO_INIT_COORD'
+# Revisão pós-execução #3 (risco residual, correção 2) — a documentação
+# do operador Ingrid VALUE sozinha NÃO prova que o servidor de fato
+# selecionou a inicialização pedida quando S é removido da variável.
+# `UNCONFIRMED_VALUE_UNVERIFIED` é o status DEFAULT enquanto isso — só
+# sobe para `OK_INGRID_VALUE_VERIFIED` quando uma CONFIRMAÇÃO DIRETA
+# (nmme_poc.tentar_confirmar_origem_diretamente — seleção S/.../.../
+# RANGEEDGES que preserva a dimensão, ou metadado confiável) observa a
+# origem de fato, nunca a partir de comparação indireta de valores de
+# precipitação (Seção 1/2 — "formatos diferentes não comprovam seleção
+# correta; valores divergentes comprovam só que as respostas diferem;
+# valores idênticos são um alerta, não prova definitiva"). A consulta
+# de controle (nmme_poc.verificar_selecao_ingrid_value_por_consulta_
+# controle) continua rodando como DIAGNÓSTICO complementar (Seção 3),
+# mas nunca decide `init_selection_status` sozinha — seu resultado (um
+# dos VERIFICATION_OUTCOME_* abaixo) só vai para os campos de auditoria
+# `init_verification_*`.
+INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED = 'UNCONFIRMED_VALUE_UNVERIFIED'
+INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED = 'OK_INGRID_VALUE_VERIFIED'
+
+# Revisão pós-execução #3 (correção 2, item 1) — outcomes objetivos da
+# verificação da seleção via Ingrid VALUE. Só EXACT_ORIGIN_CONFIRMED
+# pode confirmar empiricamente a origem (vem da confirmação DIRETA,
+# nunca da comparação indireta abaixo) — os outros três são
+# diagnósticos/alertas, nunca produzem confirmação nem contradição
+# definitiva por si só.
+VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED = 'EXACT_ORIGIN_CONFIRMED'
+VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED = 'DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED'
+VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT = 'IDENTICAL_RESPONSES_SUSPECT'
+VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES = 'INCOMPARABLE_RESPONSES'
+# Revisão pós-execução #3 (correção 3, itens 1/2) — a confirmação DIRETA
+# (RANGEEDGES) por si só, ao só olhar "a dimensão S tem 1 único valor",
+# não bastava: o valor único podia não ser a origem pedida, e o payload
+# de precipitação de RANGEEDGES podia divergir do da consulta VALUE
+# original (usada de fato no RAW). Nenhum dos dois outcomes abaixo pode
+# virar EXACT_ORIGIN_CONFIRMED nem OK_INGRID_VALUE_VERIFIED —
+# `tentar_confirmar_origem_diretamente` só devolve EXACT_ORIGIN_CONFIRMED
+# quando o valor único bate EXATAMENTE com ano/mês pedidos (item 1) E os
+# dados de precipitação de RANGEEDGES concordam com os de VALUE dentro
+# de tolerância mínima (item 2).
+VERIFICATION_OUTCOME_ORIGIN_MISMATCH = 'ORIGIN_MISMATCH'
+VERIFICATION_OUTCOME_DATA_INCONSISTENT = 'DATA_INCONSISTENT_WITH_VALUE'
+
+INIT_SELECTION_METHOD_SCALAR_COORD = 'SCALAR_COORD_ON_VARIABLE'
+INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
+# Seção 2 (revisão pós-execução #3) — rótulo documental (nunca
+# empírico) para quando S foi removido da variável e a rota documenta a
+# semântica de seleção-única do operador Ingrid VALUE. Por si só NUNCA
+# confirma — só descreve a HIPÓTESE que a verificação de controle
+# tentará corroborar ou refutar objetivamente.
+INIT_SELECTION_METHOD_REQUEST_CONFIRMED_SELECTION = 'REQUEST_CONFIRMED_SELECTION'
+INIT_SELECTION_METHOD_NONE = 'NONE'
+
+
+def _avaliar_selecao_inicializacao(ds, rota):
+    """Seção 3/4/5 — nunca usa `ds[dim_s].values.flat[0]` de um eixo S
+    GLOBAL como origem observada. Inspeciona a coordenada S tal como
+    associada à variável REAL de precipitação (`rota.variable_name`):
+
+    1/2/3. S presente em `da.coords` com exatamente 1 valor (scalar ou
+       coordenada/dimensão singleton) -> lê esse único valor -> OK.
+    4. S presente em `da.coords`/`da.dims` com MAIS de 1 valor -> o
+       subset de origem não ocorreu de fato -> FAIL (contradição).
+    5. S ausente de `da.coords` por completo (Ingrid VALUE pode ter
+       removido a dimensão) -> registra REQUEST_CONFIRMED_SELECTION
+       como evidência DOCUMENTAL apenas (nunca empírica) quando
+       `rota.ingrid_value_init_selection_documented=True` — fica
+       UNCONFIRMED_VALUE_UNVERIFIED até uma consulta de controle
+       independente confirmar (Seção 3, chamada de fora desta função
+       pura, que não tem acesso à rede); sem documentação nenhuma,
+       UNCONFIRMED_NO_INIT_COORD — nunca cai para o eixo global como
+       substituto."""
     dim_s = getattr(rota, 'init_dimension', None) or 'S'
+    nome_var = getattr(rota, 'variable_name', None)
+    da = ds[nome_var] if nome_var and hasattr(ds, 'variables') and nome_var in ds.variables else None
+    # audit-only — nunca usado para decidir pass/fail (Seção 6, item A-E
+    # atualizado não exige mais isso como requisito próprio).
+    standard_name_s = (da.coords[dim_s].attrs.get('standard_name')
+                        if da is not None and dim_s in getattr(da, 'coords', {}) else None)
+
+    if da is None or dim_s not in getattr(da, 'coords', {}):
+        if getattr(rota, 'ingrid_value_init_selection_documented', False):
+            return {'init_selection_method': INIT_SELECTION_METHOD_REQUEST_CONFIRMED_SELECTION,
+                    'init_value_observed_on_variable': None,
+                    'init_axis_size_observed_on_variable': 0,
+                    'init_selection_status': INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED,
+                    'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+        return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
+                'init_value_observed_on_variable': None,
+                'init_axis_size_observed_on_variable': 0,
+                'init_selection_status': INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD,
+                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+
+    s_coord = da.coords[dim_s]
+    tamanho = int(s_coord.size)
+    if tamanho > 1:
+        return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
+                'init_value_observed_on_variable': None,
+                'init_axis_size_observed_on_variable': tamanho,
+                'init_selection_status': INIT_SELECTION_STATUS_FAIL_MULTIPLE,
+                'init_periodo_observado': None, 'standard_name_s_observed': standard_name_s}
+
+    try:
+        bruto = np.asarray(s_coord.values).flat[0]
+        periodo_observado = pd.Period(str(bruto)[:7], 'M')
+    except Exception:
+        return {'init_selection_method': INIT_SELECTION_METHOD_NONE,
+                'init_value_observed_on_variable': None,
+                'init_axis_size_observed_on_variable': tamanho,
+                'init_selection_status': INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD,
+                'standard_name_s_observed': standard_name_s,
+                'init_periodo_observado': None}
+
+    if dim_s in da.dims:
+        metodo, status = INIT_SELECTION_METHOD_SINGLETON_DIM, INIT_SELECTION_STATUS_OK_SINGLETON_DIM
+    else:
+        metodo, status = INIT_SELECTION_METHOD_SCALAR_COORD, INIT_SELECTION_STATUS_OK_SCALAR
+    return {'init_selection_method': metodo,
+            'init_value_observed_on_variable': str(periodo_observado),
+            'init_axis_size_observed_on_variable': tamanho,
+            'init_selection_status': status,
+            'standard_name_s_observed': standard_name_s,
+            'init_periodo_observado': periodo_observado}
+
+
+def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date, selecao_init=None):
+    """Método B (Seção 4/6) — os requisitos A-E são checados de forma
+    INDEPENDENTE e objetiva. Distingue duas classes de falha: falta de
+    EVIDÊNCIA (units/standard_name ausentes, rota sem documentação, S
+    ausente da variável sem confirmação DIRETA concluída — vira
+    UNCONFIRMED, nunca uma afirmação) de CONTRADIÇÃO objetiva (S
+    observado na variável diverge da origem pedida, múltiplas
+    inicializações presentes, ou a grade de L observada diverge da
+    esperada — vira MISMATCH, o mesmo tratamento que o Método A já dava
+    a uma variável auxiliar discordante).
+
+    Revisão pós-execução #3 (correção 2, risco residual) — a
+    comparação indireta de valores de precipitação entre origens
+    (nmme_poc.verificar_selecao_ingrid_value_por_consulta_controle)
+    NUNCA decide esta classificação sozinha, nem para confirmar nem
+    para contradizer: "formatos diferentes não comprovam seleção
+    correta; valores divergentes comprovam só que as respostas
+    diferem; valores idênticos são um alerta, não prova definitiva"
+    (Seção 1). Só uma confirmação DIRETA da origem
+    (nmme_poc.tentar_confirmar_origem_diretamente — seleção S/.../.../
+    RANGEEDGES que preserva a dimensão, ou metadado confiável) pode
+    produzir `INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED`.
+
+    `selecao_init`, quando informado, é o resultado PRÉ-CALCULADO de
+    `_avaliar_selecao_inicializacao` (mais a eventual confirmação
+    direta/diagnóstico de controle, computados pelo chamador — que
+    precisam de acesso à rede, fora do escopo desta função pura)."""
     dim_l = getattr(rota, 'lead_dimension', None) or 'L'
     insuficientes, contraditorias = [], []
 
-    # 1. S identificado como forecast_reference_time.
-    s_attrs = dict(ds[dim_s].attrs) if dim_s in getattr(ds, 'coords', {}) else {}
-    s_standard_name = s_attrs.get('standard_name')
-    if s_standard_name != STANDARD_NAME_S_FORECAST_REFERENCE_TIME:
-        insuficientes.append(f"{dim_s}.standard_name={s_standard_name!r} (esperado "
-                               f"{STANDARD_NAME_S_FORECAST_REFERENCE_TIME!r})")
-
-    # 2. Origem S selecionada confere com a origem pedida.
-    s_periodo = None
-    if dim_s in getattr(ds, 'coords', {}) or (hasattr(ds, 'variables') and dim_s in ds.variables):
-        try:
-            s_valor = np.asarray(ds[dim_s].values).flat[0]
-            s_periodo = pd.Period(str(s_valor)[:7], 'M')
-        except Exception:
-            s_periodo = None
-    if s_periodo is None:
-        insuficientes.append(f"{dim_s} não pôde ser interpretado como data")
-    elif s_periodo != init_date:
-        contraditorias.append(f"{dim_s} observado ({s_periodo}) diverge da origem pedida ({init_date})")
+    # E. Inicialização confirmada por coordenada S scalar/singleton
+    # associada a 'prec', OU confirmação DIRETA da seleção Ingrid VALUE
+    # (Seção 3/4/5/6-E, revisão pós-execução #3, correção 2) — NUNCA
+    # pelo eixo S global do Dataset, e NUNCA só pela documentação do
+    # operador VALUE ou por comparação indireta de valores.
+    selecao_init = selecao_init if selecao_init is not None else _avaliar_selecao_inicializacao(ds, rota)
+    status_init = selecao_init['init_selection_status']
+    periodo_observado = selecao_init['init_periodo_observado']
+    if status_init == INIT_SELECTION_STATUS_FAIL_MULTIPLE:
+        contraditorias.append(f"variável {rota.variable_name!r} tem "
+                                f"{selecao_init['init_axis_size_observed_on_variable']} valores de S "
+                                f"associados — o subset de origem não ocorreu de fato")
+    elif status_init in (INIT_SELECTION_STATUS_UNCONFIRMED_NO_COORD,
+                          INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED):
+        if status_init == INIT_SELECTION_STATUS_UNCONFIRMED_VALUE_UNVERIFIED:
+            resultado_verificacao = selecao_init.get('init_verification_result') or 'verificação não executada'
+            insuficientes.append("S ausente da variável — nem a confirmação direta (RANGEEDGES/metadado) "
+                                   "nem o diagnóstico de comparação indireta bastaram para confirmar "
+                                   f"empiricamente a origem (Seção 1/2/3/4) — {resultado_verificacao}")
+        else:
+            insuficientes.append(f"S não pôde ser confirmado como associado à variável "
+                                   f"{rota.variable_name!r} (nem scalar/singleton, nem via VALUE "
+                                   f"documentado) — Seção 3/5")
+    elif status_init == INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED:
+        pass   # confirmado empiricamente por confirmação DIRETA da origem — nada a comparar
+    elif periodo_observado != init_date:
+        contraditorias.append(f"S observado na variável {rota.variable_name!r} ({periodo_observado}) "
+                                f"diverge da origem pedida ({init_date})")
 
     # 3/4. L identificado como forecast_period/forecast lead, com
     # unidade 'months'.
@@ -340,23 +506,53 @@ def _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date):
 
     if status == 'OK':
         evidencia = (f"confirmado pela semântica documentada do eixo forecast_period (Método B, Seção "
-                      f"4): {dim_s}.standard_name={s_standard_name!r} confere com a origem {init_date}, "
-                      f"{dim_l}.standard_name={l_standard_name!r}/units={l_units_observado!r}, grade "
-                      f"{valores_l} mensal confirmada, rota com forecast_period_semantics_documented="
-                      f"True.")
+                      f"4/6): inicialização confirmada via {selecao_init['init_selection_method']} "
+                      f"(status={status_init}), {dim_l}.standard_name={l_standard_name!r}/"
+                      f"units={l_units_observado!r}, grade {valores_l} mensal confirmada, rota com "
+                      f"forecast_period_semantics_documented=True.")
     else:
         motivos = contraditorias + insuficientes
         evidencia = (f"Método B (semântica forecast_period) não confirmou H{h_lead}<->L={L_val}: "
                       + '; '.join(motivos) + '.')
 
     return {'status': status, 'evidence': evidencia,
-            'forecast_reference_time_observed': s_standard_name,
+            'forecast_reference_time_observed': selecao_init.get('standard_name_s_observed'),
             'lead_units_observed': l_units_observado,
-            'lead_standard_name_observed': l_standard_name}
+            'lead_standard_name_observed': l_standard_name,
+            'init_selection_method': selecao_init['init_selection_method'],
+            'init_value_requested': str(init_date),
+            'init_value_observed_on_variable': selecao_init['init_value_observed_on_variable'],
+            'init_axis_size_observed_on_variable': selecao_init['init_axis_size_observed_on_variable'],
+            'init_selection_status': status_init,
+            # Seção 5 (revisão pós-execução #3, correção 2/item 4) —
+            # método/URL/resultado da verificação de controle
+            # independente, quando aplicável (só preenchido no caminho
+            # S-ausente-da-variável). init_verification_method/
+            # _control_url/_result vêm do diagnóstico de comparação
+            # (Seção 1/3) e/ou da tentativa de confirmação DIRETA (Seção
+            # 2) — os 5 campos abaixo tornam essas duas fontes
+            # distinguíveis no artifact (item 4 da tarefa: URL de
+            # controle já coberto por _control_url; URL original fica no
+            # campo `source_url` do resultado agregado, fora desta
+            # função pura).
+            'init_verification_method': selecao_init.get('init_verification_method', ''),
+            'init_verification_control_url': selecao_init.get('init_verification_control_url', ''),
+            'init_verification_result': selecao_init.get('init_verification_result', ''),
+            'init_verification_direct_url': selecao_init.get('init_verification_direct_url', ''),
+            'init_verification_s_observed': selecao_init.get('init_verification_s_observed'),
+            'init_verification_s_count': selecao_init.get('init_verification_s_count'),
+            'init_verification_comparison_outcome': selecao_init.get(
+                'init_verification_comparison_outcome', ''),
+            'init_verification_exact_outcome': selecao_init.get('init_verification_exact_outcome', '')}
 
 
 def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_inicializacao',
-                                  time_decode_mode=None, rota=None):
+                                  time_decode_mode=None, rota=None, selecao_init=None):
+    """`selecao_init`, quando informado, é repassado para
+    `_avaliar_semantica_forecast_period` (Seção 3, revisão pós-execução
+    #3) — permite ao chamador computar a verificação de controle
+    independente UMA VEZ por execução (não por lead, já que S não varia
+    por lead) fora desta função pura."""
     sys.path.insert(0, str(Path(__file__).parent))
     import nmme_download as ndl
     L_val = ndl.h_lead_para_L_ingrid(h_lead)
@@ -366,6 +562,14 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
     mapping_status = 'UNCONFIRMED'
     mapping_confirmation_method = MAPPING_METHOD_NONE
     forecast_reference_time_observed = lead_units_observed = lead_standard_name_observed = None
+    init_selection_method = INIT_SELECTION_METHOD_NONE
+    init_value_observed_on_variable = None
+    init_axis_size_observed_on_variable = None
+    init_selection_status = None
+    init_verification_method = init_verification_control_url = init_verification_result = ''
+    init_verification_direct_url = ''
+    init_verification_s_observed = init_verification_s_count = None
+    init_verification_comparison_outcome = init_verification_exact_outcome = ''
 
     # Seção 2/8 — em RAW_NUMERIC_CF (decode_times=False) os valores de
     # tempo do dataset são numéricos crus, sem decodificação de
@@ -383,7 +587,14 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
                 'evidence': ' | '.join(evidencia),
                 'mapping_confirmation_method': MAPPING_METHOD_NONE,
                 'forecast_reference_time_observed': None, 'lead_units_observed': None,
-                'lead_standard_name_observed': None}
+                'lead_standard_name_observed': None,
+                'init_selection_method': INIT_SELECTION_METHOD_NONE, 'init_value_requested': str(init_date),
+                'init_value_observed_on_variable': None, 'init_axis_size_observed_on_variable': None,
+                'init_selection_status': None, 'init_verification_method': '',
+                'init_verification_control_url': '', 'init_verification_result': '',
+                'init_verification_direct_url': '', 'init_verification_s_observed': None,
+                'init_verification_s_count': None, 'init_verification_comparison_outcome': '',
+                'init_verification_exact_outcome': ''}
 
     l_attrs = dict(ds['L'].attrs) if 'L' in getattr(ds, 'coords', {}) else {}
     texto_l = ' '.join(str(v) for v in l_attrs.values()).lower()
@@ -432,10 +643,23 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
         evidencia.append(f"nenhuma variável auxiliar de data-alvo ({NOMES_VARIAVEL_ALVO_CANDIDATOS}) "
                           f"encontrada no dataset aberto — tentando Método B (semântica documentada "
                           f"do eixo forecast_period, Seção 4).")
-        resultado_b = _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date)
+        resultado_b = _avaliar_semantica_forecast_period(ds, rota, h_lead, L_val, init_date,
+                                                            selecao_init=selecao_init)
         forecast_reference_time_observed = resultado_b['forecast_reference_time_observed']
         lead_units_observed = resultado_b['lead_units_observed']
         lead_standard_name_observed = resultado_b['lead_standard_name_observed']
+        init_selection_method = resultado_b['init_selection_method']
+        init_value_observed_on_variable = resultado_b['init_value_observed_on_variable']
+        init_axis_size_observed_on_variable = resultado_b['init_axis_size_observed_on_variable']
+        init_selection_status = resultado_b['init_selection_status']
+        init_verification_method = resultado_b['init_verification_method']
+        init_verification_control_url = resultado_b['init_verification_control_url']
+        init_verification_result = resultado_b['init_verification_result']
+        init_verification_direct_url = resultado_b['init_verification_direct_url']
+        init_verification_s_observed = resultado_b['init_verification_s_observed']
+        init_verification_s_count = resultado_b['init_verification_s_count']
+        init_verification_comparison_outcome = resultado_b['init_verification_comparison_outcome']
+        init_verification_exact_outcome = resultado_b['init_verification_exact_outcome']
         evidencia.append(resultado_b['evidence'])
         mapping_status = resultado_b['status']
         if mapping_status == 'OK':
@@ -446,7 +670,19 @@ def avaliar_mapeamento_temporal(ds, h_lead, init_date, esquema='lead1_igual_mes_
             'mapping_confirmation_method': mapping_confirmation_method,
             'forecast_reference_time_observed': forecast_reference_time_observed,
             'lead_units_observed': lead_units_observed,
-            'lead_standard_name_observed': lead_standard_name_observed}
+            'lead_standard_name_observed': lead_standard_name_observed,
+            'init_selection_method': init_selection_method, 'init_value_requested': str(init_date),
+            'init_value_observed_on_variable': init_value_observed_on_variable,
+            'init_axis_size_observed_on_variable': init_axis_size_observed_on_variable,
+            'init_selection_status': init_selection_status,
+            'init_verification_method': init_verification_method,
+            'init_verification_control_url': init_verification_control_url,
+            'init_verification_result': init_verification_result,
+            'init_verification_direct_url': init_verification_direct_url,
+            'init_verification_s_observed': init_verification_s_observed,
+            'init_verification_s_count': init_verification_s_count,
+            'init_verification_comparison_outcome': init_verification_comparison_outcome,
+            'init_verification_exact_outcome': init_verification_exact_outcome}
 
 
 def contar_membros_nao_missing(valores_por_membro):

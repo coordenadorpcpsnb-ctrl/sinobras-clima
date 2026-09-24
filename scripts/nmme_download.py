@@ -48,6 +48,28 @@ TIMEOUT_SEGUNDOS = 60
 MAX_TENTATIVAS = 3
 ESPERAS_RETRY_SEGUNDOS = [5, 15, 30]
 
+# ══════════════════════════════════════════════════════════════════════════
+# Execução real #3 (run 35910675855, Seção 1) — bug real: a seleção
+# mensal de S usava `{mes:02d}%20{ano}` (ex.: "01 2005"), mas a sintaxe
+# Ingrid/IRI Data Library para seleção mensal por nome é `S/(Jan 2005)/
+# VALUE`, não `S/(01 2005)/VALUE`. O servidor NÃO rejeitou a URL
+# malformada com erro HTTP — devolveu silenciosamente o PRIMEIRO valor
+# do eixo S global do catálogo (1982-01), completamente diferente da
+# origem pedida (2005-01). `mes_para_ingrid()` nunca depende de
+# `calendar.month_abbr`/locale do sistema operacional (que pode não
+# estar em inglês) — tabela fixa.
+# ══════════════════════════════════════════════════════════════════════════
+
+MESES_INGRID = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def mes_para_ingrid(mes):
+    """Abreviação de mês na convenção Ingrid (ex.: 'Jan', 'Dec') — nunca
+    o número '01'/'12'. Tabela fixa, independente de locale."""
+    if not (1 <= mes <= 12):
+        raise ValueError(f"mês fora da faixa 1-12: {mes!r}.")
+    return MESES_INGRID[mes - 1]
+
 
 def montar_url_iridl(sistema, ano, mes, lat, lon, variavel=None):
     """Constrói a URL de subset IRIDL (sintaxe ingrid) para 1 origem x 1
@@ -63,7 +85,7 @@ def montar_url_iridl(sistema, ano, mes, lat, lon, variavel=None):
         raise ValueError(f"{sistema.centre}/{sistema.model_name}: precip_variable não confirmado no "
                           f"catálogo — nunca adivinhar o nome da variável (Seção 11).")
     base = sistema.data_url_template.split(' ')[0].rstrip('/')
-    return f"{base}/.{variavel}/X/{lon}/VALUE/Y/{lat}/VALUE/S/({mes:02d}%20{ano})/VALUE/data.nc"
+    return f"{base}/.{variavel}/X/{lon}/VALUE/Y/{lat}/VALUE/S/({mes_para_ingrid(mes)}%20{ano})/VALUE/data.nc"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -129,7 +151,25 @@ def h_lead_para_L_ingrid(h):
     return h - 0.5
 
 
-def montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min=1, h_lead_max=6):
+def _clausula_selecao_s(mes, ano, preservar_dimensao_s):
+    """Revisão pós-execução #3 (item 2, risco residual) — investigação:
+    o operador VALUE (usado por padrão) documentadamente seleciona o
+    ponto mais próximo e REMOVE a dimensão do resultado — é por isso
+    que 'prec' pode aparecer sem S. RANGEEDGES, em contraste, já é
+    usado nesta MESMA URL para L (`L/({l_ini})/({l_fim})/RANGEEDGES`) e
+    documentadamente preserva a dimensão como uma faixa — com os dois
+    limites IDÊNTICOS (`S/(Jan 2005)/(Jan 2005)/RANGEEDGES`), a faixa
+    colapsa a um único ponto de grade SEM remover a dimensão S. Nunca
+    sintaxe inventada: é o mesmo operador Ingrid já documentado e usado
+    neste código, só aplicado ao eixo S em vez de L."""
+    valor = f'{mes_para_ingrid(mes)}%20{ano}'
+    if preservar_dimensao_s:
+        return f"S/({valor})/({valor})/RANGEEDGES/"
+    return f"S/({valor})/VALUE/"
+
+
+def montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min=1, h_lead_max=6,
+                                         preservar_dimensao_s=False):
     """Monta a URL de subset IRIDL (sintaxe ingrid, Rota B) para 1
     origem x 1 ponto x uma faixa de leads H — NUNCA baixa o globo nem
     todos os 30 anos: X/Y recortados a um ponto, S a uma única origem,
@@ -137,7 +177,10 @@ def montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min=1, h_lead_m
     IRRESTRITO (queremos todos os membros — esse é o objetivo do POC
     por membro). Levanta ValueError explícito se a origem estiver fora
     do S grid nativo (Seção 15-C) — nunca monta um request para um
-    período que o arquivo não cobre."""
+    período que o arquivo não cobre. `preservar_dimensao_s=True`
+    (revisão pós-execução #3, item 2) troca `S/.../VALUE` por
+    `S/.../.../RANGEEDGES` — só usado pela tentativa de confirmação
+    direta da origem, nunca pelo download principal."""
     if not origem_dentro_do_nativo_rota_b(ano, mes):
         raise ValueError(f"origem {ano:04d}-{mes:02d} fora do S grid nativo da Rota B "
                           f"({S_NATIVO_INICIO[0]}-{S_NATIVO_INICIO[1]:02d} a "
@@ -146,7 +189,7 @@ def montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min=1, h_lead_m
     l_ini, l_fim = h_lead_para_L_ingrid(h_lead_min), h_lead_para_L_ingrid(h_lead_max)
     base = f'{IRI_CFSV2_MEMBER_LEVEL_BASE}/{IRI_CFSV2_MEMBER_LEVEL_PATH}'
     return (f"{base}/X/{lon}/VALUE/Y/{lat}/VALUE/"
-            f"S/({mes:02d}%20{ano})/VALUE/"
+            f"{_clausula_selecao_s(mes, ano, preservar_dimensao_s)}"
             f"L/({l_ini})/({l_fim})/RANGEEDGES/data.nc")
 
 
@@ -180,13 +223,17 @@ def origem_dentro_do_nativo_representacao_b(ano, mes):
     return ini <= alvo <= fim
 
 
-def montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min=1, h_lead_max=6):
+def montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min=1, h_lead_max=6,
+                                            preservar_dimensao_s=False):
     """Monta a URL de subset IRIDL para a Representação B (NMME
     harmonized/monthly) — mesma filosofia de
     montar_url_iri_cfsv2_member_level (Rota A): X/Y por ponto, S por
     origem única, L por faixa pequena, M irrestrito (queremos todos os
     membros). Levanta ValueError se a origem estiver fora do S grid
-    nativo desta representação (Seção 15-C aplicada à Representação B)."""
+    nativo desta representação (Seção 15-C aplicada à Representação B).
+    `preservar_dimensao_s=True` (revisão pós-execução #3, item 2) troca
+    `S/.../VALUE` por `S/.../.../RANGEEDGES` — só usado pela tentativa
+    de confirmação direta da origem, nunca pelo download principal."""
     if not origem_dentro_do_nativo_representacao_b(ano, mes):
         raise ValueError(f"origem {ano:04d}-{mes:02d} fora do S grid nativo da Representação B "
                           f"({S_NATIVO_REPR_B_INICIO[0]}-{S_NATIVO_REPR_B_INICIO[1]:02d} a "
@@ -195,7 +242,7 @@ def montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min=1, h_lea
     l_ini, l_fim = h_lead_para_L_ingrid(h_lead_min), h_lead_para_L_ingrid(h_lead_max)
     base = f'{IRI_CFSV2_MEMBER_LEVEL_BASE}/{IRI_CFSV2_NMME_HARMONIZED_PATH}'
     return (f"{base}/X/{lon}/VALUE/Y/{lat}/VALUE/"
-            f"S/({mes:02d}%20{ano})/VALUE/"
+            f"{_clausula_selecao_s(mes, ano, preservar_dimensao_s)}"
             f"L/({l_ini})/({l_fim})/RANGEEDGES/data.nc")
 
 
@@ -242,21 +289,27 @@ def escolher_backend_member_level(sistema):
                       f'(desligamento esperado {ncat.LEGACY_SERVICE_EXPECTED_SHUTDOWN}).'}
 
 
-def montar_url_para_rota(rota, ano, mes, lat, lon, h_lead_min=1, h_lead_max=6):
+def montar_url_para_rota(rota, ano, mes, lat, lon, h_lead_min=1, h_lead_max=6,
+                            preservar_dimensao_s=False):
     """Constrói a URL para UMA rota específica já escolhida (Seção
     4/11-D) — IRIDL_LEGACY e CCSR_BETA NUNCA compartilham o mesmo
     builder, e nenhum nome de variável é convertido implicitamente
     entre backends (Seção 11-E: PRATE do legado nunca vira "pr" do
     CCSR por conta própria — cada rota carrega o SEU variable_name,
-    lido do catálogo)."""
+    lido do catálogo). `preservar_dimensao_s=True` (revisão pós-
+    execução #3, item 2) monta a variante S/.../.../RANGEEDGES em vez
+    de S/.../VALUE — só para a tentativa de confirmação direta da
+    origem, nunca para o download principal."""
     if rota.data_backend == ncat.SOURCE_BACKEND_CCSR_BETA:
         raise NotImplementedError(f"backend CCSR_BETA está {rota.status} — endpoint não confirmado, "
                                     f"nunca montar URL por tentativa de padrão (Seção 12).")
     if rota.data_backend == ncat.SOURCE_BACKEND_IRIDL_LEGACY:
         if rota.dataset_representation == ncat.REPR_RAW_NATIVE_ENSEMBLE:
-            return montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min, h_lead_max)
+            return montar_url_iri_cfsv2_member_level(ano, mes, lat, lon, h_lead_min, h_lead_max,
+                                                        preservar_dimensao_s=preservar_dimensao_s)
         if rota.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY:
-            return montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min, h_lead_max)
+            return montar_url_iri_cfsv2_nmme_harmonized(ano, mes, lat, lon, h_lead_min, h_lead_max,
+                                                           preservar_dimensao_s=preservar_dimensao_s)
         raise ValueError(f"representação sem builder: {rota.dataset_representation!r}.")
     raise ValueError(f"backend desconhecido: {rota.data_backend!r}.")
 
