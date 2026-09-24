@@ -421,14 +421,25 @@ def abrir_dataset_com_fallback_temporal(caminho, abrir_fn, init_dimension='S'):
 #    RANGEEDGES, diferente de VALUE, documentadamente preserva a
 #    dimensão como uma faixa em vez de removê-la — com os dois limites
 #    idênticos, a faixa colapsa a 1 ponto de grade SEM remover S. Se a
-#    coordenada S sobreviver (scalar ou singleton-dim), a origem foi
-#    confirmada pela COORDENADA OBSERVADA na resposta, nunca pela URL
-#    solicitada (`VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED` — o
-#    único outcome que pode virar OK_INGRID_VALUE_VERIFIED). Se
-#    RANGEEDGES também eliminar S, tenta um metadado confiável
+#    coordenada S sobreviver (scalar ou singleton-dim), a origem só é
+#    considerada confirmada se DUAS condições se confirmarem (correção
+#    3, nenhuma isolada basta): (a) o valor único observado é
+#    EXATAMENTE ano-mês pedidos, nunca só "tem 1 valor" — divergência
+#    vira `VERIFICATION_OUTCOME_ORIGIN_MISMATCH`, reprovando a
+#    confirmação; (b) os dados de precipitação de RANGEEDGES concordam,
+#    dentro de tolerância mínima, com os da consulta VALUE original (a
+#    que de fato alimenta o RAW) para o mesmo ponto/membros/leads
+#    (`_verificar_consistencia_value_rangeedges`) — divergência vira
+#    `VERIFICATION_OUTCOME_DATA_INCONSISTENT`, mesmo com S=data pedida
+#    confirmado exatamente. Só com as duas confirmadas o outcome vira
+#    COORDENADA OBSERVADA na resposta (nunca pela URL solicitada)
+#    (`VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED` — o único outcome
+#    que pode virar OK_INGRID_VALUE_VERIFIED). Se RANGEEDGES também
+#    eliminar S, tenta um metadado confiável
 #    (`_buscar_metadado_confiavel_de_inicializacao` — nesta
 #    investigação, nenhuma evidência de que o IRIDL emite um atributo
-#    assim foi encontrada; placeholder honesto, devolve None).
+#    assim foi encontrada; placeholder honesto, devolve None), sujeito
+#    às mesmas duas condições.
 #
 # 2) DIAGNÓSTICO DE COMPARAÇÃO (`verificar_selecao_ingrid_value_por_
 #    consulta_controle`, preservado por instrução explícita — Seção 3
@@ -464,13 +475,136 @@ def _buscar_metadado_confiavel_de_inicializacao(ds, rota, ano, mes):
     return None
 
 
-def tentar_confirmar_origem_diretamente(rota, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn):
-    """Item 2 (correção pós-execução #3) — única via que pode produzir
-    `VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED`. Reusa
-    `nmme_processar._avaliar_selecao_inicializacao` sobre a resposta
-    RANGEEDGES (mesma função que já classifica scalar/singleton/
-    multiple/ausente para a consulta VALUE original) em vez de duplicar
-    essa lógica de detecção."""
+# Revisão pós-execução #3, correção 3 (item 2) — as duas consultas pedem
+# EXATAMENTE a mesma origem (só a cláusula de S muda, VALUE vs.
+# RANGEEDGES), então os valores de precipitação devem ser praticamente
+# idênticos; a tolerância abaixo é deliberadamente mínima — só absorve
+# arredondamento de serialização entre duas respostas HTTP
+# independentes, nunca uma diferença real de dado. Não é uma tolerância
+# de "proximidade climatológica" nem de skill — é tolerância de
+# reprodutibilidade bit-a-bit de duas consultas ao MESMO arquivo-fonte.
+TOLERANCIA_RELATIVA_VALUE_RANGEEDGES = 1e-6
+TOLERANCIA_ABSOLUTA_VALUE_RANGEEDGES = 1e-9
+
+
+def _verificar_consistencia_value_rangeedges(ponto_value, ds_direto, rota, lat, lon):
+    """Item 2 (correção 3) — a confirmação direta via RANGEEDGES só
+    pode aprovar o POC se os dados de precipitação que ela devolve são
+    CONSISTENTES com os dados que a consulta VALUE original (a
+    efetivamente usada para montar o RAW) devolveu, para o MESMO ponto,
+    os MESMOS membros e os MESMOS leads — confirmar só a coordenada S
+    (item 1) nunca basta sozinho.
+
+    Alternativa avaliada e não adotada nesta correção: usar os dados de
+    RANGEEDGES diretamente como fonte do RAW (em vez de VALUE), o que
+    dispensaria esta comparação. Não implementada porque trocaria a
+    fonte de dados de todo o pipeline (RAW, membros, unidades) por uma
+    consulta usada até aqui só para confirmação — um raio de mudança
+    maior que o necessário para o problema relatado — e porque VALUE já
+    é a consulta validada por todos os guardrails existentes
+    (validar_acesso_dataset_real, validar_membros_poc etc.) enquanto
+    RANGEEDGES nunca passou por eles. Preservar VALUE como fonte única
+    do RAW e usar esta comparação como gate de aprovação é a mudança
+    mínima que atende ao pedido: reprovar quando os dados divergem,
+    mesmo com S confirmado."""
+    import numpy as np
+
+    if rota.variable_name not in getattr(ds_direto, 'variables', {}):
+        return {'consistent': False,
+                'reason': f"variável {rota.variable_name!r} ausente na resposta RANGEEDGES — "
+                          f"consistência com VALUE não pôde ser verificada."}
+    try:
+        ponto_direto = ds_direto[rota.variable_name].sel(
+            {rota.lon_dimension: lon, rota.lat_dimension: lat}, method='nearest')
+    except Exception as e:
+        return {'consistent': False,
+                'reason': f"não foi possível selecionar o ponto na resposta RANGEEDGES "
+                          f"({type(e).__name__}: {e})."}
+
+    membros_value = (sorted(ponto_value[rota.member_dimension].values.tolist())
+                       if rota.member_dimension in ponto_value.dims else [0])
+    membros_direto = (sorted(ponto_direto[rota.member_dimension].values.tolist())
+                        if rota.member_dimension in ponto_direto.dims else [0])
+    if membros_value != membros_direto:
+        return {'consistent': False,
+                'reason': f"IDs de membros divergentes entre VALUE ({membros_value}) e RANGEEDGES "
+                          f"({membros_direto}) — dimensões incompatíveis."}
+
+    try:
+        l_value = (sorted(float(v) for v in ponto_value[rota.lead_dimension].values)
+                    if rota.lead_dimension in ponto_value.dims else [])
+        l_direto = (sorted(float(v) for v in ponto_direto[rota.lead_dimension].values)
+                     if rota.lead_dimension in ponto_direto.dims else [])
+    except Exception as e:
+        return {'consistent': False,
+                'reason': f"não foi possível ler os valores de {rota.lead_dimension} para comparação "
+                          f"({type(e).__name__}: {e})."}
+    if l_value != l_direto:
+        return {'consistent': False,
+                'reason': f"grade de {rota.lead_dimension} divergente entre VALUE ({l_value}) e "
+                          f"RANGEEDGES ({l_direto}) — dimensões incompatíveis."}
+
+    for l_sel in l_value:
+        fatia_value = (ponto_value.sel({rota.lead_dimension: l_sel})
+                         if rota.lead_dimension in ponto_value.dims else ponto_value)
+        fatia_direto = (ponto_direto.sel({rota.lead_dimension: l_sel})
+                          if rota.lead_dimension in ponto_direto.dims else ponto_direto)
+        for m in membros_value:
+            v_val = (fatia_value.sel({rota.member_dimension: m})
+                       if rota.member_dimension in fatia_value.dims else fatia_value)
+            v_dir = (fatia_direto.sel({rota.member_dimension: m})
+                       if rota.member_dimension in fatia_direto.dims else fatia_direto)
+            try:
+                x = float(np.asarray(v_val.values).squeeze())
+                y = float(np.asarray(v_dir.values).squeeze())
+            except Exception as e:
+                return {'consistent': False,
+                        'reason': f"valor não escalar em {rota.lead_dimension}={l_sel}/"
+                                  f"{rota.member_dimension}={m} ao comparar VALUE/RANGEEDGES "
+                                  f"({type(e).__name__}: {e})."}
+            if not (np.isfinite(x) and np.isfinite(y)):
+                return {'consistent': False,
+                        'reason': f"valor não finito em {rota.lead_dimension}={l_sel}/"
+                                  f"{rota.member_dimension}={m} (VALUE={x}, RANGEEDGES={y}) — "
+                                  f"valores válidos exigidos para a comparação."}
+            if not np.isclose(x, y, rtol=TOLERANCIA_RELATIVA_VALUE_RANGEEDGES,
+                                atol=TOLERANCIA_ABSOLUTA_VALUE_RANGEEDGES):
+                return {'consistent': False,
+                        'reason': f"valores divergem em {rota.lead_dimension}={l_sel}/"
+                                  f"{rota.member_dimension}={m}: VALUE={x!r} vs RANGEEDGES={y!r} "
+                                  f"(diferença {abs(x - y):.3g}, fora da tolerância "
+                                  f"rtol={TOLERANCIA_RELATIVA_VALUE_RANGEEDGES:.0e}/"
+                                  f"atol={TOLERANCIA_ABSOLUTA_VALUE_RANGEEDGES:.0e})."}
+    return {'consistent': True,
+            'reason': f"{len(l_value)} leads x {len(membros_value)} membros comparados entre VALUE e "
+                      f"RANGEEDGES — valores idênticos dentro da tolerância."}
+
+
+def tentar_confirmar_origem_diretamente(rota, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn,
+                                           ponto_original=None):
+    """Item 1/2 (correção 3) — única via que pode produzir
+    `VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED`, e só quando as DUAS
+    condições abaixo se confirmam (nenhuma isolada basta):
+
+    1. A coordenada S sobrevivente em RANGEEDGES tem exatamente 1 valor
+       E esse valor é IGUAL a ano/mês pedidos — não bastava mais ter
+       "só 1 valor" (a revisão apontou que isso não garante que o único
+       valor seja a origem certa); divergência vira
+       `VERIFICATION_OUTCOME_ORIGIN_MISMATCH`, sempre reprovando a
+       confirmação (nunca tratada como inconclusiva — é uma contradição
+       objetiva observada).
+    2. Quando `ponto_original` é informado (o ponto já selecionado da
+       consulta VALUE, a que de fato alimenta o RAW), os dados de
+       precipitação de RANGEEDGES precisam ser consistentes com os de
+       VALUE (`_verificar_consistencia_value_rangeedges`) — divergência
+       vira `VERIFICATION_OUTCOME_DATA_INCONSISTENT`, mesmo com S=data
+       pedida confirmado exatamente (Seção 2 — nunca aprovar só pela
+       coordenada).
+
+    Reusa `nmme_processar._avaliar_selecao_inicializacao` sobre a
+    resposta RANGEEDGES (mesma função que já classifica scalar/
+    singleton/multiple/ausente para a consulta VALUE original) em vez
+    de duplicar essa lógica de detecção."""
     try:
         url_direta = ndl.montar_url_para_rota(rota, ano, mes, lat, lon, leads[0], leads[-1],
                                                  preservar_dimensao_s=True)
@@ -502,12 +636,42 @@ def tentar_confirmar_origem_diretamente(rota, sistema, ano, mes, lat, lon, leads
     status_direto = selecao_direta['init_selection_status']
 
     if status_direto in (nproc.INIT_SELECTION_STATUS_OK_SCALAR, nproc.INIT_SELECTION_STATUS_OK_SINGLETON_DIM):
+        # Item 1 — 1 único valor não basta: precisa ser EXATAMENTE a
+        # origem pedida (ano-mês), nunca só "1 inicialização qualquer".
+        origem_esperada = f'{ano:04d}-{mes:02d}'
+        if s_observado != origem_esperada:
+            return {'outcome': nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH,
+                    'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+                    's_observed': s_observado, 's_count': s_count,
+                    'result': f'RANGEEDGES preservou a dimensão S com 1 único valor, mas esse valor '
+                              f'({s_observado!r}) DIVERGE da origem pedida ({origem_esperada!r}) — '
+                              f'contradição objetiva observada na coordenada, confirmação direta '
+                              f'reprovada (item 1), nunca tratada como EXACT_ORIGIN_CONFIRMED só por '
+                              f'ter 1 valor.'}
+        # Item 2 — S confirmado exatamente; ainda falta confirmar que o
+        # PAYLOAD de precipitação de RANGEEDGES concorda com o de VALUE
+        # (a consulta que de fato alimenta o RAW) antes de aprovar.
+        if ponto_original is not None:
+            consistencia = _verificar_consistencia_value_rangeedges(ponto_original, ds_direto, rota, lat, lon)
+            if not consistencia['consistent']:
+                return {'outcome': nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT,
+                        'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
+                        's_observed': s_observado, 's_count': s_count,
+                        'result': f'S confirmado exatamente ({s_observado!r} == {origem_esperada!r}), '
+                                  f'mas os dados de precipitação de RANGEEDGES NÃO são consistentes com '
+                                  f'os da consulta VALUE original (item 2): {consistencia["reason"]} — '
+                                  f'confirmação direta reprovada; o POC não pode ser aprovado com essa '
+                                  f'divergência, mesmo com S=data pedida confirmado.'}
         return {'outcome': nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED,
                 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
                 's_observed': s_observado, 's_count': s_count,
                 'result': f'S/(mes ano)/(mes ano)/RANGEEDGES preservou a dimensão S com valor '
-                          f'{s_observado!r} (1 inicialização) — origem confirmada diretamente pela '
-                          f'coordenada observada na resposta, não pela URL solicitada (Seção 2).'}
+                          f'{s_observado!r}, EXATAMENTE igual à origem pedida ({origem_esperada!r}) '
+                          f'(item 1)' + (', e os dados de precipitação concordam com a consulta VALUE '
+                          'original dentro da tolerância (item 2)' if ponto_original is not None else
+                          ', consistência com VALUE não verificada (ponto_original não informado)') +
+                          f' — origem confirmada diretamente pela coordenada observada na resposta, '
+                          f'não pela URL solicitada (Seção 2).'}
 
     if status_direto == nproc.INIT_SELECTION_STATUS_FAIL_MULTIPLE:
         return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
@@ -515,21 +679,40 @@ def tentar_confirmar_origem_diretamente(rota, sistema, ano, mes, lat, lon, leads
                 'result': f'RANGEEDGES devolveu {s_count} inicializações associadas à variável '
                           f'(esperado 1) — confirmação direta inconclusiva.'}
 
-    # S ainda ausente da variável mesmo com RANGEEDGES — item 2, fallback
-    # de metadado confiável, antes de desistir da confirmação direta.
+    # S ainda ausente da variável mesmo com RANGEEDGES (ou valor
+    # observado não pôde ser interpretado como data — Seção 3 do item
+    # 1) — item 2 original, fallback de metadado confiável, antes de
+    # desistir da confirmação direta.
     metadado = _buscar_metadado_confiavel_de_inicializacao(ds_direto, rota, ano, mes)
     if metadado is not None:
+        origem_esperada = f'{ano:04d}-{mes:02d}'
+        if metadado != origem_esperada:
+            return {'outcome': nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH,
+                    'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
+                    's_observed': metadado, 's_count': 1,
+                    'result': f'metadado confiável identifica a inicialização como {metadado!r}, '
+                              f'DIVERGENTE da origem pedida ({origem_esperada!r}) — confirmação direta '
+                              f'reprovada (item 1).'}
+        if ponto_original is not None:
+            consistencia = _verificar_consistencia_value_rangeedges(ponto_original, ds_direto, rota, lat, lon)
+            if not consistencia['consistent']:
+                return {'outcome': nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT,
+                        'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
+                        's_observed': metadado, 's_count': 1,
+                        'result': f'metadado confirma a origem ({metadado!r}), mas os dados de '
+                                  f'precipitação de RANGEEDGES NÃO são consistentes com os de VALUE '
+                                  f'(item 2): {consistencia["reason"]}.'}
         return {'outcome': nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED,
                 'method': 'METADATA_ATTRIBUTE', 'url': url_direta,
                 's_observed': metadado, 's_count': 1,
                 'result': f'S ausente da variável mesmo com RANGEEDGES, mas um atributo de metadado '
                           f'confiável identifica explicitamente a inicialização selecionada '
-                          f'({metadado!r}).'}
+                          f'({metadado!r}), igual à origem pedida.'}
     return {'outcome': 'NAO_CONCLUSIVO', 'method': 'INGRID_S_SINGLETON_RANGEEDGES', 'url': url_direta,
             's_observed': None, 's_count': s_count,
-            'result': 'RANGEEDGES não preservou a dimensão S e nenhum metadado confiável identifica '
-                      'explicitamente a inicialização selecionada — confirmação direta não foi '
-                      'possível (Seção 2).'}
+            'result': 'RANGEEDGES não preservou a dimensão S (ou o valor observado não pôde ser '
+                      'interpretado como data) e nenhum metadado confiável identifica explicitamente a '
+                      'inicialização selecionada — confirmação direta não foi possível (Seção 2).'}
 
 
 def verificar_selecao_ingrid_value_por_consulta_controle(ds_original, rota, sistema, ano, mes, lat, lon,
@@ -898,7 +1081,7 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         # complementar, mas nunca decide isoladamente (item 1/3 — nem
         # para aprovar, nem para reprovar).
         direta = tentar_confirmar_origem_diretamente(
-            rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn)
+            rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn, ponto_original=ponto)
         diagnostico = verificar_selecao_ingrid_value_por_consulta_controle(
             ds, rota_usada, sistema, ano, mes, lat, lon, leads, baixar_fn, abrir_fn)
         exact_ok = direta['outcome'] == nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED

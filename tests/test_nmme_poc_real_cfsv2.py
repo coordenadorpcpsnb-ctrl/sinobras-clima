@@ -1261,6 +1261,30 @@ def _ds_com_s_scalar_confirmado(valor_base=0.5, escala=3.0, semente=61, n_membro
     return xr.Dataset({'prec': prec})
 
 
+def _ds_com_s_scalar_nao_interpretavel(valor_base=0.5, escala=3.0, semente=61, n_membros=24):
+    """Variante de `_ds_com_s_scalar_confirmado` com S presente na
+    variável (1 único valor, não removido por RANGEEDGES) mas cujo
+    conteúdo NÃO é interpretável como data (correção 3, item 1 — "se
+    não for possível interpretar a data, retornar resultado
+    inconclusivo"). `pd.Period(str(bruto)[:7], 'M')` levanta ValueError
+    para essa string, reproduzindo o caminho de exceção real de
+    `nmme_processar._avaliar_selecao_inicializacao`."""
+    lon_sb_360 = SAO_BENTO['lon'] % 360.0
+    lons = np.array([lon_sb_360 - 1.0, lon_sb_360, lon_sb_360 + 1.0])
+    lats = np.array([SAO_BENTO['lat'] - 1.0, SAO_BENTO['lat'], SAO_BENTO['lat'] + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(semente)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_S = xr.DataArray('nao-e-uma-data', attrs={'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S})
+    prec.attrs['units'] = 'mm/day'
+    return xr.Dataset({'prec': prec})
+
+
 class VerificacaoControleValueTestCase(unittest.TestCase):
     """Revisão pós-execução #3, correção 2 (a revisão identificou dois
     problemas na consulta de controle — corrigidos aqui). Desenho em
@@ -1440,6 +1464,146 @@ class VerificacaoControleValueTestCase(unittest.TestCase):
         self.assertEqual(linha['init_verification_exact_outcome'],
                           nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
         self.assertTrue(linha['init_verification_result'])
+
+
+class ConfirmacaoDiretaExataTestCase(unittest.TestCase):
+    """Revisão pós-execução #3, correção 3 — a revisão apontou que a
+    confirmação direta via RANGEEDGES tinha dois problemas: (1) tratava
+    "S tem 1 único valor" como suficiente, sem checar se esse valor era
+    de fato a origem pedida; (2) nunca comparava o PAYLOAD de
+    precipitação de RANGEEDGES com o da consulta VALUE original (a que
+    alimenta o RAW de fato). Os testes abaixo cobrem os dois pontos
+    isoladamente e em combinação, sempre via `executar_poc_real_cfsv2`
+    ponta a ponta (não chamando `tentar_confirmar_origem_diretamente`
+    diretamente, para também exercitar `ponto_original` sendo passado
+    pela orquestração)."""
+
+    @staticmethod
+    def _duplas_baixar_abrir(ds_primaria, ds_direta=None, ds_controle=None):
+        return VerificacaoControleValueTestCase._duplas_baixar_abrir(
+            ds_primaria, ds_direta=ds_direta, ds_controle=ds_controle)
+
+    def test_s_unico_igual_a_2005_01_confirma(self):
+        """Item 3, caso 1 — S único e IGUAL à origem pedida (o caminho
+        já coberto por VerificacaoControleValueTestCase, reafirmado
+        aqui pelo nome exato pedido na revisão)."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')
+        self.assertEqual(r['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_s_unico_diferente_de_2005_01_gera_origin_mismatch(self):
+        """Item 3, caso 2 — S único, mas DIFERENTE da origem pedida
+        (2005-02 em vez de 2005-01): item 1 exige reprovar a
+        confirmação com ORIGIN_MISMATCH, nunca tratar "1 valor" como
+        suficiente."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-02-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-02')
+        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_ORIGIN_MISMATCH)
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        self.assertIn('DIVERGE', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_s_nao_interpretavel_fica_inconclusivo(self):
+        """Item 3, caso 3 — S presente mas com conteúdo não
+        interpretável como data: nunca vira EXACT_ORIGIN_CONFIRMED nem
+        ORIGIN_MISMATCH (não dá para comparar o que não foi lido) — só
+        inconclusivo."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_nao_interpretavel(semente=61)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertIsNone(r['init_verification_s_observed'])
+        self.assertEqual(r['init_verification_exact_outcome'], 'NAO_CONCLUSIVO')
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_value_e_rangeedges_com_dados_equivalentes_permite_aprovar(self):
+        """Item 3, caso 4 — mesma origem, mesmos membros/leads, valores
+        de precipitação NUMERICAMENTE equivalentes entre VALUE e
+        RANGEEDGES (mesma semente -> mesmos dados sintéticos):
+        consistência confirmada, nada impede a aprovação."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_exact_outcome'],
+                          nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_value_e_rangeedges_com_dados_divergentes_nao_aprova(self):
+        """Item 3, caso 5 — mesma origem (S=2005-01 confirmado nos dois
+        lados), mas os VALORES de precipitação divergem (sementes
+        diferentes simulando respostas HTTP com payloads diferentes):
+        item 2 exige reprovar mesmo com S correto."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=99, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')   # S sozinho bateu
+        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT)
+        self.assertNotEqual(r['init_selection_status'], nproc.INIT_SELECTION_STATUS_OK_INGRID_VALUE_VERIFIED)
+        self.assertIn('divergem', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_diferencas_de_membros_entre_value_e_rangeedges_reprovam(self):
+        """Item 3, caso 6 — mesma origem, mas os IDs/dimensões de
+        membros de RANGEEDGES não batem com os de VALUE (24 vs. 20
+        membros): dimensões incompatíveis, nunca comparadas às cegas
+        nem aprovadas."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61, n_membros=24)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=61, s_valor='2005-01-01', n_membros=20)
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_exact_outcome'], nproc.VERIFICATION_OUTCOME_DATA_INCONSISTENT)
+        self.assertIn('membros', r['init_verification_result'])
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
+
+    def test_confirmacao_direta_correta_sem_equivalencia_dos_dados_nao_aprova_poc(self):
+        """Item 3, caso 7 (explícito) — mesmo com a confirmação direta
+        "correta" quanto à origem (S == 2005-01, item 1 satisfeito), a
+        ausência de equivalência de dados (item 2) tem que impedir a
+        aprovação do POC inteiro, não só marcar um campo de auditoria:
+        checa também que mapping_status nunca vira 'OK' em nenhum lead
+        nesse cenário."""
+        ds_primaria = _ds_execucao3_sem_s(semente=61)
+        ds_direta = _ds_com_s_scalar_confirmado(semente=99, s_valor='2005-01-01')
+        ds_controle = _ds_execucao3_sem_s(semente=62)
+        baixar_fn, abrir_fn = self._duplas_baixar_abrir(ds_primaria, ds_direta=ds_direta,
+                                                            ds_controle=ds_controle)
+        r = npoc.executar_poc_real_cfsv2(baixar_fn=baixar_fn, abrir_fn=abrir_fn)
+        self.assertEqual(r['init_verification_s_observed'], '2005-01')
+        self.assertNotEqual(r['init_verification_exact_outcome'],
+                             nproc.VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED)
+        self.assertFalse((r['temporal_audit_df']['mapping_status'] == 'OK').any())
+        aprovacao = npoc.avaliar_aprovacao_poc(r)
+        self.assertNotEqual(aprovacao['poc_status'], 'APROVADO')
 
 
 if __name__ == '__main__':

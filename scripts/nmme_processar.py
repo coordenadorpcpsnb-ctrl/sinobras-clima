@@ -307,6 +307,18 @@ VERIFICATION_OUTCOME_EXACT_ORIGIN_CONFIRMED = 'EXACT_ORIGIN_CONFIRMED'
 VERIFICATION_OUTCOME_DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED = 'DIFFERENT_RESPONSES_ORIGIN_UNVERIFIED'
 VERIFICATION_OUTCOME_IDENTICAL_RESPONSES_SUSPECT = 'IDENTICAL_RESPONSES_SUSPECT'
 VERIFICATION_OUTCOME_INCOMPARABLE_RESPONSES = 'INCOMPARABLE_RESPONSES'
+# Revisão pós-execução #3 (correção 3, itens 1/2) — a confirmação DIRETA
+# (RANGEEDGES) por si só, ao só olhar "a dimensão S tem 1 único valor",
+# não bastava: o valor único podia não ser a origem pedida, e o payload
+# de precipitação de RANGEEDGES podia divergir do da consulta VALUE
+# original (usada de fato no RAW). Nenhum dos dois outcomes abaixo pode
+# virar EXACT_ORIGIN_CONFIRMED nem OK_INGRID_VALUE_VERIFIED —
+# `tentar_confirmar_origem_diretamente` só devolve EXACT_ORIGIN_CONFIRMED
+# quando o valor único bate EXATAMENTE com ano/mês pedidos (item 1) E os
+# dados de precipitação de RANGEEDGES concordam com os de VALUE dentro
+# de tolerância mínima (item 2).
+VERIFICATION_OUTCOME_ORIGIN_MISMATCH = 'ORIGIN_MISMATCH'
+VERIFICATION_OUTCOME_DATA_INCONSISTENT = 'DATA_INCONSISTENT_WITH_VALUE'
 
 INIT_SELECTION_METHOD_SCALAR_COORD = 'SCALAR_COORD_ON_VARIABLE'
 INIT_SELECTION_METHOD_SINGLETON_DIM = 'SINGLETON_DIM_ON_VARIABLE'
