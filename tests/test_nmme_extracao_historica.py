@@ -96,6 +96,34 @@ def _resolver_contado(resolver_base):
     return resolver
 
 
+def _ds_para_origem_em(ano, mes, lat_centro, lon_centro, n_membros=24, valor_base=5.0, escala=3.0):
+    """Generalização de `_ds_para_origem` para um ponto QUALQUER — usada
+    nos testes de localização (revisão pontual, 3ª rodada) para simular
+    o centroide das fazendas (lat=-7.80, lon=-47.95) sem duplicar
+    `_ds_para_origem` (mantida intocada, ainda usada por todos os
+    testes que já existiam antes desta rodada)."""
+    lon_360 = lon_centro % 360.0
+    lons = np.array([lon_360 - 1.0, lon_360, lon_360 + 1.0])
+    lats = np.array([lat_centro - 1.0, lat_centro, lat_centro + 1.0])
+    l_valores = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+    membros = np.arange(1, n_membros + 1)
+    rng = np.random.RandomState(ano * 100 + mes)
+    dados = valor_base + rng.rand(3, 3, len(l_valores), n_membros) * escala
+    da_S = xr.DataArray([pd.Timestamp(f'{ano}-{mes:02d}-01')], dims=('S',),
+                          attrs={'standard_name': 'forecast_reference_time'})
+    da_L = xr.DataArray(np.array(l_valores), dims=('L',),
+                          attrs={'units': 'months', 'standard_name': 'forecast_period'})
+    prec = xr.DataArray(dados, dims=('X', 'Y', 'L', 'M'),
+                          coords={'X': lons, 'Y': lats, 'L': da_L, 'M': membros, 'S': da_S.isel(S=0)})
+    prec.attrs['units'] = 'mm/day'
+    return xr.Dataset({'prec': prec})
+
+
+def _resolver_fazendas(ano, mes):
+    return _baixar_ok, (lambda c, ano=ano, mes=mes: _ds_para_origem_em(
+        ano, mes, ext.FAZENDAS_LAT, ext.FAZENDAS_LON))
+
+
 class DefinirLotesTestCase(unittest.TestCase):
     """Particionamento em lotes de até 48 origens (Seção 1 da tarefa)."""
 
@@ -716,6 +744,264 @@ class ConsolidacaoComRawInsuficienteTestCase(unittest.TestCase):
             self.assertEqual(consolidado['n_origens_aprovadas_total'], 2)
             self.assertFalse(consolidado['n_raw_bate_com_esperado'])
             self.assertFalse(consolidado['extracao_completa_e_aprovada'])
+
+
+class LocalizacaoTestCase(unittest.TestCase):
+    """Revisão pontual (3ª rodada) — parametrização da localização
+    (item 1: preserva São Bento; item 2: diretório próprio para as
+    fazendas; item 3: coordenadas solicitada/selecionada registradas)."""
+
+    def test_a_lat_lon_sao_bento_preserva_resolucao_via_municipios(self):
+        self.assertEqual(ext.lat_lon_para_localizacao(ext.LOCALIZACAO_SAO_BENTO), (None, None))
+
+    def test_b_lat_lon_fazendas_e_explicito(self):
+        self.assertEqual(ext.lat_lon_para_localizacao(ext.LOCALIZACAO_FAZENDAS),
+                          (ext.FAZENDAS_LAT, ext.FAZENDAS_LON))
+
+    def test_c_fazendas_lat_lon_bate_com_chirps_e_poc_espacial(self):
+        import _chirps
+        import nmme_poc_espacial_fazendas as espacial
+        self.assertEqual(ext.FAZENDAS_LAT, _chirps.FAZENDAS_LAT)
+        self.assertEqual(ext.FAZENDAS_LON, _chirps.FAZENDAS_LON)
+        self.assertEqual(ext.FAZENDAS_LAT, espacial.FAZENDAS_LAT)
+        self.assertEqual(ext.FAZENDAS_LON, espacial.FAZENDAS_LON)
+
+    def test_d_diretorios_padrao_sao_distintos(self):
+        d_sb = ext.diretorio_padrao_para_localizacao(ext.LOCALIZACAO_SAO_BENTO)
+        d_faz = ext.diretorio_padrao_para_localizacao(ext.LOCALIZACAO_FAZENDAS)
+        self.assertNotEqual(d_sb, d_faz)
+        self.assertEqual(d_sb, ext.DIRETORIO_HISTORICO)
+        self.assertEqual(d_faz, ext.DIRETORIO_HISTORICO_FAZENDAS)
+
+    def test_e_localizacao_invalida_lanca_erro(self):
+        with self.assertRaises(ValueError):
+            ext.diretorio_padrao_para_localizacao('Outra_Localizacao_Qualquer')
+        with self.assertRaises(ValueError):
+            ext.lat_lon_para_localizacao('Outra_Localizacao_Qualquer')
+
+    def test_f_executar_lote_default_preserva_sao_bento(self):
+        """Nenhum `localizacao` passado — comportamento idêntico ao de
+        antes desta revisão (item 1: "preservando integralmente")."""
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1),))
+            metadata = ext.executar_lote(lote, resolver_fns=_resolver_todas_ok, diretorio=diretorio)
+            self.assertEqual(metadata['localizacao'], ext.LOCALIZACAO_SAO_BENTO)
+            self.assertIsNone(metadata['localizacao_lat'])
+            self.assertIsNone(metadata['localizacao_lon'])
+            raw = pd.read_csv(diretorio / 'lote_teste_raw.csv')
+            self.assertTrue((raw['requested_lat'] == SAO_BENTO['lat']).all())
+            self.assertNotIn('evidencia_poc_localizacao', metadata)
+
+    def test_g_executar_lote_fazendas_usa_coordenadas_das_fazendas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1),))
+            metadata = ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                           localizacao=ext.LOCALIZACAO_FAZENDAS)
+            self.assertEqual(metadata['localizacao'], ext.LOCALIZACAO_FAZENDAS)
+            self.assertEqual(metadata['localizacao_lat'], ext.FAZENDAS_LAT)
+            self.assertEqual(metadata['localizacao_lon'], ext.FAZENDAS_LON)
+            raw = pd.read_csv(diretorio / 'lote_teste_raw.csv')
+            self.assertTrue((raw['requested_lat'] == ext.FAZENDAS_LAT).all())
+            self.assertTrue((raw['requested_lon'] == ext.FAZENDAS_LON).all())
+
+    def test_h_coordenada_solicitada_e_selecionada_registradas_em_todos_os_resultados(self):
+        """Item 3 — nunca só a coordenada pedida, também o ponto de
+        grade efetivamente selecionado, em toda linha RAW."""
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1), (2000, 2)))
+            ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                localizacao=ext.LOCALIZACAO_FAZENDAS)
+            raw = pd.read_csv(diretorio / 'lote_teste_raw.csv')
+            for col in ('requested_lat', 'requested_lon', 'selected_lat', 'selected_lon'):
+                self.assertIn(col, raw.columns)
+                self.assertTrue(raw[col].notna().all(), col)
+
+    def test_i_evidencia_poc_fazendas_so_aparece_para_fazendas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1),))
+            metadata_faz = ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                               localizacao=ext.LOCALIZACAO_FAZENDAS)
+            self.assertIn('evidencia_poc_localizacao', metadata_faz)
+            self.assertEqual(metadata_faz['evidencia_poc_localizacao']['run_id'], 36169942349)
+            self.assertFalse(metadata_faz['evidencia_poc_localizacao']['aptidao_cientifica_declarada'])
+            self.assertFalse(metadata_faz['evidencia_poc_localizacao']['outras_localizacoes_promovidas'])
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            diretorio2 = Path(tmp2)
+            lote2 = ext.LoteHistorico('teste', ((2000, 1),))
+            metadata_sb = ext.executar_lote(lote2, resolver_fns=_resolver_todas_ok, diretorio=diretorio2)
+            self.assertNotIn('evidencia_poc_localizacao', metadata_sb)
+
+
+class NuncaMisturaLocalidadesTestCase(unittest.TestCase):
+    """Revisão pontual (3ª rodada), item 7 — regressão explícita:
+    impedir que registros de São Bento e das fazendas se misturem, seja
+    em disco (diretórios) ou na integridade persistida (coluna
+    `localizacao`)."""
+
+    def test_a_localizacao_gravada_em_toda_linha_raw_temporal_resumo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1),))
+            ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                localizacao=ext.LOCALIZACAO_FAZENDAS)
+            raw = pd.read_csv(diretorio / 'lote_teste_raw.csv')
+            temporal = pd.read_csv(diretorio / 'lote_teste_temporal_audit.csv')
+            resumo = pd.read_csv(diretorio / 'lote_teste_resumo_por_origem.csv')
+            self.assertTrue((raw['localizacao'] == ext.LOCALIZACAO_FAZENDAS).all())
+            self.assertTrue((temporal['localizacao'] == ext.LOCALIZACAO_FAZENDAS).all())
+            self.assertTrue((resumo['localizacao'] == ext.LOCALIZACAO_FAZENDAS).all())
+
+    def test_b_duas_localidades_em_diretorios_separados_nunca_se_tocam(self):
+        with tempfile.TemporaryDirectory() as tmp_sb, tempfile.TemporaryDirectory() as tmp_faz:
+            dir_sb, dir_faz = Path(tmp_sb), Path(tmp_faz)
+            lote = ext.LoteHistorico('teste', ((2000, 1), (2000, 2)))
+            ext.executar_lote(lote, resolver_fns=_resolver_todas_ok, diretorio=dir_sb,
+                                localizacao=ext.LOCALIZACAO_SAO_BENTO)
+            ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=dir_faz,
+                                localizacao=ext.LOCALIZACAO_FAZENDAS)
+
+            raw_sb = pd.read_csv(dir_sb / 'lote_teste_raw.csv')
+            raw_faz = pd.read_csv(dir_faz / 'lote_teste_raw.csv')
+            self.assertTrue((raw_sb['localizacao'] == ext.LOCALIZACAO_SAO_BENTO).all())
+            self.assertTrue((raw_faz['localizacao'] == ext.LOCALIZACAO_FAZENDAS).all())
+            self.assertTrue((raw_sb['requested_lat'] == SAO_BENTO['lat']).all())
+            self.assertTrue((raw_faz['requested_lat'] == ext.FAZENDAS_LAT).all())
+            # Nenhum arquivo de uma localidade aparece no diretório da outra.
+            self.assertEqual(sorted(p.name for p in dir_sb.iterdir()),
+                              sorted(p.name for p in dir_faz.iterdir()))   # mesmos NOMES de arquivo...
+            self.assertNotEqual(dir_sb, dir_faz)   # ...mas em diretórios diferentes
+
+    def test_c_linha_contaminada_de_outra_localidade_e_detectada_e_fica_pendente(self):
+        """Regressão central do item 7 — uma linha de OUTRA localidade
+        "vazada" para dentro do raw.csv de uma origem (mesmo
+        `origem_piloto`, `localizacao` diferente) é detectada mesmo que
+        a origem já estivesse com poc_status=APROVADO persistido."""
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1), (2000, 2)))
+            ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                localizacao=ext.LOCALIZACAO_FAZENDAS)
+
+            caminho_raw = diretorio / 'lote_teste_raw.csv'
+            raw = pd.read_csv(caminho_raw)
+            linha_contaminada = raw.iloc[[0]].copy()
+            linha_contaminada['localizacao'] = ext.LOCALIZACAO_SAO_BENTO
+            linha_contaminada['requested_lat'] = SAO_BENTO['lat']
+            linha_contaminada['requested_lon'] = SAO_BENTO['lon']
+            # A linha contaminada pertence à MESMA origem (2000-01) —
+            # nunca uma origem nova/inexistente no plano.
+            self.assertEqual(linha_contaminada['origem_piloto'].iloc[0], '2000-01')
+            pd.concat([raw, linha_contaminada], ignore_index=True).to_csv(caminho_raw, index=False)
+
+            pendentes = ext.origens_pendentes(lote, diretorio, localizacao_esperada=ext.LOCALIZACAO_FAZENDAS)
+            self.assertEqual(pendentes, ((2000, 1),))   # só a contaminada, nunca a 2000-02 (limpa)
+
+    def test_d_retomada_corrige_contaminacao_sem_tocar_na_origem_limpa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('teste', ((2000, 1), (2000, 2)))
+            ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                localizacao=ext.LOCALIZACAO_FAZENDAS)
+
+            caminho_raw = diretorio / 'lote_teste_raw.csv'
+            raw = pd.read_csv(caminho_raw)
+            linha_contaminada = raw.iloc[[0]].copy()
+            linha_contaminada['localizacao'] = ext.LOCALIZACAO_SAO_BENTO
+            pd.concat([raw, linha_contaminada], ignore_index=True).to_csv(caminho_raw, index=False)
+
+            resolver_contado = _resolver_contado(_resolver_fazendas)
+            metadata = ext.executar_lote(lote, resolver_fns=resolver_contado, diretorio=diretorio,
+                                           localizacao=ext.LOCALIZACAO_FAZENDAS)
+            self.assertEqual(resolver_contado.chamadas, [(2000, 1)])   # só a contaminada
+            self.assertEqual(metadata['lote_status'], 'APROVADO')
+
+            raw_final = pd.read_csv(caminho_raw)
+            self.assertTrue((raw_final['localizacao'] == ext.LOCALIZACAO_FAZENDAS).all())
+            self.assertEqual(len(raw_final[raw_final['origem_piloto'] == '2000-01']), 144)
+            self.assertEqual(len(raw_final[raw_final['origem_piloto'] == '2000-02']), 144)
+
+    def test_e_consolidacao_reprova_quando_ha_contaminacao_de_outra_localidade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('l1', ((2000, 1), (2000, 2)))
+            ext.executar_lote(lote, resolver_fns=_resolver_fazendas, diretorio=diretorio,
+                                localizacao=ext.LOCALIZACAO_FAZENDAS)
+
+            caminho_raw = diretorio / 'lote_l1_raw.csv'
+            raw = pd.read_csv(caminho_raw)
+            linha_contaminada = raw.iloc[[0]].copy()
+            linha_contaminada['localizacao'] = ext.LOCALIZACAO_SAO_BENTO
+            pd.concat([raw, linha_contaminada], ignore_index=True).to_csv(caminho_raw, index=False)
+
+            consolidado = ext.consolidar_extracao_completa(
+                lotes=(lote,), diretorio=diretorio, localizacao=ext.LOCALIZACAO_FAZENDAS)
+            self.assertFalse(consolidado['extracao_completa_e_aprovada'])
+            self.assertLess(consolidado['n_origens_aprovadas_total'], 2)
+
+    def test_f_verificar_integridade_ignora_localizacao_quando_nao_pedido(self):
+        """Backward-compat explícito — com `localizacao_esperada=None`
+        (default), uma linha com localização "errada" NUNCA é motivo de
+        reprovação (comportamento anterior a esta revisão, preservado
+        para quem não passa o parâmetro)."""
+        linha = pd.Series({'ano': 2000, 'mes': 1, 'init_date': '2000-01', 'poc_status': 'APROVADO',
+                             'backend_diferente_da_validada': False,
+                             'representacao_diferente_da_validada': False,
+                             'localizacao': 'Qualquer_Outra_Coisa'})
+        raw = pd.DataFrame([{'origem_piloto': '2000-01', 'lead': lead, 'member': m,
+                               'localizacao': 'Qualquer_Outra_Coisa'}
+                              for lead in range(1, 7) for m in range(1, 25)])
+        temporal = pd.DataFrame([{'origem_piloto': '2000-01', 'H_lead': lead,
+                                    'localizacao': 'Qualquer_Outra_Coisa'} for lead in range(1, 7)])
+        integra, motivos = ext._verificar_integridade_origem('2000-01', linha, raw, temporal)
+        self.assertTrue(integra)
+        self.assertEqual(motivos, [])
+
+    def test_g_verificar_integridade_pega_localizacao_errada_quando_pedido(self):
+        linha = pd.Series({'ano': 2000, 'mes': 1, 'init_date': '2000-01', 'poc_status': 'APROVADO',
+                             'backend_diferente_da_validada': False,
+                             'representacao_diferente_da_validada': False,
+                             'localizacao': ext.LOCALIZACAO_SAO_BENTO})
+        raw = pd.DataFrame([{'origem_piloto': '2000-01', 'lead': lead, 'member': m,
+                               'localizacao': ext.LOCALIZACAO_SAO_BENTO}
+                              for lead in range(1, 7) for m in range(1, 25)])
+        temporal = pd.DataFrame([{'origem_piloto': '2000-01', 'H_lead': lead,
+                                    'localizacao': ext.LOCALIZACAO_SAO_BENTO} for lead in range(1, 7)])
+        integra, motivos = ext._verificar_integridade_origem(
+            '2000-01', linha, raw, temporal, localizacao_esperada=ext.LOCALIZACAO_FAZENDAS)
+        self.assertFalse(integra)
+        self.assertIn('localizacao_diferente_da_esperada', motivos)
+
+    def test_h_coluna_localizacao_ausente_no_raw_falha_fechado(self):
+        """Uma linha RAW sem a coluna `localizacao` de jeito nenhum
+        (arquivo de antes desta revisão, hipotético) NÃO é tratada como
+        automaticamente válida quando a verificação está ativa — falha
+        fechado, nunca assume o melhor caso por ausência de dado."""
+        linha = pd.Series({'ano': 2000, 'mes': 1, 'init_date': '2000-01', 'poc_status': 'APROVADO',
+                             'backend_diferente_da_validada': False,
+                             'representacao_diferente_da_validada': False})   # sem 'localizacao'
+        raw = pd.DataFrame([{'origem_piloto': '2000-01', 'lead': lead, 'member': m}
+                              for lead in range(1, 7) for m in range(1, 25)])   # sem 'localizacao'
+        temporal = pd.DataFrame([{'origem_piloto': '2000-01', 'H_lead': lead} for lead in range(1, 7)])
+        integra, motivos = ext._verificar_integridade_origem(
+            '2000-01', linha, raw, temporal, localizacao_esperada=ext.LOCALIZACAO_FAZENDAS)
+        self.assertFalse(integra)
+        self.assertIn('localizacao_diferente_da_esperada', motivos)
+
+    def test_i_lotes_historicos_identicos_para_as_duas_localidades(self):
+        """Item 4 — os mesmos 5 lotes/240 origens, nunca uma partição
+        paralela duplicada para as fazendas."""
+        self.assertEqual(len(ext.LOTES_HISTORICOS), 5)
+        origens_todas = tuple(o for lote in ext.LOTES_HISTORICOS for o in lote.origens)
+        self.assertEqual(len(origens_todas), 240)
+        # Usar o MESMO LOTES_HISTORICOS para as duas localidades —
+        # nenhuma constante paralela criada para fazendas.
+        for lote in ext.LOTES_HISTORICOS:
+            self.assertIsInstance(lote, ext.LoteHistorico)
 
 
 if __name__ == '__main__':

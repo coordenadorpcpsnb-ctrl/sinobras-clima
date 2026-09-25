@@ -175,7 +175,8 @@ def distancia_fazendas_ate_municipio_km(municipio=npoc.MUNICIPIO):
 
 def executar_piloto_historico(origens=PILOTO_ORIGENS, leads=npoc.LEADS, municipio=npoc.MUNICIPIO,
                                  sistema=None, esquema_temporal='lead1_igual_mes_inicializacao',
-                                 baixar_fn=None, abrir_fn=None, resolver_fns=None):
+                                 baixar_fn=None, abrir_fn=None, resolver_fns=None,
+                                 lat=None, lon=None):
     """Roda `nmme_poc.executar_poc_real_cfsv2` uma vez por origem,
     isolando falhas: uma exceção inesperada numa origem NUNCA interrompe
     as demais (Seção 2, item 7 — "registrar individualmente qualquer
@@ -188,7 +189,17 @@ def executar_piloto_historico(origens=PILOTO_ORIGENS, leads=npoc.LEADS, municipi
     tem precedência sobre `baixar_fn`/`abrir_fn` quando presente para
     aquela origem específica.
 
-    Devolve uma lista de 16 dicts (1 por origem, na ordem de `origens`)
+    `lat`/`lon` (Fase 2C.2, extração histórica para o centroide das
+    fazendas — item 1 da revisão): repassados sem modificação para
+    `nmme_poc.executar_poc_real_cfsv2` (que já tem esse parâmetro
+    aditivo desde o POC espacial, Fase 2C.2 item 2). Default `None`/
+    `None` preserva EXATAMENTE o caminho existente (resolução por
+    `municipio`/`MUNICIPIOS`, sempre São Bento do Tocantins salvo
+    `municipio` explícito) para todo chamador atual — piloto de 16
+    origens e extração histórica de São Bento continuam sem nenhuma
+    mudança de comportamento.
+
+    Devolve uma lista de N dicts (1 por origem, na ordem de `origens`)
     com `ano`, `mes`, `origem`, `resultado` (o dict devolvido por
     executar_poc_real_cfsv2, já com poc_status/checklist da avaliação)
     e `erro` (None, ou a mensagem da exceção que impediu até a
@@ -210,7 +221,7 @@ def executar_piloto_historico(origens=PILOTO_ORIGENS, leads=npoc.LEADS, municipi
                 baixar_fn_origem, abrir_fn_origem = resolver_fns(ano, mes)
             r = npoc.executar_poc_real_cfsv2(
                 origem=origem, leads=leads, municipio=municipio, sistema=sistema,
-                esquema_temporal=esquema_temporal,
+                esquema_temporal=esquema_temporal, lat=lat, lon=lon,
                 baixar_fn=baixar_fn_origem, abrir_fn=abrir_fn_origem)
             aprovacao = npoc.avaliar_aprovacao_poc(r)
             r = {**r, 'poc_status': aprovacao['poc_status'], 'checklist': aprovacao['checklist']}

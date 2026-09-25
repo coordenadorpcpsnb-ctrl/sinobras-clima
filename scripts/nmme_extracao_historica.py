@@ -24,10 +24,32 @@ Nunca calcula skill, nunca modifica o dashboard, nunca promove
 nenhuma rota/representação/sistema no catálogo (scripts/nmme_catalogo.py
 nunca é importado por escrita aqui).
 
+Revisão pontual (3ª rodada) — este módulo agora prepara a extração
+histórica para DUAS localidades independentes:
+
+- São Bento do Tocantins (existente, `MUNICIPIOS`/`npoc.MUNICIPIO`,
+  nunca alterado) — `data/nmme_historico/`.
+- Centroide das fazendas (lat=-7,80, lon=-47,95, mesmo valor de
+  `scripts/_chirps.py`/`scripts/nmme_poc_espacial_fazendas.py`) —
+  `data/nmme_historico_fazendas/`, diretório PRÓPRIO, nunca
+  compartilhado com o de São Bento.
+
+O POC de infraestrutura para o centroide das fazendas já rodou de
+verdade e foi aprovado (GitHub Actions run 36169942349 —
+`scripts/nmme_poc_espacial_fazendas.py`, 144 registros RAW, 6
+horizontes, 24 membros/horizonte, 6 auditorias temporais aprovadas,
+rota IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY exclusiva). Isso aprova a
+INFRAESTRUTURA de acesso a este ponto — nunca promove automaticamente
+o centroide das fazendas a localização "validada" nem declara aptidão
+científica; ver `EVIDENCIA_POC_FAZENDAS` abaixo e
+`scripts/nmme_poc_espacial_fazendas.py::montar_metadata_espacial`
+(`localizacao_validada` sempre `False`, mesmo lá).
+
 Roda com:
     python scripts/nmme_extracao_historica.py --dry-run-plan
-    python scripts/nmme_extracao_historica.py --executar-lote 1991-1994
-    python scripts/nmme_extracao_historica.py --consolidar
+    python scripts/nmme_extracao_historica.py --executar-lote 1991-1994 --localizacao sao_bento
+    python scripts/nmme_extracao_historica.py --executar-lote 1991-1994 --localizacao fazendas
+    python scripts/nmme_extracao_historica.py --consolidar --localizacao fazendas
 """
 
 import argparse
@@ -47,9 +69,62 @@ import nmme_piloto_historico as pilo  # noqa: E402
 # de data/serie_subst.csv), nunca dependente só do artifact do GitHub
 # Actions (retention-days: 30, insuficiente para um histórico de 20
 # anos que não deve precisar ser reprocessado do zero a cada mês).
-DIRETORIO_HISTORICO = ROOT / 'data' / 'nmme_historico'
+DIRETORIO_HISTORICO = ROOT / 'data' / 'nmme_historico'   # São Bento do Tocantins — caminho preservado
 
-# 1991-2010, 12 meses/ano = 240 inicializações (Seção 1 da tarefa).
+# Revisão pontual (3ª rodada) — diretório PRÓPRIO para o centroide das
+# fazendas, nunca compartilhado nem misturado com o de São Bento
+# (item 2 da revisão: "impedindo que registros das duas localidades
+# sejam misturados").
+DIRETORIO_HISTORICO_FAZENDAS = ROOT / 'data' / 'nmme_historico_fazendas'
+
+# Identificadores de localização — usados para marcar toda linha
+# persistida (resumo/raw/temporal/access) e para a verificação de
+# integridade cruzada (item 5 da revisão), nunca só um par lat/lon
+# solto sem rótulo auditável.
+LOCALIZACAO_SAO_BENTO = 'Sao_Bento_do_Tocantins'
+LOCALIZACAO_FAZENDAS = 'Fazendas_Sinobras_Centroide'
+LOCALIZACOES_VALIDAS = (LOCALIZACAO_SAO_BENTO, LOCALIZACAO_FAZENDAS)
+
+# Mesmo valor de scripts/_chirps.py::FAZENDAS_LAT/FAZENDAS_LON e
+# scripts/nmme_poc_espacial_fazendas.py — nunca redefinido de forma
+# diferente (Seção 2 da tarefa anterior: coordenada do centroide das
+# fazendas).
+FAZENDAS_LAT, FAZENDAS_LON = -7.80, -47.95
+
+DIRETORIO_POR_LOCALIZACAO = {
+    LOCALIZACAO_SAO_BENTO: DIRETORIO_HISTORICO,
+    LOCALIZACAO_FAZENDAS: DIRETORIO_HISTORICO_FAZENDAS,
+}
+
+# Evidência formal do POC de infraestrutura aprovado para o centroide
+# das fazendas (item 6 da revisão) — registrada aqui, citada na
+# metadata de todo lote rodado para `LOCALIZACAO_FAZENDAS`. NUNCA
+# promove automaticamente a localização nem declara aptidão científica
+# — `aptidao_cientifica_declarada` fica sempre `False`, mesmo padrão já
+# usado em scripts/nmme_poc_espacial_fazendas.py::montar_metadata_espacial
+# (`localizacao_validada=False` sempre, mesmo com `poc_status=APROVADO`).
+EVIDENCIA_POC_FAZENDAS = {
+    'run_id': 36169942349,
+    'workflow': 'nmme_poc_espacial_fazendas.yml',
+    'poc_status': 'APROVADO',
+    'localizacao_id': LOCALIZACAO_FAZENDAS,
+    'localizacao_lat': FAZENDAS_LAT, 'localizacao_lon': FAZENDAS_LON,
+    'auditoria_independente_confirmou': (
+        '144 registros RAW, 6 horizontes (H1-H6), 24 membros por horizonte, '
+        '6 auditorias temporais aprovadas, rota exclusiva IRIDL_LEGACY/'
+        'NMME_HARMONIZED_MONTHLY.'
+    ),
+    'significado': 'Aprova a INFRAESTRUTURA de acesso a este ponto (mesmo tipo de '
+                    'evidência já obtida para São Bento do Tocantins, run 36145108571) '
+                    '— nunca a aptidão científica da localização.',
+    'aptidao_cientifica_declarada': False,
+    'outras_localizacoes_promovidas': False,
+}
+
+# 1991-2010, 12 meses/ano = 240 inicializações (Seção 1 da tarefa) —
+# MESMO conjunto de origens/lotes para as duas localidades (item 4 da
+# revisão: "preservar os cinco lotes de 48 inicializações"); só o
+# diretório/coordenada mudam por localização, nunca a partição.
 PERIODO_ANOS = tuple(range(1991, 2011))
 ORIGENS_HISTORICAS = tuple((ano, mes) for ano in PERIODO_ANOS for mes in range(1, 13))
 assert len(ORIGENS_HISTORICAS) == 240
@@ -58,6 +133,32 @@ TAMANHO_LOTE_MAX = 48   # Seção 1 — "preferencialmente até 48 inicializaç�
 N_RAW_ESPERADO_TOTAL = 240 * 6 * 24   # 34.560 — só se as 240 origens estiverem APROVADO
 N_RAW_ESPERADO_POR_ORIGEM = 6 * 24   # 144 — 6 leads x 24 membros (revisão pontual, Seção 2/3)
 LEADS_ESPERADOS = frozenset({1, 2, 3, 4, 5, 6})
+
+
+def _validar_localizacao(localizacao):
+    if localizacao not in LOCALIZACOES_VALIDAS:
+        raise ValueError(f"localizacao {localizacao!r} desconhecida — válidas: {LOCALIZACOES_VALIDAS}")
+
+
+def diretorio_padrao_para_localizacao(localizacao):
+    """Item 2 da revisão — cada localização tem um diretório PRÓPRIO;
+    nunca escolhido "na mão" pelo chamador, sempre derivado daqui, para
+    reduzir o risco de apontar dado de uma localização para o
+    diretório da outra por engano."""
+    _validar_localizacao(localizacao)
+    return DIRETORIO_POR_LOCALIZACAO[localizacao]
+
+
+def lat_lon_para_localizacao(localizacao):
+    """`None, None` para São Bento — preserva EXATAMENTE a resolução
+    existente via `MUNICIPIOS`/`npoc.MUNICIPIO` (item 1 da revisão:
+    "preservando integralmente a possibilidade de consultar São Bento
+    do Tocantins"). Coordenadas explícitas só para o centroide das
+    fazendas."""
+    _validar_localizacao(localizacao)
+    if localizacao == LOCALIZACAO_FAZENDAS:
+        return FAZENDAS_LAT, FAZENDAS_LON
+    return None, None
 
 
 @dataclass(frozen=True)
@@ -107,7 +208,7 @@ def _carregar_resumo_persistido(lote_id, diretorio=DIRETORIO_HISTORICO):
     return pd.read_csv(caminho)
 
 
-def _verificar_integridade_origem(origem_str, linha_resumo, raw_df, temporal_df):
+def _verificar_integridade_origem(origem_str, linha_resumo, raw_df, temporal_df, localizacao_esperada=None):
     """Revisão pontual, Seção 2 — antes de considerar uma inicialização
     persistida como concluída, verifica TUDO isto, nunca só
     `poc_status=APROVADO` isolado (que pode estar certo no resumo mas
@@ -126,7 +227,15 @@ def _verificar_integridade_origem(origem_str, linha_resumo, raw_df, temporal_df)
        origem no raw.csv persistido;
     5. nenhuma duplicata de par (lead, member) nesses 144 registros;
     6. as 6 auditorias temporais (H1-H6) presentes, sem duplicata, no
-       temporal_audit.csv persistido.
+       temporal_audit.csv persistido;
+    7. (revisão pontual, 3ª rodada, item 5) quando `localizacao_esperada`
+       é informado — identificação da localização também íntegra: o
+       resumo E todas as linhas RAW/temporais desta origem (dentre as
+       que casam por `origem_piloto`, ignorando localização) precisam
+       estar marcadas com a MESMA localização esperada. Uma linha de
+       outra localização "vazada" para dentro deste conjunto (mesmo
+       ano-mês, localização diferente) é detectada aqui, mesmo que a
+       contagem de 144 bata por coincidência.
 
     Devolve (integra: bool, motivos: list[str]) — NUNCA assume íntegra
     por ausência de dado (`linha_resumo=None` é o estado normal de uma
@@ -145,27 +254,50 @@ def _verificar_integridade_origem(origem_str, linha_resumo, raw_df, temporal_df)
     if str(linha_resumo.get('init_date')) != origem_str:
         motivos.append('init_date_divergente')
 
+    localizacao_ok = True
+    if localizacao_esperada is not None and linha_resumo.get('localizacao') != localizacao_esperada:
+        localizacao_ok = False
+
     if len(raw_df) and 'origem_piloto' in raw_df.columns:
-        raw_origem = raw_df[raw_df['origem_piloto'] == origem_str]
+        raw_mesma_origem = raw_df[raw_df['origem_piloto'] == origem_str]
     else:
-        raw_origem = raw_df.iloc[0:0]
+        raw_mesma_origem = raw_df.iloc[0:0]
+    if localizacao_esperada is not None and len(raw_mesma_origem):
+        if 'localizacao' not in raw_mesma_origem.columns or not (
+                raw_mesma_origem['localizacao'] == localizacao_esperada).all():
+            localizacao_ok = False
+        raw_origem = raw_mesma_origem[raw_mesma_origem.get('localizacao') == localizacao_esperada] \
+            if 'localizacao' in raw_mesma_origem.columns else raw_mesma_origem.iloc[0:0]
+    else:
+        raw_origem = raw_mesma_origem
     if len(raw_origem) != N_RAW_ESPERADO_POR_ORIGEM:
         motivos.append('n_raw_diferente_de_144')
     elif {'lead', 'member'}.issubset(raw_origem.columns) and raw_origem.duplicated(subset=['lead', 'member']).any():
         motivos.append('duplicata_lead_member')
 
     if len(temporal_df) and 'origem_piloto' in temporal_df.columns:
-        temporal_origem = temporal_df[temporal_df['origem_piloto'] == origem_str]
+        temporal_mesma_origem = temporal_df[temporal_df['origem_piloto'] == origem_str]
     else:
-        temporal_origem = temporal_df.iloc[0:0]
+        temporal_mesma_origem = temporal_df.iloc[0:0]
+    if localizacao_esperada is not None and len(temporal_mesma_origem):
+        if 'localizacao' not in temporal_mesma_origem.columns or not (
+                temporal_mesma_origem['localizacao'] == localizacao_esperada).all():
+            localizacao_ok = False
+        temporal_origem = temporal_mesma_origem[temporal_mesma_origem.get('localizacao') == localizacao_esperada] \
+            if 'localizacao' in temporal_mesma_origem.columns else temporal_mesma_origem.iloc[0:0]
+    else:
+        temporal_origem = temporal_mesma_origem
     leads_presentes = list(temporal_origem['H_lead']) if 'H_lead' in temporal_origem.columns else []
     if set(leads_presentes) != LEADS_ESPERADOS or len(leads_presentes) != len(LEADS_ESPERADOS):
         motivos.append('auditorias_temporais_incompletas')
 
+    if not localizacao_ok:
+        motivos.append('localizacao_diferente_da_esperada')
+
     return (len(motivos) == 0), motivos
 
 
-def _diagnosticar_origens(origens, resumo_df, raw_df, temporal_df):
+def _diagnosticar_origens(origens, resumo_df, raw_df, temporal_df, localizacao_esperada=None):
     """Roda `_verificar_integridade_origem` para cada origem de
     `origens`, cruzando com o que está persistido — usado tanto por
     `origens_pendentes` (retomada) quanto por `consolidar_extracao_
@@ -179,37 +311,39 @@ def _diagnosticar_origens(origens, resumo_df, raw_df, temporal_df):
     for ano, mes in origens:
         origem_str = f"{ano}-{mes:02d}"
         linha = resumo_por_origem.get((ano, mes))
-        integra, motivos = _verificar_integridade_origem(origem_str, linha, raw_df, temporal_df)
+        integra, motivos = _verificar_integridade_origem(
+            origem_str, linha, raw_df, temporal_df, localizacao_esperada=localizacao_esperada)
         diagnostico[(ano, mes)] = {'concluida_e_integra': integra, 'motivos': motivos}
     return diagnostico
 
 
-def diagnosticar_integridade_lote(lote, diretorio=DIRETORIO_HISTORICO):
+def diagnosticar_integridade_lote(lote, diretorio=DIRETORIO_HISTORICO, localizacao_esperada=None):
     """Wrapper de `_diagnosticar_origens` que carrega os 3 CSVs
     persistidos do lote do disco — usado pela CLI/depuração e por
     `origens_pendentes`."""
     resumo = _carregar_resumo_persistido(lote.lote_id, diretorio)
     raw = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'raw.csv', diretorio))
     temporal = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
-    return _diagnosticar_origens(lote.origens, resumo, raw, temporal)
+    return _diagnosticar_origens(lote.origens, resumo, raw, temporal, localizacao_esperada=localizacao_esperada)
 
 
-def origens_pendentes(lote, diretorio=DIRETORIO_HISTORICO):
+def origens_pendentes(lote, diretorio=DIRETORIO_HISTORICO, localizacao_esperada=None):
     """Seção 1 da tarefa — "possibilidade de retomada sem repetir
     desnecessariamente as consultas concluídas". Uma origem CONCLUÍDA é
     uma origem já persistida que passa em TODA a verificação de
     integridade de `_verificar_integridade_origem` (revisão pontual,
-    Seção 2) — não só `poc_status=APROVADO` isolado. Qualquer outra
-    situação (nunca tentada, reprovada, erro inesperado, ou persistida
-    mas com o raw.csv/temporal_audit.csv incompleto/inconsistente) fica
-    pendente e É retentada — uma reprovação anterior pode ter sido um
-    problema transitório de rede, nunca assumido permanente sem tentar
-    de novo."""
-    diagnostico = diagnosticar_integridade_lote(lote, diretorio)
+    Seção 2, e localização — Seção 5 da 3ª rodada) — não só
+    `poc_status=APROVADO` isolado. Qualquer outra situação (nunca
+    tentada, reprovada, erro inesperado, persistida mas com o raw.csv/
+    temporal_audit.csv incompleto/inconsistente, ou com a localização
+    divergente da esperada) fica pendente e É retentada — uma
+    reprovação anterior pode ter sido um problema transitório de rede,
+    nunca assumido permanente sem tentar de novo."""
+    diagnostico = diagnosticar_integridade_lote(lote, diretorio, localizacao_esperada=localizacao_esperada)
     return tuple(o for o in lote.origens if not diagnostico[o]['concluida_e_integra'])
 
 
-def _resultado_minimo_da_linha_resumo(row, raw_df, temporal_df):
+def _resultado_minimo_da_linha_resumo(row, raw_df, temporal_df, localizacao_esperada=None):
     """Reconstrói um dict no formato de `nmme_piloto_historico.
     executar_piloto_historico` a partir de 1 linha JÁ PERSISTIDA —
     usado para recompor o lote inteiro (origens novas + origens
@@ -222,16 +356,18 @@ def _resultado_minimo_da_linha_resumo(row, raw_df, temporal_df):
 
     Revisão pontual, Seção 2/3 — NUNCA repassa `poc_status=APROVADO`
     do resumo sem cruzar com `raw_df`/`temporal_df` primeiro
-    (`_verificar_integridade_origem`): uma origem cujo resumo diz
-    APROVADO mas cujo raw.csv/temporal_audit.csv não bate mais
-    (truncado, editado, corrompido) é rebaixada aqui para
+    (`_verificar_integridade_origem`, incluindo a localização —
+    revisão 3ª rodada, item 5): uma origem cujo resumo diz APROVADO mas
+    cujo raw.csv/temporal_audit.csv não bate mais (truncado, editado,
+    corrompido, ou com a localização errada) é rebaixada aqui para
     `REPROVADO_INTEGRIDADE_PERSISTIDA` — isso é o que faz
     `avaliar_aprovacao_piloto` (reaproveitada sem modificação) reprovar
     o agregado quando a integridade persistida falha, tanto no nível do
     lote (`executar_lote`) quanto na consolidação final (Seção 3)."""
     ano, mes = int(row['ano']), int(row['mes'])
     origem_str = f"{ano}-{mes:02d}"
-    integra, motivos = _verificar_integridade_origem(origem_str, row, raw_df, temporal_df)
+    integra, motivos = _verificar_integridade_origem(
+        origem_str, row, raw_df, temporal_df, localizacao_esperada=localizacao_esperada)
     erro_persistido = row.get('erro_inesperado')
     erro_persistido = erro_persistido if isinstance(erro_persistido, str) and erro_persistido else None
     return {
@@ -254,7 +390,7 @@ def _resultado_minimo_da_linha_resumo(row, raw_df, temporal_df):
 
 
 def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
-                    diretorio=DIRETORIO_HISTORICO, sistema=None):
+                    diretorio=None, sistema=None, localizacao=LOCALIZACAO_SAO_BENTO):
     """Roda só as origens PENDENTES deste lote (retomada — Seção 1),
     reaproveitando `nmme_piloto_historico.executar_piloto_historico`
     sem modificação para o isolamento de falha por origem. Mescla o
@@ -263,7 +399,20 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
     aprovação do LOTE INTEIRO (`nmme_piloto_historico.
     avaliar_aprovacao_piloto`, reaproveitada sem modificação — mesmos
     critérios: todas aprovadas, nenhum erro inesperado, rota validada
-    exclusiva, integridade das origens do lote)."""
+    exclusiva, integridade das origens do lote).
+
+    `localizacao` (revisão pontual, 3ª rodada) — `LOCALIZACAO_SAO_BENTO`
+    por default, preservando INTEGRALMENTE o caminho existente (item 1
+    da revisão): resolve `lat`/`lon` como `None, None`, que
+    `nmme_piloto_historico.executar_piloto_historico`/`nmme_poc.
+    executar_poc_real_cfsv2` já tratam como "resolver via MUNICIPIOS",
+    exatamente como antes desta mudança. Para `LOCALIZACAO_FAZENDAS`,
+    resolve `lat=FAZENDAS_LAT, lon=FAZENDAS_LON` e, quando `diretorio`
+    não é informado explicitamente, usa `DIRETORIO_HISTORICO_FAZENDAS`
+    (item 2 — diretório próprio, nunca compartilhado)."""
+    if diretorio is None:
+        diretorio = diretorio_padrao_para_localizacao(localizacao)
+    lat, lon = lat_lon_para_localizacao(localizacao)
     diretorio.mkdir(parents=True, exist_ok=True)
 
     # Carrega o estado persistido UMA VEZ (resumo + raw + temporal +
@@ -276,12 +425,14 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
     temporal_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
     access_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'access_audit.csv', diretorio))
 
-    diagnostico = _diagnosticar_origens(lote.origens, resumo_persistido, raw_persistido, temporal_persistido)
+    diagnostico = _diagnosticar_origens(lote.origens, resumo_persistido, raw_persistido, temporal_persistido,
+                                          localizacao_esperada=localizacao)
     pendentes = tuple(o for o in lote.origens if not diagnostico[o]['concluida_e_integra'])
     # Registra o problema ANTES de qualquer reprocessamento substituir
     # os dados antigos (Seção 2: "não perder os registros anteriores
     # sem antes identificar a inconsistência") — só entra aqui quem
-    # tinha dado persistido que falhou na verificação, nunca quem
+    # tinha dado persistido que falhou na verificação (inclusive
+    # localização divergente — item 5 da 3ª rodada), nunca quem
     # simplesmente nunca foi tentado (esse motivo sozinho não é uma
     # inconsistência, é o estado normal de um lote ainda não concluído).
     origens_com_inconsistencia_detectada = [
@@ -293,11 +444,12 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
     if pendentes:
         resultados_novos = pilo.executar_piloto_historico(
             origens=pendentes, sistema=sistema, baixar_fn=baixar_fn, abrir_fn=abrir_fn,
-            resolver_fns=resolver_fns)
+            resolver_fns=resolver_fns, lat=lat, lon=lon)
 
     origens_novas = {item['origem'] for item in resultados_novos}
     resultados_reaproveitados = [
-        _resultado_minimo_da_linha_resumo(row, raw_persistido, temporal_persistido)
+        _resultado_minimo_da_linha_resumo(row, raw_persistido, temporal_persistido,
+                                            localizacao_esperada=localizacao)
         for _, row in resumo_persistido.iterrows()
         if (int(row['ano']), int(row['mes'])) not in origens_novas
     ]
@@ -307,6 +459,17 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
     resultados_completos.sort(key=lambda item: item['origem'])
 
     raw_novo, temporal_novo, access_novo = pilo.concatenar_dataframes_piloto(resultados_novos)
+    # Item 3/5 da revisão — toda linha nova grava a localização
+    # explicitamente (além das coordenadas solicitada/selecionada, já
+    # presentes por linha via requested_lat/requested_lon/selected_lat/
+    # selected_lon — colunas de nmme_poc.executar_poc_real_cfsv2,
+    # preservadas sem modificação). `concatenar_dataframes_piloto`
+    # (reaproveitada sem modificação) só insere `origem_piloto`; a
+    # coluna `localizacao` é adicionada aqui, só no que este módulo
+    # escreve.
+    for df_novo in (raw_novo, temporal_novo, access_novo):
+        if len(df_novo):
+            df_novo['localizacao'] = localizacao
 
     origens_novas_str = {f'{a}-{m:02d}' for a, m in origens_novas}
     raw_final = _substituir_origens(raw_persistido, raw_novo, origens_novas_str)
@@ -327,6 +490,10 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
         resumo_final['n_raw'] = resumo_final['init_date'].map(contagem_raw).fillna(0).astype(int)
     else:
         resumo_final['n_raw'] = 0
+    # O lote inteiro é de UMA localização só — coluna constante, mas
+    # gravada em toda linha do resumo (item 5: identificação da
+    # localização faz parte da integridade persistida, não só do RAW).
+    resumo_final['localizacao'] = localizacao
 
     raw_final.to_csv(_caminho_lote(lote.lote_id, 'raw.csv', diretorio), index=False)
     temporal_final.to_csv(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio), index=False)
@@ -335,7 +502,9 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
 
     aprovacao = pilo.avaliar_aprovacao_piloto(resultados_completos, origens_esperadas=lote.origens)
     metadata_lote = {
-        'lote_id': lote.lote_id, 'n_origens': len(lote.origens),
+        'lote_id': lote.lote_id, 'localizacao': localizacao,
+        'localizacao_lat': lat, 'localizacao_lon': lon,
+        'n_origens': len(lote.origens),
         'n_origens_pendentes_nesta_execucao': len(pendentes),
         'n_origens_reaproveitadas_do_disco': len(resultados_reaproveitados),
         'lote_status': aprovacao['piloto_status'], 'criterios': aprovacao['criterios'],
@@ -345,6 +514,13 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
         'origens_com_inconsistencia_detectada': origens_com_inconsistencia_detectada,
         'n_raw': len(raw_final), 'n_raw_esperado': len(lote.origens) * 6 * 24,
     }
+    # Item 6 da revisão — cita a evidência do POC de infraestrutura já
+    # aprovado para o centroide das fazendas em todo lote dessa
+    # localização, sem nunca promover a localização automaticamente
+    # (EVIDENCIA_POC_FAZENDAS['aptidao_cientifica_declarada'] é sempre
+    # False, citado aqui, não reafirmado/recalculado).
+    if localizacao == LOCALIZACAO_FAZENDAS:
+        metadata_lote['evidencia_poc_localizacao'] = EVIDENCIA_POC_FAZENDAS
     (_caminho_lote(lote.lote_id, 'metadata.json', diretorio)).write_text(
         json.dumps(metadata_lote, indent=2, ensure_ascii=False, default=str))
     return metadata_lote
@@ -379,7 +555,7 @@ def _substituir_origens(df_persistido, df_novo, origens_novas_str):
     return pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()
 
 
-def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HISTORICO):
+def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=None, localizacao=LOCALIZACAO_SAO_BENTO):
     """Seção 1 da tarefa — depois que os lotes rodarem (não necessariamente
     todos ainda), verifica as 240 origens x 6 leads x 24 membros
     (34.560 registros RAW) SE E SOMENTE SE todas as 240 estiverem
@@ -401,7 +577,14 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
     ficam também expostos aqui como campos próprios
     (`todas_origens_com_144_raw`/`todas_auditorias_temporais_completas`)
     para nunca depender de inferir isso indiretamente. UMA divergência
-    em qualquer critério bloqueia `extracao_completa_e_aprovada`."""
+    em qualquer critério bloqueia `extracao_completa_e_aprovada`.
+
+    `localizacao` (revisão pontual, 3ª rodada, item 5) — também exige
+    que a identificação da localização bata em toda origem; quando
+    `diretorio` não é informado, resolve o diretório próprio dessa
+    localização (item 2)."""
+    if diretorio is None:
+        diretorio = diretorio_padrao_para_localizacao(localizacao)
     resultados_todos = []
     n_raw_total = 0
     lotes_status = {}
@@ -413,7 +596,8 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
         temporal_lote = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
         n_raw_total += len(raw_lote)
 
-        diagnostico_lote = _diagnosticar_origens(lote.origens, resumo, raw_lote, temporal_lote)
+        diagnostico_lote = _diagnosticar_origens(lote.origens, resumo, raw_lote, temporal_lote,
+                                                    localizacao_esperada=localizacao)
         for diag in diagnostico_lote.values():
             if 'n_raw_diferente_de_144' in diag['motivos']:
                 todas_origens_com_144_raw = False
@@ -422,7 +606,7 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
 
         if len(resumo):
             resultados_todos.extend(
-                _resultado_minimo_da_linha_resumo(row, raw_lote, temporal_lote)
+                _resultado_minimo_da_linha_resumo(row, raw_lote, temporal_lote, localizacao_esperada=localizacao)
                 for _, row in resumo.iterrows())
         n_aprovadas = sum(1 for diag in diagnostico_lote.values() if diag['concluida_e_integra'])
         lotes_status[lote.lote_id] = {'n_origens': len(lote.origens), 'n_aprovadas': n_aprovadas,
@@ -467,6 +651,7 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
     n_raw_bate_com_esperado = (n_raw_total == n_raw_esperado) if demais_criterios_ok else None
     completo = demais_criterios_ok and bool(n_raw_bate_com_esperado)
     consolidado = {
+        'localizacao': localizacao,
         'n_lotes': len(lotes), 'n_origens_esperadas_total': len(todas_origens_esperadas),
         'n_origens_aprovadas_total': aprovacao_geral['n_origens_aprovadas'],
         'extracao_completa_e_aprovada': completo,
@@ -481,6 +666,8 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
         'lotes_status': lotes_status,
         'nenhuma_skill_calculada': True, 'nenhum_dashboard_alterado': True,
     }
+    if localizacao == LOCALIZACAO_FAZENDAS:
+        consolidado['evidencia_poc_localizacao'] = EVIDENCIA_POC_FAZENDAS
     return consolidado
 
 
@@ -488,36 +675,57 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
 # CLI
 # ══════════════════════════════════════════════════════════════════════════
 
+_LOCALIZACAO_CLI_PARA_INTERNA = {'sao_bento': LOCALIZACAO_SAO_BENTO, 'fazendas': LOCALIZACAO_FAZENDAS}
+
+
+def _imprimir_plano_localizacao(localizacao):
+    diretorio = diretorio_padrao_para_localizacao(localizacao)
+    lat, lon = lat_lon_para_localizacao(localizacao)
+    print(f"  localizacao: {localizacao} (lat={lat}, lon={lon})"
+          if lat is not None else f"  localizacao: {localizacao} (resolvida via MUNICIPIOS)")
+    print(f"  armazenamento: {diretorio.relative_to(ROOT)}/ (commitado no repositório, "
+          "NUNCA depende só do artifact do GitHub Actions — retenção 30 dias; "
+          "diretório próprio, nunca compartilhado com o de outra localização)")
+    if localizacao == LOCALIZACAO_FAZENDAS:
+        print(f"  evidencia_poc_infraestrutura: run {EVIDENCIA_POC_FAZENDAS['run_id']} "
+              f"({EVIDENCIA_POC_FAZENDAS['poc_status']}) — nunca promove aptidão científica")
+    for lote in LOTES_HISTORICOS:
+        pendentes = origens_pendentes(lote, diretorio, localizacao_esperada=localizacao)
+        print(f"  - lote {lote.lote_id}: {len(lote.origens)} origens, "
+              f"{len(pendentes)} pendentes (retomada automática)")
+
+
 def imprimir_plano():
     print("=== NMME Extração Histórica CFSv2 (Fase 2C.2) — DRY RUN PLAN "
           "(nenhum acesso à rede NMME) ===")
     print(f"  periodo: {PERIODO_ANOS[0]}-{PERIODO_ANOS[-1]}")
-    print(f"  n_origens_total: {len(ORIGENS_HISTORICAS)}")
-    print(f"  n_lotes: {len(LOTES_HISTORICOS)} (até {TAMANHO_LOTE_MAX} origens cada)")
+    print(f"  n_origens_total: {len(ORIGENS_HISTORICAS)} (mesmos 5 lotes de até "
+          f"{TAMANHO_LOTE_MAX} origens para as duas localidades)")
     print(f"  n_raw_esperado_se_tudo_aprovado: {N_RAW_ESPERADO_TOTAL}")
-    print("  armazenamento: data/nmme_historico/ (commitado no repositório, "
-          "NUNCA depende só do artifact do GitHub Actions — retenção 30 dias)")
-    for lote in LOTES_HISTORICOS:
-        pendentes = origens_pendentes(lote)
-        print(f"  - lote {lote.lote_id}: {len(lote.origens)} origens, "
-              f"{len(pendentes)} pendentes (retomada automática)")
+    for localizacao in LOCALIZACOES_VALIDAS:
+        print(f"\n--- {localizacao} ---")
+        _imprimir_plano_localizacao(localizacao)
     print("\n✅ Plano da extração histórica gerado (infraestrutura só — nenhum download real).")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run-plan', action='store_true',
-                     help='Nunca acessa a rede NMME — só mostra o plano dos 5 lotes.')
+                     help='Nunca acessa a rede NMME — só mostra o plano dos 5 lotes das duas localidades.')
     ap.add_argument('--executar-lote', metavar='LOTE_ID', default=None,
                      help='Roda só o lote informado (ex.: 1991-1994) — acessa a rede de verdade. '
                           'Nunca roda mais de 1 lote por invocação.')
     ap.add_argument('--consolidar', action='store_true',
-                     help='Só lê os lotes já persistidos em data/nmme_historico/ e reporta o estado '
-                          'consolidado — nunca acessa a rede.')
+                     help='Só lê os lotes já persistidos e reporta o estado consolidado — nunca acessa a rede.')
+    ap.add_argument('--localizacao', choices=('sao_bento', 'fazendas'), default='sao_bento',
+                     help="Localização alvo de --executar-lote/--consolidar — 'sao_bento' (default, "
+                          "data/nmme_historico/) ou 'fazendas' (data/nmme_historico_fazendas/, "
+                          "centroide das fazendas, lat=-7.80/lon=-47.95).")
     args = ap.parse_args()
+    localizacao = _LOCALIZACAO_CLI_PARA_INTERNA[args.localizacao]
 
     if args.consolidar:
-        consolidado = consolidar_extracao_completa()
+        consolidado = consolidar_extracao_completa(localizacao=localizacao)
         print(json.dumps(consolidado, indent=2, ensure_ascii=False, default=str))
         return
 
@@ -527,8 +735,9 @@ def main():
             raise SystemExit(f"lote_id {args.executar_lote!r} desconhecido — "
                               f"válidos: {sorted(lotes_por_id)}")
         imprimir_plano()
-        metadata_lote = executar_lote(lotes_por_id[args.executar_lote])
-        print(f"\nlote_status={metadata_lote['lote_status']} "
+        metadata_lote = executar_lote(lotes_por_id[args.executar_lote], localizacao=localizacao)
+        print(f"\nlocalizacao={metadata_lote['localizacao']}")
+        print(f"lote_status={metadata_lote['lote_status']} "
               f"({metadata_lote['n_origens_aprovadas']}/{metadata_lote['n_origens']} origens aprovadas)")
         for k, v in metadata_lote['criterios'].items():
             print(f"  - {k}: {v}")
@@ -537,9 +746,11 @@ def main():
             for item in metadata_lote['origens_com_inconsistencia_detectada']:
                 print(f"  - {item['origem']}: {', '.join(item['motivos'])}")
         if metadata_lote['lote_status'] != 'APROVADO':
-            raise SystemExit(f"Lote {args.executar_lote} REPROVADO — ver "
-                              f"data/nmme_historico/lote_{args.executar_lote}_resumo_por_origem.csv")
-        print(f"\n✅ Lote {args.executar_lote} APROVADO — persistido em data/nmme_historico/")
+            raise SystemExit(f"Lote {args.executar_lote} ({localizacao}) REPROVADO — ver "
+                              f"{diretorio_padrao_para_localizacao(localizacao).relative_to(ROOT)}/"
+                              f"lote_{args.executar_lote}_resumo_por_origem.csv")
+        print(f"\n✅ Lote {args.executar_lote} ({localizacao}) APROVADO — persistido em "
+              f"{diretorio_padrao_para_localizacao(localizacao).relative_to(ROOT)}/")
         return
 
     imprimir_plano()
