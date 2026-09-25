@@ -385,7 +385,19 @@ REPR_VALIDOS = {REPR_RAW_NATIVE_ENSEMBLE, REPR_NMME_HARMONIZED_MONTHLY, REPR_UNK
 # (CCSR_BETA, Seção 12 — nunca inventado por adivinhação de padrão).
 ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY = 'POC_READY_DOCUMENTED_LEGACY'
 ROUTE_STATUS_DISCOVERY_REQUIRED = 'DISCOVERY_REQUIRED'
-ROUTE_STATUS_VALIDOS = {ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY, ROUTE_STATUS_DISCOVERY_REQUIRED}
+# Fase 2C.1b, encerramento — degrau ACIMA de POC_READY_DOCUMENTED_LEGACY:
+# um subset real pequeno foi baixado com sucesso PARA ESTA ROTA
+# específica e passou por todos os guardrails de nmme_poc.avaliar_
+# aprovacao_poc (poc_status=APROVADO). Nunca aplicado por inferência a
+# outra rota/representação/sistema — só à rota que de fato foi aberta
+# (Seção 3 da tarefa de encerramento: "atualizar exclusivamente o
+# status da rota efetivamente validada"). Não é comprovação de
+# habilidade preditiva — só de que o acesso/parsing/guardrails de
+# integridade funcionam contra o servidor real (ver poc_validation_*
+# abaixo para a evidência específica).
+ROUTE_STATUS_EMPIRICALLY_CONFIRMED = 'EMPIRICALLY_CONFIRMED'
+ROUTE_STATUS_VALIDOS = {ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY, ROUTE_STATUS_DISCOVERY_REQUIRED,
+                          ROUTE_STATUS_EMPIRICALLY_CONFIRMED}
 
 # Seção 7 — risco de continuidade operacional da rota: HIGH para o
 # serviço com data de desligamento anunciada (IRIDL legado); BETA para
@@ -445,6 +457,17 @@ class RotaMemberLevel:
     # essa dimensão) está documentado o bastante para esta rota — nunca
     # assumido por padrão.
     ingrid_value_init_selection_documented: bool = False
+    # Fase 2C.1b, encerramento (Seção 3) — preenchidos SÓ quando
+    # status=EMPIRICALLY_CONFIRMED; None nas demais rotas (nunca
+    # inferido/estimado). Data/commit/run_id identificam exatamente QUAL
+    # execução produziu a evidência, para permitir auditoria posterior
+    # (ex.: se a rota parar de responder depois de uma mudança no
+    # servidor, dá pra saber a partir de quando o registro deixou de
+    # refletir a realidade).
+    poc_validated_at: Optional[str] = None            # data ISO (AAAA-MM-DD) da execução aprovada
+    poc_validation_commit: Optional[str] = None        # sha curto do commit em `main` usado na execução
+    poc_validation_run_id: Optional[str] = None        # ID da execução do GitHub Actions (workflow_run)
+    poc_validation_evidence: tuple = field(default_factory=tuple)   # citações específicas da execução
 
 
 @dataclass(frozen=True)
@@ -763,7 +786,7 @@ CATALOGO = [
                 member_dimension='M', lead_dimension='L', init_dimension='S',
                 lat_dimension='Y', lon_dimension='X',
                 member_axis_size=24, grid_shape='360x181 (regular 1°x1°)',
-                status=ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY,
+                status=ROUTE_STATUS_EMPIRICALLY_CONFIRMED,
                 source_continuity_risk=CONTINUITY_RISK_HIGH,
                 source_reference=(
                     'github.com/iridl/dlentries, entries/Models/NMME/NCEP-CFSv2/HINDCAST/MONTHLY/'
@@ -775,10 +798,47 @@ CATALOGO = [
                 notes='Representação B (Seção 9) — amostra harmonizada do NMME (mais próxima do '
                       'produto NMME3 "pooled"/24-membros documentado no manual, Rodada 2, mas NÃO '
                       'confirmada como sendo literalmente o mesmo dado — nunca reconciliada com a '
-                      'Representação A nesta rodada, instrução explícita da revisão). Nenhum downloader '
-                      'foi escrito para esta representação especificamente nesta rodada — registrada '
-                      'para auditoria/futuro uso, não é a rota padrão escolhida por '
-                      'nmme_download.escolher_backend_member_level (que prioriza a Representação A).',
+                      'Representação A). Passou a ser a rota PREFERIDA (não mais só documentada) a '
+                      'partir de nmme_download.ordem_tentativa_member_level (revisão RANGEEDGES-'
+                      'fonte-principal, branch claude/fase2c1b-rangeedges-fonte-principal): o '
+                      'downloader (montar_url_iri_cfsv2_nmme_harmonized) foi escrito e usado com '
+                      'sucesso pela execução real que promoveu este status — texto anterior desta nota '
+                      '("nenhum downloader foi escrito", "não é a rota padrão") ficou desatualizado por '
+                      'aquela mudança e é corrigido aqui (Fase 2C.1b, encerramento).'
+                      '\n\nEncerramento da Fase 2C.1b — POC de infraestrutura APROVADO nesta rota '
+                      'específica (ver poc_validation_* abaixo para data/commit/run_id/evidência). '
+                      'Isso confirma que o acesso, a seleção de inicialização, os membros, a unidade, '
+                      'a grade e o mapeamento temporal funcionam contra o servidor real para esta '
+                      'combinação exata (backend, representação, origem 2005-01, H1-H6). NÃO é '
+                      'comprovação de habilidade preditiva do CFSv2 — nenhuma skill foi calculada '
+                      '(nmme_poc nunca calcula skill, Seção 18/35-S) e nenhum outro sistema/'
+                      'representação/endpoint foi promovido a partir deste resultado.',
+                poc_validated_at='2026-09-24',
+                poc_validation_commit='6ac00e8264957dff30d8297ffc4cfbcb67a16e64',
+                poc_validation_run_id='36042228571',
+                poc_validation_evidence=(
+                    'GitHub Actions run 36042228571 (workflow "NMME Catálogo + POC (Fase 2C.1/2C.1b)", '
+                    'job "NMME Catálogo + POC", step "Rodar POC real"), head_sha=6ac00e8 (main, PR #32 '
+                    'já mergeada) — stdout do próprio script (scripts/nmme_poc.py::main), lido de '
+                    'primeira mão via GitHub API (get_job_logs; o ZIP do artifact em si não pôde ser '
+                    'baixado nesta sessão — productionresultssa16.blob.core.windows.net bloqueado pela '
+                    'política de rede do ambiente, ver egress proxy — evidência abaixo vem do log do '
+                    'job, não do CSV/JSON do artifact): '
+                    'backend_used=IRIDL_LEGACY dataset_representation_used=NMME_HARMONIZED_MONTHLY '
+                    'backend_fallback_ocorreu=False; poc_status=APROVADO; checklist com 15/15 itens '
+                    'True (download_bem_sucedido, um_modelo, uma_origem, h1_a_h6_presentes, '
+                    'members_status_ok, member_axis_size_ok, member_count_per_lead_ok, sem_duplicata, '
+                    'valores_finitos, precipitacao_nao_negativa, unidade_confirmada, grade_confirmada, '
+                    'temporal_mapping_confirmado, raw_completo, nenhum_skill_calculado); '
+                    'inicializacao_fonte_principal=RANGEEDGES, '
+                    'inicializacao_selecao_metodo=RANGEEDGES_WINDOW_COORDINATE_MATCH; valores de S '
+                    'ANTES da seleção: [\'2005-01-01 00:00:00\', \'2005-02-01 00:00:00\'] (RANGEEDGES '
+                    'devolveu janela com 2 inicializações, confirmando empiricamente em produção o '
+                    'mesmo achado da run diagnóstica 36032400919); valores de S DEPOIS da seleção: '
+                    '[\'2005-01-01 00:00:00\'] (só janeiro, a origem pedida). O mesmo job também rodou '
+                    '`verificar_dashboard.py` (APROVADO) e a suíte de testes completa antes do POC '
+                    'real, sem tocar em docs/ ou data/.',
+                ),
                 # Execução real #2 (run 35888809240, Seção 4-#7) — gate
                 # do Método B de confirmação temporal: o index.tex desta
                 # rota já foi lido de primeira mão (source_reference
@@ -1157,13 +1217,24 @@ def _validar_catalogo(catalogo):
                 raise ValueError(f"{rchave}: source_continuity_risk inválido: "
                                   f"{r.source_continuity_risk!r} (precisa ser um de "
                                   f"{sorted(CONTINUITY_RISK_VALIDOS)}).")
-            if r.status == ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY and \
-                    (r.dataset_path is None or r.variable_name is None):
-                raise ValueError(f"{rchave}: status=POC_READY_DOCUMENTED_LEGACY exige dataset_path E "
+            if r.status in (ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY, ROUTE_STATUS_EMPIRICALLY_CONFIRMED) \
+                    and (r.dataset_path is None or r.variable_name is None):
+                raise ValueError(f"{rchave}: status={r.status} exige dataset_path E "
                                   f"variable_name preenchidos (Seção 4/5, Rodada 5).")
             if r.status == ROUTE_STATUS_DISCOVERY_REQUIRED and r.dataset_path is not None:
                 raise ValueError(f"{rchave}: status=DISCOVERY_REQUIRED nunca pode ter dataset_path "
                                   f"preenchido — isso seria inventar URL por adivinhação (Seção 12).")
+            # Fase 2C.1b, encerramento (Seção 3) — EMPIRICALLY_CONFIRMED
+            # exige a evidência específica da execução que justificou a
+            # promoção (nunca "confirmado" sem registrar QUAL execução).
+            if r.status == ROUTE_STATUS_EMPIRICALLY_CONFIRMED and \
+                    (not r.poc_validated_at or not r.poc_validation_commit
+                     or not r.poc_validation_run_id or not r.poc_validation_evidence):
+                raise ValueError(f"{rchave}: status=EMPIRICALLY_CONFIRMED exige poc_validated_at, "
+                                  f"poc_validation_commit, poc_validation_run_id E "
+                                  f"poc_validation_evidence preenchidos — nunca confirmado sem "
+                                  f"registrar a execução que comprova (Seção 3 da tarefa de "
+                                  f"encerramento).")
             if not r.source_reference:
                 raise ValueError(f"{rchave}: rota sem source_reference — nada pode ser registrado sem "
                                   f"citação (Seção 35-A aplicada às rotas).")
