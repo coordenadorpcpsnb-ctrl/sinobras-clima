@@ -1,0 +1,169 @@
+name: NMME Extração Histórica CFSv2 (Fase 2C.2)
+
+# Fase 2C.2 — extração histórica completa do CFSv2 (240 inicializações
+# mensais, 1991-2010), em 5 LOTES independentes de até 48 inicializações
+# cada (scripts/nmme_extracao_historica.py). Preparatória para uma
+# eventual avaliação de skill (NÃO feita por este workflow) — reaproveita,
+# sem modificação, TODA a orquestração e os guardrails já validados no
+# piloto de 16 inicializações (scripts/nmme_piloto_historico.py, run real
+# 36145108571, 16/16 aprovadas, rota IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY
+# exclusiva).
+#
+# ARMAZENAMENTO PERMANENTE: cada lote aprovado é COMMITADO em
+# data/nmme_historico/ (não só artifact do GitHub Actions — retenção de
+# 30 dias é insuficiente para um histórico de 20 anos). RETOMADA: uma
+# origem já persistida com poc_status=APROVADO nunca é reconsultada —
+# rodar o mesmo lote de novo só retenta o que faltou.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
+# executar_lote_real=false — clicar em "Run workflow" sem mexer em nada
+# NUNCA acessa a rede NMME: só valida código, roda a suíte de testes,
+# mostra o plano dos 5 lotes (quantas origens já concluídas/pendentes em
+# cada um). Nunca roda mais de 1 lote por execução do workflow — cada
+# lote precisa ser disparado explicitamente (Seção 1 da tarefa: "não
+# executar automaticamente a extração completa").
+#
+# Nunca calcula skill, nunca modifica o dashboard, nunca promove
+# nenhuma rota/representação/sistema no catálogo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run_plan:
+        description: 'true (default, seguro) = só valida código/testes e mostra o plano dos 5 lotes — nunca acessa a rede NMME'
+        required: true
+        default: 'true'
+      lote_id:
+        description: 'Lote a rodar (só usado com executar_lote_real=true) — nunca roda mais de 1 lote por execução'
+        required: false
+        type: choice
+        default: '1991-1994'
+        options:
+          - '1991-1994'
+          - '1995-1998'
+          - '1999-2002'
+          - '2003-2006'
+          - '2007-2010'
+      executar_lote_real:
+        description: 'true = roda de verdade o lote escolhido (só as origens pendentes — retomada automática). Acessa a rede de verdade.'
+        required: true
+        default: 'false'
+      confirm_lote_real:
+        description: 'Só necessário com dry_run_plan=false e executar_lote_real=true: digite EXECUTAR_NMME_LOTE para liberar'
+        required: false
+        default: ''
+      consolidar:
+        description: 'true = só lê os lotes já persistidos em data/nmme_historico/ e reporta o estado consolidado — nunca acessa a rede (independente de dry_run_plan)'
+        required: true
+        default: 'false'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nmme-extracao-historica
+  cancel-in-progress: false
+
+jobs:
+  nmme-extracao-historica:
+    name: NMME Extração Histórica (1 lote por execução)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Bloqueia a extração real acidental sem confirmação explícita —
+      # roda ANTES de instalar dependências ou tocar em qualquer rede.
+      - name: Guardrail — lote real exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.executar_lote_real == 'true'
+        run: |
+          if [ "${{ inputs.confirm_lote_real }}" != "EXECUTAR_NMME_LOTE" ]; then
+            echo "::error::Lote real NMME bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ Lote real bloqueado"
+              echo ""
+              echo "Rodar um lote real (Fase 2C.2, extração histórica) exige preencher o"
+              echo "input **confirm_lote_real** com o texto exato \`EXECUTAR_NMME_LOTE\`."
+              echo ""
+              echo "O default (dry_run_plan=true) nunca acessa a rede — só valida código,"
+              echo "roda testes e mostra o plano dos 5 lotes."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_lote_real=EXECUTAR_NMME_LOTE) — liberando execução do lote ${{ inputs.lote_id }}."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S/NMME)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      # Sempre roda (nunca acessa rede) — mostra quantas origens já
+      # estão concluídas (persistidas em data/nmme_historico/) e
+      # quantas ficam pendentes em cada um dos 5 lotes.
+      - name: Mostrar plano da extração (dry-run, nunca acessa a rede NMME)
+        run: python scripts/nmme_extracao_historica.py --dry-run-plan
+
+      - name: Rodar lote real (Fase 2C.2 — só origens pendentes deste lote, retomada automática)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_lote_real == 'true'
+        run: python scripts/nmme_extracao_historica.py --executar-lote "${{ inputs.lote_id }}"
+
+      - name: Consolidação (lê data/nmme_historico/ já persistido — nunca acessa a rede)
+        if: inputs.consolidar == 'true'
+        run: python scripts/nmme_extracao_historica.py --consolidar
+
+      - name: Verificar alterações em data/nmme_historico/
+        id: diff
+        run: |
+          git add data/nmme_historico
+          git diff --cached --quiet && \
+            echo "alterado=false" >> $GITHUB_OUTPUT || \
+            echo "alterado=true"  >> $GITHUB_OUTPUT
+
+      # Armazenamento PERMANENTE — commitado no repositório (nunca só
+      # artifact do GitHub Actions, retenção de 30 dias insuficiente
+      # para um histórico de 20 anos).
+      - name: Commit do lote no armazenamento permanente
+        if: steps.diff.outputs.alterado == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
+          git commit -m "auto: NMME extração histórica — lote ${{ inputs.lote_id }} — $DATA
+
+          Fase 2C.2 — data/nmme_historico/ (armazenamento permanente,
+          commitado no repositório). Nenhuma skill calculada, nenhum
+          dashboard alterado, nenhuma rota/representação promovida."
+          # Outro workflow pode ter commitado entre o checkout e aqui —
+          # rebase antes de empurrar (mesma convenção de
+          # indices_semanal.yml).
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+      - name: Publicar artifacts do lote (CSVs/JSON/relatório — cópia de curto prazo, nunca NetCDF/GRIB)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nmme-extracao-historica-lote-${{ inputs.lote_id }}
+          path: |
+            data/nmme_historico/lote_${{ inputs.lote_id }}_raw.csv
+            data/nmme_historico/lote_${{ inputs.lote_id }}_temporal_audit.csv
+            data/nmme_historico/lote_${{ inputs.lote_id }}_access_audit.csv
+            data/nmme_historico/lote_${{ inputs.lote_id }}_resumo_por_origem.csv
+            data/nmme_historico/lote_${{ inputs.lote_id }}_metadata.json
+          retention-days: 30
+          if-no-files-found: ignore

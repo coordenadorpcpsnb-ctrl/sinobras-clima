@@ -1,0 +1,117 @@
+name: NMME POC Espacial — Centroide das Fazendas (Fase 2C.2)
+
+# Fase 2C.2, item 2 — POC espacial INDEPENDENTE
+# (scripts/nmme_poc_espacial_fazendas.py): mesma rota já
+# EMPIRICALLY_CONFIRMED (IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY, Fase
+# 2C.1b), mesma origem (2005-01) e mesmos leads (H1-H6) do POC original
+# de São Bento do Tocantins — mudando só o ponto, para o centroide das
+# fazendas (lat=-7.80, lon=-47.95, mesmo valor de scripts/_chirps.py e
+# scripts/_openmeteo.py). NUNCA altera as coordenadas do POC já
+# validado (scripts/_c3s_utils.py::MUNICIPIOS/scripts/nmme_poc.py::
+# MUNICIPIO/POC_ORIGEM continuam intactos).
+#
+# Esta localização NUNCA é considerada validada só por rodar este
+# workflow — mesmo com poc_status=APROVADO, `localizacao_validada` fica
+# sempre False; uma eventual promoção exige decisão explícita separada,
+# fora deste workflow. Os conjuntos de dados das duas localidades ficam
+# completamente separados (artifacts/nmme_poc_espacial_fazendas/, nunca
+# artifacts/nmme_poc/). Nunca calcula skill, nunca modifica o dashboard,
+# nunca promove nenhuma rota/representação/sistema no catálogo.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
+# executar_poc_real=false — clicar em "Run workflow" sem mexer em nada
+# NUNCA acessa a rede NMME: só valida código, roda a suíte de testes,
+# mostra o plano (coordenadas, distância até São Bento, origem, leads).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run_plan:
+        description: 'true (default, seguro) = só valida código/testes e mostra o plano do POC espacial — nunca acessa a rede NMME'
+        required: true
+        default: 'true'
+      executar_poc_real:
+        description: 'true = roda o POC real no centroide das fazendas — 1 origem, H1-H6. Acessa a rede de verdade.'
+        required: true
+        default: 'false'
+      confirm_poc_real:
+        description: 'Só necessário com dry_run_plan=false e executar_poc_real=true: digite EXECUTAR_NMME_POC_ESPACIAL para liberar'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nmme-poc-espacial-fazendas
+  cancel-in-progress: false
+
+jobs:
+  nmme-poc-espacial-fazendas:
+    name: NMME POC Espacial (Fazendas)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Bloqueia o POC real acidental sem confirmação explícita — roda
+      # ANTES de instalar dependências ou tocar em qualquer rede.
+      - name: Guardrail — POC real exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        run: |
+          if [ "${{ inputs.confirm_poc_real }}" != "EXECUTAR_NMME_POC_ESPACIAL" ]; then
+            echo "::error::POC espacial real NMME bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ POC espacial real bloqueado"
+              echo ""
+              echo "Rodar o POC espacial real (centroide das fazendas, Fase 2C.2) exige"
+              echo "preencher o input **confirm_poc_real** com o texto exato"
+              echo "\`EXECUTAR_NMME_POC_ESPACIAL\`."
+              echo ""
+              echo "O default (dry_run_plan=true) nunca acessa a rede — só valida código,"
+              echo "roda testes e mostra o plano (coordenadas, distância até São Bento)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_poc_real=EXECUTAR_NMME_POC_ESPACIAL) — liberando execução."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S/NMME)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      # Sempre roda (nunca acessa rede) — plano estático (coordenadas,
+      # distância até São Bento, origem/leads), não depende de download.
+      - name: Mostrar plano do POC espacial (dry-run, nunca acessa a rede NMME)
+        run: python scripts/nmme_poc_espacial_fazendas.py --dry-run-plan
+
+      - name: Rodar POC espacial real (Fase 2C.2 — centroide das fazendas, sem skill/promoção)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_poc_real == 'true'
+        run: python scripts/nmme_poc_espacial_fazendas.py --executar-poc-real
+
+      - name: Publicar artifacts (CSVs/JSON/relatório — nunca NetCDF/GRIB; nunca artifacts/nmme_poc/)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nmme-poc-espacial-fazendas
+          path: |
+            artifacts/nmme_poc_espacial_fazendas/poc_espacial_fazendas_raw.csv
+            artifacts/nmme_poc_espacial_fazendas/poc_espacial_fazendas_temporal_audit.csv
+            artifacts/nmme_poc_espacial_fazendas/poc_espacial_fazendas_access_audit.csv
+            artifacts/nmme_poc_espacial_fazendas/metadata.json
+            artifacts/nmme_poc_espacial_fazendas/RELATORIO.md
+          retention-days: 30
+          if-no-files-found: warn

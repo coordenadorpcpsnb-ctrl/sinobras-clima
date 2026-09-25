@@ -773,7 +773,8 @@ def validar_membros_poc(rota, member_ids_axis, member_count_non_missing_por_lead
 
 def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO, sistema=None,
                               esquema_temporal='lead1_igual_mes_inicializacao',
-                              baixar_fn=None, abrir_fn=None, baixar_com_status_fn=None):
+                              baixar_fn=None, abrir_fn=None, baixar_com_status_fn=None,
+                              lat=None, lon=None):
     """Seção 1-11 (Fase 2C.1b) — primeiro POC REAL, só CFSv2, origem
     2005-01, H1-H6. Tenta as rotas na ordem de
     nmme_download.ordem_tentativa_member_level (CCSR se pronta;
@@ -789,6 +790,16 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
     dele foi desativado na revisão #5 — Seção RANGEEDGES-fonte-
     principal); mantido só para não quebrar a assinatura de chamadores
     existentes.
+
+    `lat`/`lon` (Fase 2C.2, POC espacial independente — item 2 da
+    tarefa): quando ambos informados, sobrepõem o lookup em
+    `MUNICIPIOS[municipio]` — usados diretamente, sem tocar em
+    `MUNICIPIOS` nem em `municipio` (que fica sem efeito nesse caso).
+    Nunca altera o caminho padrão: toda chamada existente (POC de São
+    Bento do Tocantins já validado, piloto histórico) continua
+    resolvendo lat/lon exclusivamente por `MUNICIPIOS[municipio]`,
+    porque o default de ambos é `None` — este parâmetro é aditivo, não
+    substitui nada do que já existe.
 
     Revisão pós-execução #5 (RANGEEDGES como fonte principal) — a run
     real 36032400919 mostrou que o operador Ingrid VALUE pode devolver
@@ -813,8 +824,9 @@ def executar_poc_real_cfsv2(origem=POC_ORIGEM, leads=LEADS, municipio=MUNICIPIO,
         import xarray as xr
         abrir_fn = xr.open_dataset
     ano, mes = origem
-    info_muni = MUNICIPIOS[municipio]
-    lat, lon = info_muni['lat'], info_muni['lon']
+    if lat is None or lon is None:
+        info_muni = MUNICIPIOS[municipio]
+        lat, lon = info_muni['lat'], info_muni['lon']
 
     ordem = ndl.ordem_tentativa_member_level(sistema)
     backend_requested = ordem[0].data_backend
