@@ -56,6 +56,8 @@ assert len(ORIGENS_HISTORICAS) == 240
 
 TAMANHO_LOTE_MAX = 48   # Seção 1 — "preferencialmente até 48 inicializações"
 N_RAW_ESPERADO_TOTAL = 240 * 6 * 24   # 34.560 — só se as 240 origens estiverem APROVADO
+N_RAW_ESPERADO_POR_ORIGEM = 6 * 24   # 144 — 6 leads x 24 membros (revisão pontual, Seção 2/3)
+LEADS_ESPERADOS = frozenset({1, 2, 3, 4, 5, 6})
 
 
 @dataclass(frozen=True)
@@ -105,37 +107,138 @@ def _carregar_resumo_persistido(lote_id, diretorio=DIRETORIO_HISTORICO):
     return pd.read_csv(caminho)
 
 
+def _verificar_integridade_origem(origem_str, linha_resumo, raw_df, temporal_df):
+    """Revisão pontual, Seção 2 — antes de considerar uma inicialização
+    persistida como concluída, verifica TUDO isto, nunca só
+    `poc_status=APROVADO` isolado (que pode estar certo no resumo mas
+    já não bater mais com o que está de fato no raw.csv/
+    temporal_audit.csv, ex.: arquivo truncado/editado/corrompido depois
+    do fato — foi exatamente esse tipo de divergência silenciosa que o
+    bug de n_raw=0 desta mesma extração já mostrou que é real, não
+    hipotético):
+    1. status APROVADO;
+    2. backend e representação corretos (reaproveita as colunas já
+       calculadas por `nmme_piloto_historico.montar_resumo_por_origem`
+       — nunca reimplementa a comparação com o catálogo aqui);
+    3. identificação correta da inicialização (`init_date` bate com o
+       ano-mês esperado);
+    4. exatamente 144 registros RAW (6 leads x 24 membros) para esta
+       origem no raw.csv persistido;
+    5. nenhuma duplicata de par (lead, member) nesses 144 registros;
+    6. as 6 auditorias temporais (H1-H6) presentes, sem duplicata, no
+       temporal_audit.csv persistido.
+
+    Devolve (integra: bool, motivos: list[str]) — NUNCA assume íntegra
+    por ausência de dado (`linha_resumo=None` é o estado normal de uma
+    origem nunca tentada, motivo 'origem_nao_persistida', não um erro
+    silencioso)."""
+    if linha_resumo is None:
+        return False, ['origem_nao_persistida']
+
+    motivos = []
+    if linha_resumo.get('poc_status') != 'APROVADO':
+        motivos.append('poc_status_nao_aprovado')
+    if bool(linha_resumo.get('backend_diferente_da_validada', True)):
+        motivos.append('backend_diferente_da_validada')
+    if bool(linha_resumo.get('representacao_diferente_da_validada', True)):
+        motivos.append('representacao_diferente_da_validada')
+    if str(linha_resumo.get('init_date')) != origem_str:
+        motivos.append('init_date_divergente')
+
+    if len(raw_df) and 'origem_piloto' in raw_df.columns:
+        raw_origem = raw_df[raw_df['origem_piloto'] == origem_str]
+    else:
+        raw_origem = raw_df.iloc[0:0]
+    if len(raw_origem) != N_RAW_ESPERADO_POR_ORIGEM:
+        motivos.append('n_raw_diferente_de_144')
+    elif {'lead', 'member'}.issubset(raw_origem.columns) and raw_origem.duplicated(subset=['lead', 'member']).any():
+        motivos.append('duplicata_lead_member')
+
+    if len(temporal_df) and 'origem_piloto' in temporal_df.columns:
+        temporal_origem = temporal_df[temporal_df['origem_piloto'] == origem_str]
+    else:
+        temporal_origem = temporal_df.iloc[0:0]
+    leads_presentes = list(temporal_origem['H_lead']) if 'H_lead' in temporal_origem.columns else []
+    if set(leads_presentes) != LEADS_ESPERADOS or len(leads_presentes) != len(LEADS_ESPERADOS):
+        motivos.append('auditorias_temporais_incompletas')
+
+    return (len(motivos) == 0), motivos
+
+
+def _diagnosticar_origens(origens, resumo_df, raw_df, temporal_df):
+    """Roda `_verificar_integridade_origem` para cada origem de
+    `origens`, cruzando com o que está persistido — usado tanto por
+    `origens_pendentes` (retomada) quanto por `consolidar_extracao_
+    completa` (aprovação final), garantindo o MESMO critério de
+    integridade nas duas pontas."""
+    resumo_por_origem = {}
+    if len(resumo_df):
+        for _, row in resumo_df.iterrows():
+            resumo_por_origem[(int(row['ano']), int(row['mes']))] = row
+    diagnostico = {}
+    for ano, mes in origens:
+        origem_str = f"{ano}-{mes:02d}"
+        linha = resumo_por_origem.get((ano, mes))
+        integra, motivos = _verificar_integridade_origem(origem_str, linha, raw_df, temporal_df)
+        diagnostico[(ano, mes)] = {'concluida_e_integra': integra, 'motivos': motivos}
+    return diagnostico
+
+
+def diagnosticar_integridade_lote(lote, diretorio=DIRETORIO_HISTORICO):
+    """Wrapper de `_diagnosticar_origens` que carrega os 3 CSVs
+    persistidos do lote do disco — usado pela CLI/depuração e por
+    `origens_pendentes`."""
+    resumo = _carregar_resumo_persistido(lote.lote_id, diretorio)
+    raw = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'raw.csv', diretorio))
+    temporal = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
+    return _diagnosticar_origens(lote.origens, resumo, raw, temporal)
+
+
 def origens_pendentes(lote, diretorio=DIRETORIO_HISTORICO):
     """Seção 1 da tarefa — "possibilidade de retomada sem repetir
-    desnecessariamente as consultas concluídas". Uma origem CONCLUÍDA
-    é uma origem já persistida com `poc_status=APROVADO` — essa nunca é
-    requisitada de novo. Qualquer outra situação (nunca tentada,
-    reprovada, erro inesperado) fica pendente e É retentada — uma
-    reprovação anterior pode ter sido um problema transitório de rede,
-    nunca assumido permanente sem tentar de novo."""
-    resumo = _carregar_resumo_persistido(lote.lote_id, diretorio)
-    if not len(resumo):
-        return lote.origens
-    aprovadas = {(int(r['ano']), int(r['mes'])) for _, r in resumo.iterrows()
-                  if r['poc_status'] == 'APROVADO'}
-    return tuple(o for o in lote.origens if o not in aprovadas)
+    desnecessariamente as consultas concluídas". Uma origem CONCLUÍDA é
+    uma origem já persistida que passa em TODA a verificação de
+    integridade de `_verificar_integridade_origem` (revisão pontual,
+    Seção 2) — não só `poc_status=APROVADO` isolado. Qualquer outra
+    situação (nunca tentada, reprovada, erro inesperado, ou persistida
+    mas com o raw.csv/temporal_audit.csv incompleto/inconsistente) fica
+    pendente e É retentada — uma reprovação anterior pode ter sido um
+    problema transitório de rede, nunca assumido permanente sem tentar
+    de novo."""
+    diagnostico = diagnosticar_integridade_lote(lote, diretorio)
+    return tuple(o for o in lote.origens if not diagnostico[o]['concluida_e_integra'])
 
 
-def _resultado_minimo_da_linha_resumo(row):
+def _resultado_minimo_da_linha_resumo(row, raw_df, temporal_df):
     """Reconstrói um dict no formato de `nmme_piloto_historico.
     executar_piloto_historico` a partir de 1 linha JÁ PERSISTIDA —
     usado para recompor o lote inteiro (origens novas + origens
     reaproveitadas do disco) antes de rodar `avaliar_aprovacao_piloto`,
     sem precisar reconsultar a rede para as que já estão prontas.
-    Contém só os campos que os guardrails de agregação realmente
-    leem (poc_status/backend_used/dataset_representation_used) — nunca
-    finge ter o RAW/temporal_audit completos aqui (esses continuam só
-    nos CSVs persistidos, concatenados à parte)."""
-    erro = row.get('erro_inesperado')
+    Contém só os campos que os guardrails de agregação realmente leem
+    (poc_status/backend_used/dataset_representation_used) — nunca finge
+    ter o RAW/temporal_audit completos aqui (esses continuam só nos
+    CSVs persistidos, concatenados à parte).
+
+    Revisão pontual, Seção 2/3 — NUNCA repassa `poc_status=APROVADO`
+    do resumo sem cruzar com `raw_df`/`temporal_df` primeiro
+    (`_verificar_integridade_origem`): uma origem cujo resumo diz
+    APROVADO mas cujo raw.csv/temporal_audit.csv não bate mais
+    (truncado, editado, corrompido) é rebaixada aqui para
+    `REPROVADO_INTEGRIDADE_PERSISTIDA` — isso é o que faz
+    `avaliar_aprovacao_piloto` (reaproveitada sem modificação) reprovar
+    o agregado quando a integridade persistida falha, tanto no nível do
+    lote (`executar_lote`) quanto na consolidação final (Seção 3)."""
+    ano, mes = int(row['ano']), int(row['mes'])
+    origem_str = f"{ano}-{mes:02d}"
+    integra, motivos = _verificar_integridade_origem(origem_str, row, raw_df, temporal_df)
+    erro_persistido = row.get('erro_inesperado')
+    erro_persistido = erro_persistido if isinstance(erro_persistido, str) and erro_persistido else None
     return {
-        'ano': int(row['ano']), 'mes': int(row['mes']), 'origem': (int(row['ano']), int(row['mes'])),
+        'ano': ano, 'mes': mes, 'origem': (ano, mes),
         'resultado': {
-            'poc_status': row['poc_status'], 'backend_used': row.get('backend_used'),
+            'poc_status': row['poc_status'] if integra else 'REPROVADO_INTEGRIDADE_PERSISTIDA',
+            'backend_used': row.get('backend_used'),
             'dataset_representation_used': row.get('dataset_representation_used'),
             'checklist': {
                 'member_count_per_lead_ok': row.get('member_count_per_lead_ok'),
@@ -146,7 +249,7 @@ def _resultado_minimo_da_linha_resumo(row):
             'raw_df': pd.DataFrame(), 'temporal_audit_df': pd.DataFrame(),
             'access_audit_df': pd.DataFrame(),
         },
-        'erro': erro if isinstance(erro, str) and erro else None,
+        'erro': erro_persistido if integra else '; '.join(motivos),
     }
 
 
@@ -162,7 +265,29 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
     critérios: todas aprovadas, nenhum erro inesperado, rota validada
     exclusiva, integridade das origens do lote)."""
     diretorio.mkdir(parents=True, exist_ok=True)
-    pendentes = origens_pendentes(lote, diretorio)
+
+    # Carrega o estado persistido UMA VEZ (resumo + raw + temporal +
+    # access) — usado tanto para diagnosticar integridade/decidir
+    # pendentes quanto para reconstruir as origens reaproveitadas
+    # (revisão pontual, Seção 2: mesma fonte de verdade nas duas
+    # pontas, nunca duas leituras que possam divergir entre si).
+    resumo_persistido = _carregar_resumo_persistido(lote.lote_id, diretorio)
+    raw_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'raw.csv', diretorio))
+    temporal_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
+    access_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'access_audit.csv', diretorio))
+
+    diagnostico = _diagnosticar_origens(lote.origens, resumo_persistido, raw_persistido, temporal_persistido)
+    pendentes = tuple(o for o in lote.origens if not diagnostico[o]['concluida_e_integra'])
+    # Registra o problema ANTES de qualquer reprocessamento substituir
+    # os dados antigos (Seção 2: "não perder os registros anteriores
+    # sem antes identificar a inconsistência") — só entra aqui quem
+    # tinha dado persistido que falhou na verificação, nunca quem
+    # simplesmente nunca foi tentado (esse motivo sozinho não é uma
+    # inconsistência, é o estado normal de um lote ainda não concluído).
+    origens_com_inconsistencia_detectada = [
+        {'origem': f'{a}-{m:02d}', 'motivos': diagnostico[(a, m)]['motivos']}
+        for (a, m) in pendentes if diagnostico[(a, m)]['motivos'] != ['origem_nao_persistida']
+    ]
 
     resultados_novos = []
     if pendentes:
@@ -170,10 +295,10 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
             origens=pendentes, sistema=sistema, baixar_fn=baixar_fn, abrir_fn=abrir_fn,
             resolver_fns=resolver_fns)
 
-    resumo_persistido = _carregar_resumo_persistido(lote.lote_id, diretorio)
     origens_novas = {item['origem'] for item in resultados_novos}
     resultados_reaproveitados = [
-        _resultado_minimo_da_linha_resumo(row) for _, row in resumo_persistido.iterrows()
+        _resultado_minimo_da_linha_resumo(row, raw_persistido, temporal_persistido)
+        for _, row in resumo_persistido.iterrows()
         if (int(row['ano']), int(row['mes'])) not in origens_novas
     ]
     resultados_completos = resultados_reaproveitados + resultados_novos
@@ -182,9 +307,6 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
     resultados_completos.sort(key=lambda item: item['origem'])
 
     raw_novo, temporal_novo, access_novo = pilo.concatenar_dataframes_piloto(resultados_novos)
-    raw_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'raw.csv', diretorio))
-    temporal_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
-    access_persistido = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'access_audit.csv', diretorio))
 
     origens_novas_str = {f'{a}-{m:02d}' for a, m in origens_novas}
     raw_final = _substituir_origens(raw_persistido, raw_novo, origens_novas_str)
@@ -220,6 +342,7 @@ def executar_lote(lote, baixar_fn=None, abrir_fn=None, resolver_fns=None,
         'n_origens_aprovadas': aprovacao['n_origens_aprovadas'],
         'origens_com_rota_diferente': aprovacao['origens_com_rota_diferente'],
         'integridade_origens': aprovacao['integridade_origens'],
+        'origens_com_inconsistencia_detectada': origens_com_inconsistencia_detectada,
         'n_raw': len(raw_final), 'n_raw_esperado': len(lote.origens) * 6 * 24,
     }
     (_caminho_lote(lote.lote_id, 'metadata.json', diretorio)).write_text(
@@ -263,20 +386,45 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
     aprovadas. Nunca finge completude parcial como total — reporta o
     estado real (quantos lotes/origens realmente concluídos) mesmo
     quando incompleto, o que é o estado esperado até que todos os 5
-    lotes sejam explicitamente disparados."""
+    lotes sejam explicitamente disparados.
+
+    Revisão pontual, Seção 3 — a aprovação final exige SIMULTANEAMENTE:
+    (1) as 240 inicializações previstas; (2) todas individualmente
+    aprovadas; (3) rota validada exclusiva; (4) exatamente 144 RAW por
+    inicialização; (5) 34.560 RAW no total; (6) auditorias temporais
+    completas. Os itens 1-3 já vêm de `avaliar_aprovacao_piloto`
+    (reaproveitada sem modificação); os itens 4 e 6 são verificados por
+    origem via `_verificar_integridade_origem`/`_resultado_minimo_da_
+    linha_resumo` — a MESMA verificação usada em `origens_pendentes`,
+    nunca uma segunda lógica paralela — e rebaixam o `poc_status`
+    reconstruído quando falham, o que já faz o critério (2) reprovar;
+    ficam também expostos aqui como campos próprios
+    (`todas_origens_com_144_raw`/`todas_auditorias_temporais_completas`)
+    para nunca depender de inferir isso indiretamente. UMA divergência
+    em qualquer critério bloqueia `extracao_completa_e_aprovada`."""
     resultados_todos = []
     n_raw_total = 0
     lotes_status = {}
+    todas_origens_com_144_raw = True
+    todas_auditorias_temporais_completas = True
     for lote in lotes:
         resumo = _carregar_resumo_persistido(lote.lote_id, diretorio)
         raw_lote = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'raw.csv', diretorio))
+        temporal_lote = _ler_csv_ou_vazio(_caminho_lote(lote.lote_id, 'temporal_audit.csv', diretorio))
         n_raw_total += len(raw_lote)
+
+        diagnostico_lote = _diagnosticar_origens(lote.origens, resumo, raw_lote, temporal_lote)
+        for diag in diagnostico_lote.values():
+            if 'n_raw_diferente_de_144' in diag['motivos']:
+                todas_origens_com_144_raw = False
+            if 'auditorias_temporais_incompletas' in diag['motivos']:
+                todas_auditorias_temporais_completas = False
+
         if len(resumo):
-            resultados_todos.extend(_resultado_minimo_da_linha_resumo(row)
-                                      for _, row in resumo.iterrows())
-            n_aprovadas = int((resumo['poc_status'] == 'APROVADO').sum())
-        else:
-            n_aprovadas = 0
+            resultados_todos.extend(
+                _resultado_minimo_da_linha_resumo(row, raw_lote, temporal_lote)
+                for _, row in resumo.iterrows())
+        n_aprovadas = sum(1 for diag in diagnostico_lote.values() if diag['concluida_e_integra'])
         lotes_status[lote.lote_id] = {'n_origens': len(lote.origens), 'n_aprovadas': n_aprovadas,
                                         'iniciado': len(resumo) > 0}
 
@@ -290,7 +438,8 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
                              'integridade_origens': {'ok': False}}
 
     completo = (aprovacao_geral['n_origens_aprovadas'] == len(todas_origens_esperadas)
-                and aprovacao_geral['piloto_status'] == 'APROVADO')
+                and aprovacao_geral['piloto_status'] == 'APROVADO'
+                and todas_origens_com_144_raw and todas_auditorias_temporais_completas)
     # Calculado a partir de `lotes` (não do valor fixo N_RAW_ESPERADO_
     # TOTAL) — `lotes` é parametrizável (default é o conjunto real de 5
     # lotes/240 origens, mas a função aceita qualquer subconjunto, ex.:
@@ -308,6 +457,8 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
         'n_raw_total': n_raw_total,
         'n_raw_esperado_se_completo': n_raw_esperado,
         'n_raw_bate_com_esperado': (n_raw_total == n_raw_esperado) if completo else None,
+        'todas_origens_com_144_raw': todas_origens_com_144_raw,
+        'todas_auditorias_temporais_completas': todas_auditorias_temporais_completas,
         'criterios_agregados': aprovacao_geral['criterios'],
         'origens_com_rota_diferente': aprovacao_geral['origens_com_rota_diferente'],
         'integridade_origens': aprovacao_geral['integridade_origens'],
@@ -365,6 +516,10 @@ def main():
               f"({metadata_lote['n_origens_aprovadas']}/{metadata_lote['n_origens']} origens aprovadas)")
         for k, v in metadata_lote['criterios'].items():
             print(f"  - {k}: {v}")
+        if metadata_lote['origens_com_inconsistencia_detectada']:
+            print("\n⚠️  Inconsistência(s) detectada(s) em origem(ns) persistida(s) — reprocessada(s) nesta execução:")
+            for item in metadata_lote['origens_com_inconsistencia_detectada']:
+                print(f"  - {item['origem']}: {', '.join(item['motivos'])}")
         if metadata_lote['lote_status'] != 'APROVADO':
             raise SystemExit(f"Lote {args.executar_lote} REPROVADO — ver "
                               f"data/nmme_historico/lote_{args.executar_lote}_resumo_por_origem.csv")

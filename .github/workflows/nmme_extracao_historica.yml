@@ -109,6 +109,14 @@ jobs:
       - name: Rodar suíte de testes existente
         run: python -m unittest discover tests -v
 
+      # Testa a LÓGICA OPERACIONAL do workflow (não só as funções
+      # Python) — roda scripts/ci/persistir_e_commitar_historico.sh de
+      # verdade (git real) contra um repositório local descartável,
+      # cobrindo diretório inicialmente inexistente, execução sem
+      # mudanças e push concorrente (revisão pontual, problema 1).
+      - name: Testar a lógica operacional de persistência/commit (git real, repositório local descartável)
+        run: bash tests/test_workflow_extracao_historica.sh
+
       - name: Verificar integridade do dashboard (produção)
         run: python scripts/verificar_dashboard.py
 
@@ -118,41 +126,55 @@ jobs:
       - name: Mostrar plano da extração (dry-run, nunca acessa a rede NMME)
         run: python scripts/nmme_extracao_historica.py --dry-run-plan
 
+      # `continue-on-error: true` é o ponto central da revisão pontual
+      # (problema 1): `executar_lote()` já escreve os CSVs em
+      # data/nmme_historico/ ANTES de reportar reprovação (uma origem
+      # reprovada num lote de 48 nunca deve fazer o workflow perder as
+      # outras 47 que passaram) — mas antes desta correção, o
+      # SystemExit do passo Python interrompia o job inteiro e os
+      # passos de commit/push SEGUINTES nunca chegavam a rodar,
+      # perdendo os resultados parciais que já estavam no disco do
+      # runner. Com `continue-on-error: true`, o job continua até o
+      # commit; `steps.executar_lote.outcome` (não `.conclusion`, que
+      # fica mascarado como sucesso) ainda registra a reprovação real,
+      # usado no passo final para preservar a sinalização.
       - name: Rodar lote real (Fase 2C.2 — só origens pendentes deste lote, retomada automática)
+        id: executar_lote
         if: inputs.dry_run_plan != 'true' && inputs.executar_lote_real == 'true'
+        continue-on-error: true
         run: python scripts/nmme_extracao_historica.py --executar-lote "${{ inputs.lote_id }}"
 
       - name: Consolidação (lê data/nmme_historico/ já persistido — nunca acessa a rede)
         if: inputs.consolidar == 'true'
         run: python scripts/nmme_extracao_historica.py --consolidar
 
-      - name: Verificar alterações em data/nmme_historico/
-        id: diff
-        run: |
-          git add data/nmme_historico
-          git diff --cached --quiet && \
-            echo "alterado=false" >> $GITHUB_OUTPUT || \
-            echo "alterado=true"  >> $GITHUB_OUTPUT
-
       # Armazenamento PERMANENTE — commitado no repositório (nunca só
       # artifact do GitHub Actions, retenção de 30 dias insuficiente
-      # para um histórico de 20 anos).
-      - name: Commit do lote no armazenamento permanente
-        if: steps.diff.outputs.alterado == 'true'
+      # para um histórico de 20 anos). Roda SEMPRE que um lote foi
+      # tentado, mesmo se `executar_lote` acima foi REPROVADO — a
+      # persistência dos resultados parciais aprovados não pode
+      # depender do lote inteiro ter sido aprovado (problema 1 da
+      # revisão). Lógica extraída para scripts/ci/persistir_e_
+      # commitar_historico.sh, testada de verdade (git real, sem mock)
+      # contra um repositório local em
+      # tests/test_workflow_extracao_historica.sh — inclui o caso de
+      # data/nmme_historico/ ainda não existir (mkdir -p) e de push
+      # concorrente (pull --rebase).
+      - name: Persistir resultados do lote (commit+push, mesmo se o lote foi reprovado)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_lote_real == 'true'
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
-          git commit -m "auto: NMME extração histórica — lote ${{ inputs.lote_id }} — $DATA
+          bash scripts/ci/persistir_e_commitar_historico.sh "${{ inputs.lote_id }}" "$DATA"
 
-          Fase 2C.2 — data/nmme_historico/ (armazenamento permanente,
-          commitado no repositório). Nenhuma skill calculada, nenhum
-          dashboard alterado, nenhuma rota/representação promovida."
-          # Outro workflow pode ter commitado entre o checkout e aqui —
-          # rebase antes de empurrar (mesma convenção de
-          # indices_semanal.yml).
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
+      # Só AGORA, depois de garantir que os resultados parciais (se
+      # houver) já foram persistidos/commitados acima, a reprovação do
+      # lote é propagada como falha do job — nunca transforma uma
+      # execução parcialmente reprovada em sucesso silencioso.
+      - name: Sinalizar reprovação do lote (se houver) — depois de persistir os resultados parciais
+        if: steps.executar_lote.outcome == 'failure'
+        run: |
+          echo "::error::Lote ${{ inputs.lote_id }} REPROVADO — os resultados parciais já foram persistidos/commitados no passo anterior; a EXECUÇÃO deste lote não foi aprovada (ver data/nmme_historico/lote_${{ inputs.lote_id }}_resumo_por_origem.csv)."
+          exit 1
 
       - name: Publicar artifacts do lote (CSVs/JSON/relatório — cópia de curto prazo, nunca NetCDF/GRIB)
         if: always()
