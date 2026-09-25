@@ -1,0 +1,126 @@
+name: NMME Piloto Histórico CFSv2 (Fase 2C.2)
+
+# Fase 2C.2 — piloto de 16 inicializações históricas do CFSv2
+# (scripts/nmme_piloto_historico.py), preparatório para a extração
+# histórica completa (240 inicializações, 1991-2010, NÃO iniciada por
+# este workflow). Reaproveita, sem modificação, o pipeline e os
+# guardrails já validados no POC de infraestrutura da Fase 2C.1b
+# (scripts/nmme_poc.py::executar_poc_real_cfsv2, rota IRIDL_LEGACY/
+# NMME_HARMONIZED_MONTHLY, EMPIRICALLY_CONFIRMED — ver
+# docs/nmme-fase2c1b-encerramento.md).
+#
+# Decisões técnicas (docs/nmme-fase2c2-especificacao.md +
+# instrução explícita desta tarefa): período 1991-2010, 4 anos
+# representativos (1991/1998/2005/2010) x 4 meses (jan/abr/jul/out) = 16
+# origens, H1-H6, 24 membros exatos por lead, CHIRPS de referência em
+# ponto único (mesmo ponto do POC). Nenhuma skill é calculada, nenhum
+# sistema é promovido, o dashboard de produção nunca é tocado.
+#
+# GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
+# executar_piloto_real=false — clicar em "Run workflow" sem mexer em
+# nada NUNCA acessa a rede NMME: só valida código, roda a suíte de
+# testes, mostra o plano das 16 origens.
+#
+# `--executar-piloto-real` roda de verdade: 16 requisições RANGEEDGES
+# (1 por origem, nunca em lote), cada uma passando pelos MESMOS
+# guardrails do POC (seleção explícita de inicialização, membros,
+# unidade, grade, mapeamento temporal). Uma origem reprovada nunca
+# interrompe as demais (scripts/nmme_piloto_historico.py::
+# executar_piloto_historico) — o job só publica como sucesso quando
+# scripts/nmme_piloto_historico.py::avaliar_aprovacao_piloto devolve
+# APROVADO (16/16 origens aprovadas + cobertura observacional
+# confirmada >= 90%).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run_plan:
+        description: 'true (default, seguro) = só valida código/testes e mostra o plano das 16 origens — nunca acessa a rede NMME'
+        required: true
+        default: 'true'
+      executar_piloto_real:
+        description: 'true = roda o piloto real (Fase 2C.2) — 16 inicializações, H1-H6, 24 membros. Acessa a rede de verdade.'
+        required: true
+        default: 'false'
+      confirm_piloto_real:
+        description: 'Só necessário com dry_run_plan=false e executar_piloto_real=true: digite EXECUTAR_NMME_PILOTO para liberar'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nmme-piloto-historico
+  cancel-in-progress: false
+
+jobs:
+  nmme-piloto-historico:
+    name: NMME Piloto Histórico
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Bloqueia o piloto real acidental sem confirmação explícita —
+      # roda ANTES de instalar dependências ou tocar em qualquer rede.
+      - name: Guardrail — piloto real exige confirmação explícita
+        if: inputs.dry_run_plan != 'true' && inputs.executar_piloto_real == 'true'
+        run: |
+          if [ "${{ inputs.confirm_piloto_real }}" != "EXECUTAR_NMME_PILOTO" ]; then
+            echo "::error::Piloto real NMME bloqueado sem confirmação explícita."
+            {
+              echo "## ❌ Piloto real bloqueado"
+              echo ""
+              echo "Rodar o piloto real (16 inicializações, Fase 2C.2) exige preencher o"
+              echo "input **confirm_piloto_real** com o texto exato \`EXECUTAR_NMME_PILOTO\`."
+              echo ""
+              echo "O default (dry_run_plan=true) nunca acessa a rede — só valida código,"
+              echo "roda testes e mostra o plano das 16 origens."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmação explícita recebida (confirm_piloto_real=EXECUTAR_NMME_PILOTO) — liberando execução."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências (produção + C3S/NMME)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
+
+      - name: Rodar suíte de testes existente
+        run: python -m unittest discover tests -v
+
+      - name: Verificar integridade do dashboard (produção)
+        run: python scripts/verificar_dashboard.py
+
+      # Sempre roda (nunca acessa rede) — o plano das 16 origens é
+      # dado estático do módulo, não depende de download.
+      - name: Mostrar plano do piloto (dry-run, nunca acessa a rede NMME)
+        run: python scripts/nmme_piloto_historico.py --dry-run-plan
+
+      - name: Rodar piloto real (Fase 2C.2 — 16 inicializações, H1-H6, 24 membros, sem skill/promoção)
+        if: inputs.dry_run_plan != 'true' && inputs.executar_piloto_real == 'true'
+        run: python scripts/nmme_piloto_historico.py --executar-piloto-real
+
+      - name: Publicar artifacts (CSVs/JSON/relatório — nunca NetCDF/GRIB)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nmme-piloto-historico
+          path: |
+            artifacts/nmme_piloto_historico/piloto_raw.csv
+            artifacts/nmme_piloto_historico/piloto_temporal_audit.csv
+            artifacts/nmme_piloto_historico/piloto_access_audit.csv
+            artifacts/nmme_piloto_historico/piloto_resumo_por_origem.csv
+            artifacts/nmme_piloto_historico/piloto_cobertura_observacional.csv
+            artifacts/nmme_piloto_historico/metadata.json
+            artifacts/nmme_piloto_historico/RELATORIO.md
+          retention-days: 30
+          if-no-files-found: warn
