@@ -681,6 +681,42 @@ class ConsolidacaoComRawInsuficienteTestCase(unittest.TestCase):
             self.assertTrue(consolidado['todas_auditorias_temporais_completas'])
             self.assertEqual(consolidado['n_raw_total'], 288)
 
+    def test_d_registro_raw_extra_de_origem_inesperada_bloqueia_consolidacao(self):
+        """Revisão pontual (2ª rodada) — regressão específica pedida:
+        TODAS as origens previstas aprovadas, cada uma com exatamente
+        144 RAW (`todas_origens_com_144_raw` continua True, porque essa
+        verificação só soma linhas das origens PREVISTAS em
+        `lote.origens`) — mas existe 1 registro RAW A MAIS associado a
+        uma origem que não está no plano nenhum ('1999-06', fora de
+        `lote.origens`). Isso NUNCA deveria acontecer num raw.csv
+        gerado por este módulo, mas nada impede um arquivo editado à
+        mão de introduzir isso — só a comparação agregada
+        `n_raw_total == n_raw_esperado` pega esse caso, e ela precisa
+        bloquear `extracao_completa_e_aprovada` explicitamente."""
+        with tempfile.TemporaryDirectory() as tmp:
+            diretorio = Path(tmp)
+            lote = ext.LoteHistorico('l1', ((2000, 1), (2000, 2)))
+            ext.executar_lote(lote, resolver_fns=_resolver_todas_ok, diretorio=diretorio)
+
+            caminho_raw = ext._caminho_lote('l1', 'raw.csv', diretorio)
+            raw = pd.read_csv(caminho_raw)
+            self.assertEqual(len(raw), 288)
+            linha_extra = raw.iloc[[0]].copy()
+            linha_extra['origem_piloto'] = '1999-06'   # origem fora do plano do lote
+            pd.concat([raw, linha_extra], ignore_index=True).to_csv(caminho_raw, index=False)
+
+            consolidado = ext.consolidar_extracao_completa(lotes=(lote,), diretorio=diretorio)
+            self.assertEqual(consolidado['n_raw_total'], 289)
+            self.assertEqual(consolidado['n_raw_esperado_se_completo'], 288)
+            # As origens PREVISTAS continuam corretas — a única
+            # divergência é o total agregado, por causa do registro de
+            # uma origem inesperada.
+            self.assertTrue(consolidado['todas_origens_com_144_raw'])
+            self.assertTrue(consolidado['todas_auditorias_temporais_completas'])
+            self.assertEqual(consolidado['n_origens_aprovadas_total'], 2)
+            self.assertFalse(consolidado['n_raw_bate_com_esperado'])
+            self.assertFalse(consolidado['extracao_completa_e_aprovada'])
+
 
 if __name__ == '__main__':
     unittest.main()

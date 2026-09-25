@@ -437,9 +437,6 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
                              'n_origens_total': 0, 'criterios': {}, 'origens_com_rota_diferente': [],
                              'integridade_origens': {'ok': False}}
 
-    completo = (aprovacao_geral['n_origens_aprovadas'] == len(todas_origens_esperadas)
-                and aprovacao_geral['piloto_status'] == 'APROVADO'
-                and todas_origens_com_144_raw and todas_auditorias_temporais_completas)
     # Calculado a partir de `lotes` (não do valor fixo N_RAW_ESPERADO_
     # TOTAL) — `lotes` é parametrizável (default é o conjunto real de 5
     # lotes/240 origens, mas a função aceita qualquer subconjunto, ex.:
@@ -450,13 +447,32 @@ def consolidar_extracao_completa(lotes=LOTES_HISTORICOS, diretorio=DIRETORIO_HIS
     # nunca fazer. Para o uso real (`lotes=LOTES_HISTORICOS`), o valor
     # coincide exatamente com N_RAW_ESPERADO_TOTAL (240*6*24=34.560).
     n_raw_esperado = len(todas_origens_esperadas) * 6 * 24
+    # Demais critérios, independentes da contagem RAW agregada — usado
+    # para decidir se `n_raw_bate_com_esperado` é sequer significativo
+    # de reportar (mantém a semântica original do campo: None enquanto
+    # o resto ainda não bateu, não um False prematuro só porque nenhum
+    # lote rodou ainda).
+    demais_criterios_ok = (aprovacao_geral['n_origens_aprovadas'] == len(todas_origens_esperadas)
+                            and aprovacao_geral['piloto_status'] == 'APROVADO'
+                            and todas_origens_com_144_raw and todas_auditorias_temporais_completas)
+    # Revisão pontual (2ª rodada) — `n_raw_total == n_raw_esperado`
+    # entra EXPLICITAMENTE em `completo`, não só como campo informativo
+    # à parte. `todas_origens_com_144_raw` só soma linhas das origens
+    # PREVISTAS (`lote.origens`); um registro RAW extra associado a uma
+    # origem INESPERADA (fora do plano — nunca deveria existir num
+    # raw.csv persistido por este módulo, mas nada impede um arquivo
+    # editado à mão ou uma migração futura de introduzir um) infla
+    # `n_raw_total` sem que nenhuma origem prevista deixe de ter
+    # exatamente 144 — só esta comparação agregada pega esse caso.
+    n_raw_bate_com_esperado = (n_raw_total == n_raw_esperado) if demais_criterios_ok else None
+    completo = demais_criterios_ok and bool(n_raw_bate_com_esperado)
     consolidado = {
         'n_lotes': len(lotes), 'n_origens_esperadas_total': len(todas_origens_esperadas),
         'n_origens_aprovadas_total': aprovacao_geral['n_origens_aprovadas'],
         'extracao_completa_e_aprovada': completo,
         'n_raw_total': n_raw_total,
         'n_raw_esperado_se_completo': n_raw_esperado,
-        'n_raw_bate_com_esperado': (n_raw_total == n_raw_esperado) if completo else None,
+        'n_raw_bate_com_esperado': n_raw_bate_com_esperado,
         'todas_origens_com_144_raw': todas_origens_com_144_raw,
         'todas_auditorias_temporais_completas': todas_auditorias_temporais_completas,
         'criterios_agregados': aprovacao_geral['criterios'],
