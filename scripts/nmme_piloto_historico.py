@@ -17,10 +17,20 @@ docs/nmme-fase2c1b-encerramento.md e docs/nmme-fase2c2-especificacao.md):
   - Membros: exatamente 24 válidos por horizonte — política já
     implementada em nmme_poc.py (`axis_ok = axis_observed ==
     axis_expected == 24`), reaproveitada sem alteração.
-  - CHIRPS de referência do piloto: PONTO ÚNICO, o mesmo ponto de grade
-    já usado pelo POC (São Bento do Tocantins) — nunca o zonal/envelope
-    (Armadilha 8 do CLAUDE.md: zonal ainda não passou pela suíte de
-    falha, promoção é decisão separada, não tomada aqui).
+  - Referência observacional do piloto: PONTO ÚNICO, o mesmo ponto de
+    grade já usado pelo POC (São Bento do Tocantins) — nunca o zonal/
+    envelope (Armadilha 8 do CLAUDE.md: zonal ainda não passou pela
+    suíte de falha, promoção é decisão separada, não tomada aqui).
+    IMPORTANTE (revisão pontual pré-execução real): essa referência
+    (`data/serie_subst.csv`) NÃO é CHIRPS para o período do piloto — é
+    reanálise MERRA-2 (1981-1995) e leitura das estações da própria
+    Sinobras (1996-presente), README.md — e está a ~198 km do ponto de
+    São Bento do Tocantins usado pelo CFSv2 (centroide das fazendas,
+    não o mesmo ponto — ver `distancia_fazendas_ate_municipio_km` e
+    `docs/nmme-fase2c2-piloto-cobertura-observacional.md`). As
+    coordenadas usadas pelo POC/CFSv2 em si (São Bento) NÃO são
+    alteradas por esta revisão — só a forma como a referência
+    observacional é descrita e avaliada.
   - Status do catálogo: SistemaNMME.data_access_status do CFSv2
     permanece POC_READY_DOCUMENTED (decisão explícita — não promovido
     nesta tarefa); EMPIRICALLY_CONFIRMED continua exclusivo da rota já
@@ -34,12 +44,28 @@ implementados e testados em nmme_poc.py/nmme_processar.py são
 reaproveitados SEM MODIFICAÇÃO — este módulo só orquestra 16 chamadas e
 agrega o resultado; nenhuma lógica de seleção temporal, conversão de
 unidade, contagem de membros ou mapeamento L<->mês é reimplementada
-aqui.
+aqui. Qualquer origem que use uma `dataset_representation_used`
+diferente de NMME_HARMONIZED_MONTHLY (fallback documentado do próprio
+`nmme_download.ordem_tentativa_member_level`) é registrada
+explicitamente (`montar_resumo_por_origem`/metadata) — NUNCA tratada
+como equivalente à rota EMPIRICALLY_CONFIRMED (revisão pontual, Seção 4
+da tarefa).
 
-Nunca calcula skill, nunca compara com CHIRPS de forma científica
-(isso é Fase 2C.2 completa, depois do piloto aprovado) — este módulo só
-verifica PROCEDÊNCIA e COBERTURA da série observacional usada como
-referência (Seção 3 da tarefa), nunca a métrica de habilidade.
+Nunca calcula skill. A APROVAÇÃO DE INFRAESTRUTURA do piloto
+(`avaliar_aprovacao_piloto` — acesso, seleção temporal, membros,
+horizontes, integridade do RAW) é mantida SEPARADA da APTIDÃO DA
+REFERÊNCIA OBSERVACIONAL para uma avaliação científica futura
+(`avaliar_aptidao_referencia_observacional` — procedência, qualidade
+verificada, correspondência espacial): a insuficiência da segunda NUNCA
+é reportada como falha da primeira (revisão pontual, Seção 3 da
+tarefa). `verificar_cobertura_observacional` separa 3 conceitos que a
+primeira versão deste módulo confundia num único rótulo
+"OBSERVACAO_CONFIRMADA": (1) disponibilidade do registro (o mês está na
+série?), (2) procedência DOCUMENTAL (o que README.md/fetch_monthly_
+data.py dizem sobre a origem do valor — nunca inventada), e (3)
+qualidade EFETIVAMENTE VERIFICADA do registro (ausência de NaN,
+duplicata, valor fisicamente implausível — checagens computadas, não
+inferidas da fonte).
 
 Roda com:
     python scripts/nmme_piloto_historico.py --dry-run-plan
@@ -57,6 +83,7 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
+import c3s_poc as cpoc  # noqa: E402
 import nmme_catalogo as ncat  # noqa: E402
 import nmme_poc as npoc  # noqa: E402
 import nmme_processar as nproc  # noqa: E402
@@ -75,21 +102,65 @@ assert len(PILOTO_ORIGENS) == 16
 # scripts/fetch_monthly_data.py (CLAUDE.md, armadilha 6): "gravado com
 # fonte própria... quando o Final publicar esse mês depois, o valor
 # Preliminary já gravado não é substituído automaticamente". Nunca
-# tratados como observação real confirmada nesta verificação de
-# cobertura — mesmo que o valor numérico esteja presente.
+# usados como observação real nesta verificação de cobertura — mesmo
+# que o valor numérico esteja presente.
 FONTES_NAO_CONFIRMADAS = {'CHC-Preliminar', 'OpenMeteo-ERA5'}
 
-# Seção 3 — a série observacional de produção (data/serie_subst.csv)
+# Seção 1 (revisão pontual) — procedência DOCUMENTAL de cada registro,
+# nunca uma afirmação de qualidade individual (isso é
+# `qualidade_verificada_status`, calculado à parte). Mapeamento de
+# `fonte` bruta -> descrição; para `fonte` vazia, o ano decide entre os
+# dois trechos do baseline histórico (README.md: "Série histórica
+# (MERRA-2 1981-1995 + Sinobras 1996-hoje)").
+ANO_FIM_MERRA2 = 1995   # README.md — 1981-1995 MERRA-2, 1996+ Sinobras
+PROCEDENCIA_MERRA2 = 'MERRA-2 (reanálise NASA, README.md: baseline 1981-1995)'
+PROCEDENCIA_ESTACAO_SINOBRAS = 'Estação Sinobras (leitura direta de campo, README.md: baseline 1996-presente)'
+PROCEDENCIA_CHIRPS_FINAL = 'CHIRPS Final (fonte=CHIRPS, fetch_monthly_data.py)'
+PROCEDENCIA_CHC_PRELIMINAR = 'CHC Preliminary (fonte=CHC-Preliminar, fetch_monthly_data.py — preliminar/estimado)'
+PROCEDENCIA_ERA5 = 'Open-Meteo ERA5-Land (fonte=OpenMeteo-ERA5, fetch_monthly_data.py — fallback final/estimado)'
+PROCEDENCIA_DESCONHECIDA = 'DESCONHECIDA (fonte não catalogada por este módulo)'
+
+# Seção 1 (revisão pontual) — checagens de qualidade EFETIVAMENTE
+# COMPUTADAS por registro (nunca inferidas da procedência): valor
+# numérico ausente, registro duplicado (mesmo ano/mês aparecendo mais
+# de 1 vez na série — problema de integridade da série, não do CFSv2),
+# valor fora da faixa fisicamente plausível. Limites de plausibilidade
+# REAPROVEITADOS de scripts/c3s_poc.py (PREC_MM_MIN/MAX_PLAUSIVEL,
+# calibrados contra CHIRPS real da mesma região, Fase 2A) — nunca uma
+# fórmula nova.
+QUALIDADE_STATUS_OK = 'OK'
+QUALIDADE_FLAG_VALOR_AUSENTE = 'VALOR_AUSENTE'
+QUALIDADE_FLAG_REGISTRO_DUPLICADO = 'REGISTRO_DUPLICADO'
+QUALIDADE_FLAG_VALOR_IMPLAUSIVEL = 'VALOR_FISICAMENTE_IMPLAUSIVEL'
+QUALIDADE_STATUS_NAO_APLICAVEL_AUSENTE = 'NAO_APLICAVEL_MES_AUSENTE'
+PREC_MM_MIN_PLAUSIVEL = cpoc.PREC_MM_MIN_PLAUSIVEL
+PREC_MM_MAX_PLAUSIVEL = cpoc.PREC_MM_MAX_PLAUSIVEL
+
+# Seção 2 — a série observacional de produção (data/serie_subst.csv)
 # representa o CENTROIDE DAS FAZENDAS (scripts/_chirps.py::FAZENDAS_LAT/
 # FAZENDAS_LON = -7.80/-47.95), README.md: "MERRA-2 1981-1995 + Sinobras
-# 1996-hoje" — NÃO é CHIRPS para a maior parte da série (achado desta
-# tarefa, ver docs/nmme-fase2c2-piloto-cobertura-observacional.md).
-# O ponto usado pelo POC/piloto do CFSv2 é são bento do tocantins
+# 1996-hoje" — NÃO é CHIRPS para a maior parte da série (achado da
+# tarefa anterior, ver docs/nmme-fase2c2-piloto-cobertura-observacional.md).
+# O ponto usado pelo POC/piloto do CFSv2 é São Bento do Tocantins
 # (scripts/_c3s_utils.py::MUNICIPIOS), herdado das fases C3S (Seção 15
 # do catálogo) — os dois pontos NÃO coincidem; a distância é computada
 # abaixo, uma vez, reaproveitando a mesma função já usada para a
-# distância grade-CFSv2<->ponto-pedido (nunca uma fórmula nova).
+# distância grade-CFSv2<->ponto-pedido (nunca uma fórmula nova). As
+# coordenadas do POC/CFSv2 (São Bento) NÃO são alteradas por esta
+# revisão (instrução explícita da tarefa).
 FAZENDAS_LAT, FAZENDAS_LON = -7.80, -47.95
+
+
+def _procedencia_documental(ano, fonte_bruta):
+    """Descreve de onde o registro VEM documentalmente — nunca uma
+    afirmação sobre a qualidade individual desse valor (Seção 1,
+    revisão pontual: "separar procedência documental de procedência e
+    qualidade efetivamente verificadas")."""
+    if fonte_bruta is not None:
+        mapa = {'CHIRPS': PROCEDENCIA_CHIRPS_FINAL, 'CHC-Preliminar': PROCEDENCIA_CHC_PRELIMINAR,
+                'OpenMeteo-ERA5': PROCEDENCIA_ERA5}
+        return mapa.get(fonte_bruta, PROCEDENCIA_DESCONHECIDA)
+    return PROCEDENCIA_MERRA2 if ano <= ANO_FIM_MERRA2 else PROCEDENCIA_ESTACAO_SINOBRAS
 
 
 def distancia_fazendas_ate_municipio_km(municipio=npoc.MUNICIPIO):
@@ -157,18 +228,32 @@ def executar_piloto_historico(origens=PILOTO_ORIGENS, leads=npoc.LEADS, municipi
 def montar_resumo_por_origem(resultados_piloto):
     """1 linha por origem (Seção 2 — "registrar individualmente
     qualquer falha"), nunca só o agregado. Nenhuma origem é omitida
-    mesmo quando reprovada/com erro inesperado."""
+    mesmo quando reprovada/com erro inesperado.
+
+    `representacao_diferente_da_validada` (Seção 4, revisão pontual) —
+    True quando `dataset_representation_used` está preenchida e é
+    DIFERENTE de NMME_HARMONIZED_MONTHLY (ex.: fallback documentado
+    para a Representação A por `nmme_download.ordem_tentativa_
+    member_level` quando B falha por acesso). Uma origem assim pode
+    ainda estar `poc_status=APROVADO` (os guardrails de integridade não
+    distinguem representação) — mas NUNCA deve ser lida como tendo
+    usado a mesma rota EMPIRICALLY_CONFIRMED da Fase 2C.1b; esta coluna
+    existe para que isso nunca fique implícito."""
     linhas = []
     for item in resultados_piloto:
         r, erro = item['resultado'], item['erro']
         checklist = r.get('checklist', {})
         raw_df = r.get('raw_df', pd.DataFrame())
+        representacao_usada = r.get('dataset_representation_used')
         linhas.append({
             'ano': item['ano'], 'mes': item['mes'],
             'init_date': f"{item['ano']}-{item['mes']:02d}",
             'poc_status': r.get('poc_status'),
             'backend_used': r.get('backend_used'),
-            'dataset_representation_used': r.get('dataset_representation_used'),
+            'dataset_representation_used': representacao_usada,
+            'representacao_diferente_da_validada': bool(
+                representacao_usada is not None
+                and representacao_usada != ncat.REPR_NMME_HARMONIZED_MONTHLY),
             'inicializacao_selecao_status': r.get('inicializacao_selecao_status'),
             'n_raw': len(raw_df),
             'member_count_per_lead_ok': checklist.get('member_count_per_lead_ok'),
@@ -213,43 +298,105 @@ def concatenar_dataframes_piloto(resultados_piloto):
     return raw_final, temporal_final, access_final
 
 
-def avaliar_aprovacao_piloto(resultados_piloto, cobertura_df=None,
-                                cobertura_minima=0.90):
-    """Critérios objetivos de aprovação do PILOTO (distintos da
-    aprovação de cada origem isolada — docs/nmme-fase2c2-especificacao.md,
-    Seção G): (1) todas as 16 origens com poc_status=APROVADO; (2)
-    nenhum erro inesperado (fora do vocabulário de status já conhecido
-    do POC); (3) cobertura observacional >= 90% das 16xlen(leads)
-    combinações origem x lead, contando só observações CONFIRMADAS
-    (nunca substituídas/estimadas — Seção 3). `cobertura_df`, quando
-    informado, é o resultado de `verificar_cobertura_observacional`;
-    sem ele, o critério de cobertura fica marcado como NAO_AVALIADO
-    (nunca assumido implicitamente aprovado)."""
+def avaliar_aprovacao_piloto(resultados_piloto):
+    """Critérios objetivos de aprovação da INFRAESTRUTURA do PILOTO,
+    distintos da aprovação de cada origem isolada
+    (docs/nmme-fase2c2-especificacao.md, Seção G) e — revisão pontual,
+    Seção 3 da tarefa — deliberadamente SEPARADOS da aptidão da
+    referência observacional (`avaliar_aptidao_referencia_
+    observacional`, função à parte): (1) todas as 16 origens com
+    poc_status=APROVADO; (2) nenhum erro inesperado (fora do
+    vocabulário de status já conhecido do POC).
+
+    A insuficiência/procedência da série observacional NUNCA entra
+    aqui — isso seria confundir "o CFSv2 respondeu e passou nos
+    guardrails de integridade" com "a observação de referência está
+    pronta para comparação científica", exatamente o que a tarefa pede
+    para nunca confundir."""
     status_por_origem = [item['resultado'].get('poc_status') for item in resultados_piloto]
     n_total = len(resultados_piloto)
     n_aprovadas = sum(1 for s in status_por_origem if s == 'APROVADO')
     todas_aprovadas = n_aprovadas == n_total
     nenhum_erro_inesperado = not any(item['erro'] for item in resultados_piloto)
 
-    if cobertura_df is not None and len(cobertura_df):
-        n_confirmadas = int((cobertura_df['classificacao'] == 'OBSERVACAO_CONFIRMADA').sum())
-        cobertura_fracao = n_confirmadas / len(cobertura_df)
-        cobertura_ok = cobertura_fracao >= cobertura_minima
-    else:
-        cobertura_fracao = None
-        cobertura_ok = None
-
     criterios = {
         'todas_origens_aprovadas': todas_aprovadas,
         'nenhum_erro_inesperado': nenhum_erro_inesperado,
-        'cobertura_observacional_ok': cobertura_ok,
     }
-    aprovado = todas_aprovadas and nenhum_erro_inesperado and (cobertura_ok is True)
+    aprovado = todas_aprovadas and nenhum_erro_inesperado
     return {
         'piloto_status': 'APROVADO' if aprovado else 'REPROVADO',
         'n_origens_aprovadas': n_aprovadas, 'n_origens_total': n_total,
-        'cobertura_observacional_fracao': cobertura_fracao,
         'criterios': criterios,
+    }
+
+
+def avaliar_aptidao_referencia_observacional(cobertura_df):
+    """Seção 3 da tarefa — verdito SEPARADO de `avaliar_aprovacao_
+    piloto`: nunca reportado como falha de acesso ao CFSv2, e nunca
+    combinado no mesmo `piloto_status`. Responde: "a referência
+    observacional está pronta para uma avaliação científica (cálculo de
+    skill) futura?".
+
+    Bloqueios computados a partir de `cobertura_df`
+    (`verificar_cobertura_observacional`): meses ausentes, registros
+    com procedência substituída/estimada (CHC-Preliminar/ERA5), e
+    qualquer flag de qualidade (`valor_ausente`, `registro_duplicado`,
+    `valor_implausivel`) diferente de OK.
+
+    Bloqueio ESTRUTURAL, sempre presente nesta revisão (Seção 2 da
+    tarefa: "consequências para uma futura avaliação científica"): a
+    correspondência espacial entre a referência observacional
+    (centroide das fazendas) e o ponto usado pelo CFSv2 (São Bento do
+    Tocantins) NÃO foi resolvida — 198 km de distância, ver
+    `distancia_fazendas_ate_municipio_km` e
+    `docs/nmme-fase2c2-piloto-cobertura-observacional.md`. Enquanto essa
+    questão não for resolvida por decisão explícita, este módulo NUNCA
+    declara aptidão para cálculo de skill, mesmo que toda a cobertura/
+    qualidade dos dados esteja limpa."""
+    bloqueios = []
+    if cobertura_df is None or not len(cobertura_df):
+        bloqueios.append('cobertura observacional não avaliada (cobertura_df ausente/vazia)')
+        n_disponiveis = n_procedencia_nao_substituida = n_qualidade_ok = 0
+        n_total = 0
+    else:
+        n_total = len(cobertura_df)
+        n_ausentes = int((cobertura_df['disponibilidade'] == 'AUSENTE').sum())
+        n_disponiveis = n_total - n_ausentes
+        if n_ausentes:
+            bloqueios.append(f'{n_ausentes}/{n_total} combinação(ões) origem×lead sem registro '
+                              f'histórico disponível na série observacional')
+        n_substituidos = int(cobertura_df['fonte_e_substituta_nao_usar'].sum())
+        n_procedencia_nao_substituida = n_disponiveis - n_substituidos
+        if n_substituidos:
+            bloqueios.append(f'{n_substituidos}/{n_total} combinação(ões) com procedência '
+                              f'preliminar/estimada (CHC-Preliminar/OpenMeteo-ERA5) — nunca usável '
+                              f'como observação real')
+        n_qualidade_ruim = int((cobertura_df['qualidade_verificada_status']
+                                  .isin([QUALIDADE_FLAG_VALOR_AUSENTE, QUALIDADE_FLAG_REGISTRO_DUPLICADO,
+                                          QUALIDADE_FLAG_VALOR_IMPLAUSIVEL])
+                                  | cobertura_df['qualidade_verificada_status'].str.contains(';', na=False))
+                                 .sum())
+        n_qualidade_ok = n_total - n_qualidade_ruim
+        if n_qualidade_ruim:
+            bloqueios.append(f'{n_qualidade_ruim}/{n_total} combinação(ões) com flag de qualidade '
+                              f'(valor ausente, registro duplicado ou fisicamente implausível)')
+
+    # Bloqueio estrutural — sempre presente nesta revisão (não resolvido
+    # aqui, só documentado). Ver docstring acima.
+    dist_km = distancia_fazendas_ate_municipio_km()
+    bloqueios.append(f'correspondência espacial não resolvida — {round(dist_km, 1)} km entre a '
+                      f'referência observacional (centroide das fazendas) e o ponto do CFSv2 '
+                      f'(São Bento do Tocantins); decisão explícita pendente '
+                      f'(docs/nmme-fase2c2-piloto-cobertura-observacional.md)')
+
+    return {
+        'apto_para_avaliacao_cientifica': not bloqueios,
+        'motivos_bloqueio': bloqueios,
+        'n_combinacoes_total': n_total,
+        'n_combinacoes_disponiveis': n_disponiveis,
+        'n_combinacoes_procedencia_nao_substituida': n_procedencia_nao_substituida,
+        'n_combinacoes_qualidade_ok': n_qualidade_ok,
     }
 
 
@@ -271,20 +418,36 @@ def _carregar_serie_observacional(caminho=SERIE_OBSERVACIONAL_PATH):
 
 
 def verificar_cobertura_observacional(resultados_piloto, serie_df=None):
-    """Seção 3 da tarefa — para cada combinação origem x lead
-    efetivamente processada, verifica se o mês-alvo tem observação na
-    série de produção (data/serie_subst.csv) e classifica a
-    procedência:
-      - OBSERVACAO_CONFIRMADA: mês presente, `fonte` vazia (baseline
-        histórico MERRA-2 1981-1995 / estação Sinobras 1996-presente,
-        README.md) OU `fonte='CHIRPS'` (CHIRPS Final, a fonte primária
-        documentada de fetch_monthly_data.py) — usável como observação
-        real.
-      - VALOR_SUBSTITUIDO_NAO_USAR: mês presente mas `fonte` em
-        FONTES_NAO_CONFIRMADAS (CHC-Preliminar/OpenMeteo-ERA5) — dado
-        real, mas preliminar/estimado; a tarefa pede explicitamente
-        para NUNCA tratar como observação real na avaliação científica.
-      - MES_AUSENTE: mês-alvo não está na série.
+    """Seção 1/3 da tarefa (revisão pontual) — para cada combinação
+    origem x lead efetivamente processada, verifica o mês-alvo contra a
+    série de produção (data/serie_subst.csv) e separa TRÊS conceitos
+    (nunca colapsados num único rótulo "confirmado"):
+
+    1. `disponibilidade` (PRESENTE/AUSENTE) — o mês-alvo tem QUALQUER
+       registro na série, independente de procedência/qualidade.
+    2. `procedencia_documental` — de onde o registro vem, segundo a
+       documentação do próprio projeto (README.md/fetch_monthly_data.py):
+       MERRA-2, Estação Sinobras, CHIRPS Final, CHC Preliminary, ERA5,
+       ou DESCONHECIDA. Isso é uma descrição, nunca uma afirmação de
+       qualidade.
+    3. `qualidade_verificada_status` — checagens EFETIVAMENTE
+       COMPUTADAS sobre o valor: `VALOR_AUSENTE` (NaN em `prec`),
+       `REGISTRO_DUPLICADO` (mesmo ano/mês aparece mais de 1 vez na
+       série — problema de integridade da própria série), e
+       `VALOR_FISICAMENTE_IMPLAUSIVEL` (fora de [PREC_MM_MIN_PLAUSIVEL,
+       PREC_MM_MAX_PLAUSIVEL], mm/mês) — `OK` quando nenhuma dispara;
+       várias flags juntas ficam unidas por `;`.
+
+    Além disso, `fonte_e_substituta_nao_usar` preserva o guardrail já
+    existente: True quando `fonte` está em FONTES_NAO_CONFIRMADAS
+    (CHC-Preliminar/OpenMeteo-ERA5) — a tarefa pede explicitamente para
+    nunca tratar esses registros como observação real, mesmo que
+    disponíveis e sem flag de qualidade.
+
+    Este módulo NUNCA soma esses 3 conceitos num "% confirmado" único —
+    quem precisar de um resumo agregado usa
+    `avaliar_aptidao_referencia_observacional`, que também incorpora o
+    bloqueio estrutural da correspondência espacial (Seção 2).
 
     Nunca usa o RAW do CFSv2 para decidir isso — só a série
     observacional, independente de o POC daquela origem ter sido
@@ -294,6 +457,14 @@ def verificar_cobertura_observacional(resultados_piloto, serie_df=None):
         serie_df = _carregar_serie_observacional()
     elif 'target_month' not in serie_df.columns:
         serie_df = _com_coluna_target_month(serie_df)
+
+    # Seção 1 — duplicata é uma propriedade da SÉRIE (mesmo ano/mês
+    # aparecendo mais de 1 vez), calculada uma vez sobre o dataframe
+    # inteiro, nunca por combinação isolada (senão um `match.iloc[0]`
+    # ingênuo escondera a duplicata ao só olhar a primeira ocorrência).
+    meses_duplicados = set(serie_df.loc[serie_df.duplicated(subset=['ano', 'mes'], keep=False),
+                                          'target_month'])
+
     linhas = []
     for item in resultados_piloto:
         ano, mes = item['ano'], item['mes']
@@ -304,41 +475,88 @@ def verificar_cobertura_observacional(resultados_piloto, serie_df=None):
                                                                 'lead1_igual_mes_inicializacao')
             match = serie_df[serie_df['target_month'] == target_month]
             if not len(match):
-                classificacao, fonte_observada = 'MES_AUSENTE', None
+                linhas.append({
+                    'origem_piloto': origem_str, 'H_lead': lead, 'target_month': str(target_month),
+                    'disponibilidade': 'AUSENTE', 'procedencia_documental': None,
+                    'fonte_e_substituta_nao_usar': False,
+                    'qualidade_verificada_status': QUALIDADE_STATUS_NAO_APLICAVEL_AUSENTE,
+                })
+                continue
+
+            registro = match.iloc[0]
+            fonte_bruta = None if pd.isna(registro['fonte']) else str(registro['fonte'])
+            procedencia = _procedencia_documental(target_month.year, fonte_bruta)
+            substituta_nao_usar = fonte_bruta in FONTES_NAO_CONFIRMADAS
+
+            flags = []
+            valor = registro['prec']
+            if pd.isna(valor):
+                flags.append(QUALIDADE_FLAG_VALOR_AUSENTE)
             else:
-                fonte_bruta = match.iloc[0]['fonte']
-                fonte_observada = None if pd.isna(fonte_bruta) else str(fonte_bruta)
-                if fonte_observada in FONTES_NAO_CONFIRMADAS:
-                    classificacao = 'VALOR_SUBSTITUIDO_NAO_USAR'
-                else:
-                    classificacao = 'OBSERVACAO_CONFIRMADA'
-            linhas.append({'origem_piloto': origem_str, 'H_lead': lead,
-                             'target_month': str(target_month),
-                             'fonte_observada': fonte_observada or '(baseline MERRA-2/Sinobras)',
-                             'classificacao': classificacao})
+                if not (PREC_MM_MIN_PLAUSIVEL <= float(valor) <= PREC_MM_MAX_PLAUSIVEL):
+                    flags.append(QUALIDADE_FLAG_VALOR_IMPLAUSIVEL)
+            if target_month in meses_duplicados:
+                flags.append(QUALIDADE_FLAG_REGISTRO_DUPLICADO)
+            qualidade_status = ';'.join(flags) if flags else QUALIDADE_STATUS_OK
+
+            linhas.append({
+                'origem_piloto': origem_str, 'H_lead': lead, 'target_month': str(target_month),
+                'disponibilidade': 'PRESENTE', 'procedencia_documental': procedencia,
+                'fonte_e_substituta_nao_usar': substituta_nao_usar,
+                'qualidade_verificada_status': qualidade_status,
+            })
     return pd.DataFrame(linhas)
 
 
-def montar_metadata_piloto(resultados_piloto, cobertura_df, aprovacao):
+def montar_metadata_piloto(resultados_piloto, cobertura_df, aprovacao, aptidao):
     dist_km = distancia_fazendas_ate_municipio_km()
+    from _c3s_utils import MUNICIPIOS
+    info_municipio = MUNICIPIOS[npoc.MUNICIPIO]
+    resumo_df = montar_resumo_por_origem(resultados_piloto)
+    n_repr_diferente = int(resumo_df['representacao_diferente_da_validada'].sum())
     return {
         'fase': '2C.2 — piloto histórico CFSv2 (16 inicializações)',
         'periodo': f'{min(PILOTO_ANOS)}-{max(PILOTO_ANOS)}', 'anos': list(PILOTO_ANOS),
         'meses': list(PILOTO_MESES), 'n_origens': len(PILOTO_ORIGENS), 'leads': list(npoc.LEADS),
         'representacao': ncat.REPR_NMME_HARMONIZED_MONTHLY, 'politica_membros': 'exatamente 24 por lead',
-        'chirps_referencia': 'ponto único (mesmo ponto do POC — São Bento do Tocantins)',
-        'distancia_fazendas_ate_ponto_poc_km': round(dist_km, 1),
+        'n_origens_com_representacao_diferente_da_validada': n_repr_diferente,
+        # Seção 2 da tarefa — coordenadas de cada lado, nunca só a
+        # distância isolada, e nunca chamado de "CHIRPS" (não é).
+        'previsao_cfsv2_ponto': npoc.MUNICIPIO,
+        'previsao_cfsv2_lat': info_municipio['lat'], 'previsao_cfsv2_lon': info_municipio['lon'],
+        'serie_observacional_ponto': 'centroide das fazendas',
+        'serie_observacional_lat': FAZENDAS_LAT, 'serie_observacional_lon': FAZENDAS_LON,
+        'serie_observacional_procedencia_documental': (
+            'MERRA-2 (reanálise, 1981-1995) + Estação Sinobras (leitura direta, 1996-presente) — '
+            'README.md; NÃO é CHIRPS para o período do piloto (1991-2010)'),
+        'distancia_previsao_observacao_km': round(dist_km, 1),
+        'consequencias_avaliacao_cientifica_futura': (
+            'Distância de ~198 km entre a previsão do CFSv2 (São Bento do Tocantins) e a série '
+            'observacional (centroide das fazendas) pode introduzir divergência puramente espacial '
+            '(variabilidade convectiva local, CLAUDE.md armadilha 7) numa futura comparação de '
+            'skill, independente da habilidade preditiva real do modelo — mesma limitação já '
+            'presente nas comparações C3S/SEAS5 anteriores contra a mesma série, não introduzida '
+            'por este piloto.'),
         'piloto_status': aprovacao['piloto_status'],
         'n_origens_aprovadas': aprovacao['n_origens_aprovadas'],
         'n_origens_total': aprovacao['n_origens_total'],
-        'cobertura_observacional_fracao': aprovacao['cobertura_observacional_fracao'],
-        'criterios_aprovacao': aprovacao['criterios'],
+        'criterios_aprovacao_piloto': aprovacao['criterios'],
+        # Seção 3 — verdito SEPARADO, nunca combinado com piloto_status.
+        'referencia_observacional_apta_para_avaliacao_cientifica':
+            aptidao['apto_para_avaliacao_cientifica'],
+        'referencia_observacional_motivos_bloqueio': aptidao['motivos_bloqueio'],
+        'referencia_observacional_cobertura': {
+            'n_combinacoes_total': aptidao['n_combinacoes_total'],
+            'n_combinacoes_disponiveis': aptidao['n_combinacoes_disponiveis'],
+            'n_combinacoes_procedencia_nao_substituida': aptidao['n_combinacoes_procedencia_nao_substituida'],
+            'n_combinacoes_qualidade_ok': aptidao['n_combinacoes_qualidade_ok'],
+        },
         'nenhuma_skill_calculada': True, 'nenhum_dashboard_alterado': True,
         'status_cfsv2_data_access': 'POC_READY_DOCUMENTED (inalterado — decisão explícita)',
     }
 
 
-def escrever_saidas_piloto(resultados_piloto, cobertura_df, aprovacao):
+def escrever_saidas_piloto(resultados_piloto, cobertura_df, aprovacao, aptidao):
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     raw_df, temporal_df, access_df = concatenar_dataframes_piloto(resultados_piloto)
     resumo_df = montar_resumo_por_origem(resultados_piloto)
@@ -348,10 +566,11 @@ def escrever_saidas_piloto(resultados_piloto, cobertura_df, aprovacao):
     resumo_df.to_csv(ARTIFACTS_DIR / 'piloto_resumo_por_origem.csv', index=False)
     cobertura_df.to_csv(ARTIFACTS_DIR / 'piloto_cobertura_observacional.csv', index=False)
 
-    metadata = montar_metadata_piloto(resultados_piloto, cobertura_df, aprovacao)
+    metadata = montar_metadata_piloto(resultados_piloto, cobertura_df, aprovacao, aptidao)
     (ARTIFACTS_DIR / 'metadata.json').write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False, default=str))
-    relatorio = gerar_relatorio_piloto_markdown(resultados_piloto, resumo_df, cobertura_df, aprovacao)
+    relatorio = gerar_relatorio_piloto_markdown(resultados_piloto, resumo_df, cobertura_df,
+                                                   aprovacao, aptidao)
     (ARTIFACTS_DIR / 'RELATORIO.md').write_text(relatorio)
 
     for nome in ('piloto_raw.csv', 'piloto_temporal_audit.csv', 'piloto_access_audit.csv',
@@ -361,28 +580,54 @@ def escrever_saidas_piloto(resultados_piloto, cobertura_df, aprovacao):
     return metadata, relatorio
 
 
-def gerar_relatorio_piloto_markdown(resultados_piloto, resumo_df, cobertura_df, aprovacao):
+def gerar_relatorio_piloto_markdown(resultados_piloto, resumo_df, cobertura_df, aprovacao, aptidao):
     linhas = ["# NMME — Piloto histórico CFSv2 (Fase 2C.2)", "",
               "**Piloto de infraestrutura — 16 inicializações, nunca conclusão científica "
               "(Seção 4 da tarefa: 'não calcular conclusões científicas definitivas a partir "
               "do piloto de infraestrutura').**", "",
-              f"## Resultado: {aprovacao['piloto_status']}", "",
-              f"- Origens aprovadas: {aprovacao['n_origens_aprovadas']}/{aprovacao['n_origens_total']}",
-              f"- Cobertura observacional confirmada: "
-              f"{aprovacao['cobertura_observacional_fracao']}",
-              "", "## Resumo por origem", "",
-              "| Origem | Status | RAW | Membros/lead OK | Mapeamento temporal | Unidade | Grade | Erro |",
-              "|---|---|---|---|---|---|---|---|"]
+              "## Dois resultados SEPARADOS (Seção 3, revisão pontual)", "",
+              "Aprovação de infraestrutura (acesso/seleção temporal/membros/horizontes/RAW) e "
+              "aptidão da referência observacional (procedência/qualidade/correspondência espacial) "
+              "NUNCA são combinadas num único veredito — a insuficiência da segunda nunca é "
+              "reportada como falha da primeira.", "",
+              f"### Infraestrutura: {aprovacao['piloto_status']}", "",
+              f"- Origens aprovadas: {aprovacao['n_origens_aprovadas']}/{aprovacao['n_origens_total']}"]
+    n_repr_diferente = int(resumo_df['representacao_diferente_da_validada'].sum())
+    linhas.append(f"- Origens com representação DIFERENTE da rota EMPIRICALLY_CONFIRMED "
+                   f"(NMME_HARMONIZED_MONTHLY): {n_repr_diferente} "
+                   f"{'⚠️ ver coluna representacao_diferente_da_validada no resumo por origem' if n_repr_diferente else ''}")
+    linhas += ["",
+               f"### Aptidão da referência observacional para avaliação científica: "
+               f"{'APTA' if aptidao['apto_para_avaliacao_cientifica'] else 'NÃO APTA'}", ""]
+    for motivo in aptidao['motivos_bloqueio']:
+        linhas.append(f"- ❌ {motivo}")
+    if not aptidao['motivos_bloqueio']:
+        linhas.append("- (nenhum bloqueio identificado)")
+    linhas += ["", "## Resumo por origem", "",
+              "| Origem | Status | RAW | Representação | ≠ validada | Membros/lead OK | "
+              "Mapeamento temporal | Unidade | Grade | Erro |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
     for _, row in resumo_df.iterrows():
         linhas.append(f"| {row['init_date']} | {row['poc_status']} | {row['n_raw']} | "
+                       f"{row['dataset_representation_used']} | "
+                       f"{row['representacao_diferente_da_validada']} | "
                        f"{row['member_count_per_lead_ok']} | {row['temporal_mapping_confirmado']} | "
                        f"{row['unidade_confirmada']} | {row['grade_confirmada']} | {row['erro_inesperado']} |")
-    linhas += ["", "## Cobertura observacional (CHIRPS/série de produção)", "",
+    linhas += ["", "## Cobertura da série observacional (disponibilidade / procedência / qualidade)",
+               "", "**Nunca resumida como \"% confirmado\" — os três conceitos são reportados "
+               "separadamente (Seção 1, revisão pontual).**", "",
                f"Total de combinações origem×lead avaliadas: {len(cobertura_df)}"]
     if len(cobertura_df):
-        contagem = cobertura_df['classificacao'].value_counts()
-        for classe, n in contagem.items():
-            linhas.append(f"- `{classe}`: {n}")
+        linhas.append(f"- Disponibilidade: {(cobertura_df['disponibilidade'] == 'PRESENTE').sum()} "
+                       f"presentes / {(cobertura_df['disponibilidade'] == 'AUSENTE').sum()} ausentes")
+        linhas.append("- Procedência documental (entre os presentes):")
+        for proc, n in cobertura_df['procedencia_documental'].value_counts().items():
+            linhas.append(f"  - `{proc}`: {n}")
+        linhas.append(f"- Procedência preliminar/estimada (nunca usar como observação real): "
+                       f"{int(cobertura_df['fonte_e_substituta_nao_usar'].sum())}")
+        linhas.append("- Qualidade efetivamente verificada:")
+        for status, n in cobertura_df['qualidade_verificada_status'].value_counts().items():
+            linhas.append(f"  - `{status}`: {n}")
     linhas += ["", "Ver docs/nmme-fase2c2-piloto-cobertura-observacional.md para a investigação "
                     "completa de procedência (MERRA-2/Sinobras/CHIRPS) e a distância espacial "
                     "entre a referência observacional e o ponto do CFSv2."]
@@ -402,13 +647,22 @@ def imprimir_plano():
     print(f"  n_origens: {len(PILOTO_ORIGENS)}")
     print(f"  origens: {[f'{a}-{m:02d}' for a, m in PILOTO_ORIGENS]}")
     print(f"  leads: {list(npoc.LEADS)}")
-    print(f"  representacao: {ncat.REPR_NMME_HARMONIZED_MONTHLY}")
+    print(f"  representacao_validada: {ncat.REPR_NMME_HARMONIZED_MONTHLY} "
+          f"(qualquer origem que usar outra é registrada explicitamente, nunca tratada como equivalente)")
     print("  politica_membros: exatamente 24 por lead (guardrail existente, sem alteração)")
-    print("  chirps_referencia: ponto único (mesmo ponto do POC — São Bento do Tocantins)")
+    from _c3s_utils import MUNICIPIOS
+    info_municipio = MUNICIPIOS[npoc.MUNICIPIO]
+    print(f"  previsao_cfsv2_ponto: {npoc.MUNICIPIO} (lat={info_municipio['lat']}, "
+          f"lon={info_municipio['lon']}) — coordenadas do POC, NÃO alteradas por esta revisão")
+    print(f"  serie_observacional_ponto: centroide das fazendas "
+          f"(lat={FAZENDAS_LAT}, lon={FAZENDAS_LON}) — NÃO é CHIRPS (MERRA-2 1981-1995 + "
+          f"Estação Sinobras 1996-presente, README.md)")
     dist_km = distancia_fazendas_ate_municipio_km()
-    print(f"  distancia_fazendas_ate_ponto_poc_km: {round(dist_km, 1)}")
+    print(f"  distancia_previsao_observacao_km: {round(dist_km, 1)}")
     print("  status_cfsv2_data_access: POC_READY_DOCUMENTED (inalterado nesta tarefa)")
     print(f"  requests_previstos: {len(PILOTO_ORIGENS)} (1 por origem, nunca em lote)")
+    print("  aptidao_referencia_observacional_para_skill: sempre avaliada separadamente da "
+          "aprovação de infraestrutura (nunca combinadas)")
 
 
 def main():
@@ -423,17 +677,29 @@ def main():
         imprimir_plano()
         resultados = executar_piloto_historico()
         cobertura_df = verificar_cobertura_observacional(resultados)
-        aprovacao = avaliar_aprovacao_piloto(resultados, cobertura_df)
-        escrever_saidas_piloto(resultados, cobertura_df, aprovacao)
+        aprovacao = avaliar_aprovacao_piloto(resultados)
+        aptidao = avaliar_aptidao_referencia_observacional(cobertura_df)
+        escrever_saidas_piloto(resultados, cobertura_df, aprovacao, aptidao)
         print(f"\npiloto_status={aprovacao['piloto_status']} "
               f"({aprovacao['n_origens_aprovadas']}/{aprovacao['n_origens_total']} origens aprovadas)")
         for k, v in aprovacao['criterios'].items():
             print(f"  - {k}: {v}")
+        print(f"\nreferencia_observacional_apta_para_avaliacao_cientifica="
+              f"{aptidao['apto_para_avaliacao_cientifica']}")
+        for motivo in aptidao['motivos_bloqueio']:
+            print(f"  - bloqueio: {motivo}")
+        # Seção 3 — só a aprovação de INFRAESTRUTURA determina o exit
+        # code; a aptidão da referência observacional é informativa,
+        # nunca reportada como falha de acesso ao CFSv2.
         if aprovacao['piloto_status'] != 'APROVADO':
-            raise SystemExit(f"Piloto histórico REPROVADO — ver "
+            raise SystemExit(f"Piloto histórico REPROVADO (infraestrutura) — ver "
                               f"artifacts/nmme_piloto_historico/piloto_resumo_por_origem.csv "
                               f"para o motivo por origem.")
-        print("\n✅ Piloto histórico do CFSv2 APROVADO — ver artifacts/nmme_piloto_historico/RELATORIO.md")
+        print("\n✅ Piloto histórico do CFSv2 APROVADO (infraestrutura) — ver "
+              "artifacts/nmme_piloto_historico/RELATORIO.md")
+        if not aptidao['apto_para_avaliacao_cientifica']:
+            print("⚠️  Referência observacional AINDA NÃO apta para avaliação científica — "
+                  "ver motivos de bloqueio acima e docs/nmme-fase2c2-piloto-cobertura-observacional.md.")
         return
 
     imprimir_plano()

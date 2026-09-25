@@ -72,21 +72,42 @@ de variação foi medida.
 
 ## Critério objetivo para autorizar a extração completa
 
-Reafirmando `docs/nmme-fase2c2-especificacao.md` (Seção G): a extração
-completa (240 origens) só deve começar **depois** que o piloto de 16
-origens rodar de verdade (não simulado) e:
+Reafirmando `docs/nmme-fase2c2-especificacao.md` (Seção G) e a Seção 3
+da revisão pontual (separação entre infraestrutura e aptidão
+observacional): a extração completa (240 origens) só deve começar
+**depois** que o piloto de 16 origens rodar de verdade (não simulado) e:
+
+**Infraestrutura** (`avaliar_aprovacao_piloto`):
 1. 16/16 origens `APROVADO`.
 2. Nenhum `RANGEEDGES_FAIL_*` inesperado (só o padrão já compreendido
    de janela com 2 inicializações vizinhas).
-3. Cobertura observacional confirmada ≥ 90% (já verificado
-   estruturalmente como 100% possível — `docs/nmme-fase2c2-piloto-
-   cobertura-observacional.md` — mas isso descreve a OBSERVAÇÃO, não
-   se o CFSv2 vai de fato abrir as 16 origens).
-4. **Novo, incorporado nesta revisão**: o tempo real de execução do
-   piloto (16 origens) medido, para recalibrar a projeção dos 240 antes
-   de comprometer uma janela de workflow — se 16 origens levarem
-   muito mais que ~47s, a projeção linear de ~12 minutos para 240 deixa
-   de ser confiável e precisa ser refeita com o dado real.
+3. Nenhuma origem usando uma `dataset_representation_used` diferente
+   de `NMME_HARMONIZED_MONTHLY` sem registro explícito — se acontecer,
+   decisão consciente sobre se essas origens entram na extração
+   completa (Seção 4, revisão pontual — nunca tratadas como
+   equivalentes à rota validada por omissão).
+4. O tempo real de execução do piloto (16 origens) medido, para
+   recalibrar a projeção dos 240 antes de comprometer uma janela de
+   workflow — se 16 origens levarem muito mais que ~47s, a projeção
+   linear de ~12 minutos para 240 deixa de ser confiável e precisa ser
+   refeita com o dado real.
+
+**Referência observacional** (`avaliar_aptidao_referencia_observacional`
+— critério SEPARADO, nunca combinado com a infraestrutura acima):
+5. Disponibilidade/procedência/qualidade da série contra as 240 origens
+   reais (o piloto já confirmou 100% de disponibilidade e qualidade OK
+   para as 16 origens de amostra — `docs/nmme-fase2c2-piloto-cobertura-
+   observacional.md` — mas isso ainda não cobre as 224 origens
+   restantes).
+6. Correspondência espacial (198 km, centroide das fazendas vs. São
+   Bento do Tocantins) resolvida por decisão explícita — bloqueio
+   estrutural que, sozinho, já impede `apto_para_avaliacao_cientifica`
+   hoje, independente de qualquer melhoria nos itens 1-5.
 
 Nenhuma dessas condições foi satisfeita nesta tarefa — a extração de
-240 origens permanece não iniciada e não autorizada.
+240 origens permanece não iniciada e não autorizada. Mesmo que os
+critérios 1-5 sejam satisfeitos por uma execução real futura do piloto,
+o critério 6 continua em aberto até decisão explícita — a extração
+histórica completa pode prosseguir para fins de infraestrutura sem
+esperar por ele, mas qualquer cálculo de skill sobre esses dados
+continua bloqueado até lá.

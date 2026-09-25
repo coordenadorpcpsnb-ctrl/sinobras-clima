@@ -209,91 +209,190 @@ class AgregacaoTestCase(unittest.TestCase):
 
 
 class CoberturaObservacionalTestCase(unittest.TestCase):
-    """E — Seção 3 da tarefa: classificar procedência da série
-    observacional usada como referência, nunca tratar valor substituído/
-    estimado como observação real. Usa uma série FABRICADA (nunca o
+    """E — Seção 1 da tarefa (revisão pontual): separar disponibilidade,
+    procedência documental e qualidade EFETIVAMENTE VERIFICADA — nunca
+    colapsar num único "confirmado". Usa uma série FABRICADA (nunca o
     arquivo real) para determinismo — a cobertura contra o arquivo real
     é testada à parte (RealSerieObservacionalTestCase)."""
 
     @staticmethod
     def _serie_fabricada():
         linhas = []
-        # mês com fonte vazia (baseline MERRA-2/Sinobras) -> confirmada
+        # mês com fonte vazia, ano <= 1995 -> procedência MERRA-2
         linhas.append({'ano': 1991, 'mes': 1, 'prec': 100.0, 'fonte': None})
-        # mês com fonte='CHIRPS' (CHIRPS Final) -> confirmada
+        # mês com fonte vazia, ano > 1995 -> procedência Estação Sinobras
+        linhas.append({'ano': 1998, 'mes': 6, 'prec': 40.0, 'fonte': None})
+        # mês com fonte='CHIRPS' (CHIRPS Final)
         linhas.append({'ano': 1991, 'mes': 2, 'prec': 50.0, 'fonte': 'CHIRPS'})
-        # mês com fonte preliminar -> NUNCA usar como observação real
+        # mês com fonte preliminar -> nunca usar como observação real
         linhas.append({'ano': 1991, 'mes': 3, 'prec': 30.0, 'fonte': 'CHC-Preliminar'})
         # mês com fonte ERA5 (fallback final) -> idem, nunca usar
         linhas.append({'ano': 1991, 'mes': 4, 'prec': 10.0, 'fonte': 'OpenMeteo-ERA5'})
-        # (1991-05 deliberadamente ausente -> MES_AUSENTE)
+        # mês com valor ausente (NaN) mesmo com fonte vazia
+        linhas.append({'ano': 1991, 'mes': 5, 'prec': np.nan, 'fonte': None})
+        # mês com valor fisicamente implausível (negativo)
+        linhas.append({'ano': 1991, 'mes': 6, 'prec': -5.0, 'fonte': None})
+        # mês com valor fisicamente implausível (acima do limite)
+        linhas.append({'ano': 1991, 'mes': 7, 'prec': 99999.0, 'fonte': None})
+        # (1991-08 deliberadamente ausente -> AUSENTE)
         return pd.DataFrame(linhas)
 
-    def test_e_fonte_vazia_e_confirmada(self):
-        resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]   # H1 de 1990-12 -> 1990-12... ajustado abaixo
-        # Usamos origem 1990-12 com lead 1 (H1) => target 1990-12? Não —
-        # a origem precisa mapear para os meses fabricados (1991-01..04).
-        # Origem 1990-12: H1->1990-12, H2->1991-01 (fonte vazia, confirmada).
-        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
-        linha_h2 = cobertura[(cobertura['origem_piloto'] == '1990-12') & (cobertura['H_lead'] == 2)].iloc[0]
-        self.assertEqual(linha_h2['target_month'], '1991-01')
-        self.assertEqual(linha_h2['classificacao'], 'OBSERVACAO_CONFIRMADA')
+    @staticmethod
+    def _serie_com_duplicata():
+        return pd.DataFrame([
+            {'ano': 1991, 'mes': 1, 'prec': 100.0, 'fonte': None},
+            {'ano': 1991, 'mes': 1, 'prec': 105.0, 'fonte': None},   # mesmo ano/mês de novo
+        ])
 
-    def test_e_fonte_chirps_e_confirmada(self):
+    def _linha(self, cobertura, lead):
+        return cobertura[(cobertura['origem_piloto'] == '1990-12') & (cobertura['H_lead'] == lead)].iloc[0]
+
+    def test_e_fonte_vazia_ano_antigo_e_procedencia_merra2(self):
+        # H2 de origem 1990-12 -> target 1991-01
         resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
         cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
-        linha_h3 = cobertura[(cobertura['origem_piloto'] == '1990-12') & (cobertura['H_lead'] == 3)].iloc[0]
-        self.assertEqual(linha_h3['target_month'], '1991-02')
-        self.assertEqual(linha_h3['classificacao'], 'OBSERVACAO_CONFIRMADA')
-        self.assertEqual(linha_h3['fonte_observada'], 'CHIRPS')
+        linha = self._linha(cobertura, 2)
+        self.assertEqual(linha['target_month'], '1991-01')
+        self.assertEqual(linha['disponibilidade'], 'PRESENTE')
+        self.assertEqual(linha['procedencia_documental'], pilo.PROCEDENCIA_MERRA2)
+        self.assertEqual(linha['qualidade_verificada_status'], pilo.QUALIDADE_STATUS_OK)
+        self.assertFalse(linha['fonte_e_substituta_nao_usar'])
 
-    def test_e_fonte_preliminar_nunca_e_confirmada(self):
+    def test_e_fonte_vazia_ano_recente_e_procedencia_sinobras(self):
+        # origem 1998-01, H6 -> target 1998-06
+        resultados = [{'ano': 1998, 'mes': 1, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
+        linha = cobertura[(cobertura['origem_piloto'] == '1998-01') & (cobertura['H_lead'] == 6)].iloc[0]
+        self.assertEqual(linha['target_month'], '1998-06')
+        self.assertEqual(linha['procedencia_documental'], pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+
+    def test_e_fonte_chirps_procedencia_correta(self):
         resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
         cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
-        linha_h4 = cobertura[(cobertura['origem_piloto'] == '1990-12') & (cobertura['H_lead'] == 4)].iloc[0]
-        self.assertEqual(linha_h4['target_month'], '1991-03')
-        self.assertEqual(linha_h4['classificacao'], 'VALOR_SUBSTITUIDO_NAO_USAR')
+        linha = self._linha(cobertura, 3)   # target 1991-02
+        self.assertEqual(linha['procedencia_documental'], pilo.PROCEDENCIA_CHIRPS_FINAL)
+        self.assertFalse(linha['fonte_e_substituta_nao_usar'])
 
-    def test_e_fonte_era5_fallback_nunca_e_confirmada(self):
+    def test_e_fonte_preliminar_marcada_como_nao_usar(self):
         resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
         cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
-        linha_h5 = cobertura[(cobertura['origem_piloto'] == '1990-12') & (cobertura['H_lead'] == 5)].iloc[0]
-        self.assertEqual(linha_h5['target_month'], '1991-04')
-        self.assertEqual(linha_h5['classificacao'], 'VALOR_SUBSTITUIDO_NAO_USAR')
+        linha = self._linha(cobertura, 4)   # target 1991-03
+        self.assertEqual(linha['procedencia_documental'], pilo.PROCEDENCIA_CHC_PRELIMINAR)
+        self.assertTrue(linha['fonte_e_substituta_nao_usar'])
 
-    def test_e_mes_ausente_e_classificado_corretamente(self):
+    def test_e_fonte_era5_fallback_marcada_como_nao_usar(self):
         resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
         cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
-        linha_h6 = cobertura[(cobertura['origem_piloto'] == '1990-12') & (cobertura['H_lead'] == 6)].iloc[0]
-        self.assertEqual(linha_h6['target_month'], '1991-05')
-        self.assertEqual(linha_h6['classificacao'], 'MES_AUSENTE')
+        linha = self._linha(cobertura, 5)   # target 1991-04
+        self.assertEqual(linha['procedencia_documental'], pilo.PROCEDENCIA_ERA5)
+        self.assertTrue(linha['fonte_e_substituta_nao_usar'])
+
+    def test_e_mes_ausente_classificado_corretamente(self):
+        # origem 1991-03, H6 -> target 1991-08 (fora do alcance de
+        # 1990-12, cujo H6 máximo é 1991-05 — H_lead vai só até 6).
+        resultados = [{'ano': 1991, 'mes': 3, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
+        linha = cobertura[(cobertura['origem_piloto'] == '1991-03') & (cobertura['H_lead'] == 6)].iloc[0]
+        self.assertEqual(linha['target_month'], '1991-08')
+        self.assertEqual(linha['disponibilidade'], 'AUSENTE')
+        self.assertTrue(pd.isna(linha['procedencia_documental']))
+        self.assertEqual(linha['qualidade_verificada_status'],
+                          pilo.QUALIDADE_STATUS_NAO_APLICAVEL_AUSENTE)
+
+    def test_e_valor_ausente_na_serie_e_detectado(self):
+        """Regressão — a versão anterior deste módulo NUNCA checava se
+        `prec` era NaN quando o mês estava presente; um mês "disponível"
+        podia ter valor numérico ausente e ainda assim ser chamado de
+        observação confirmada."""
+        resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
+        linha = self._linha(cobertura, 6)   # target 1991-05, prec=NaN
+        self.assertEqual(linha['disponibilidade'], 'PRESENTE')
+        self.assertIn(pilo.QUALIDADE_FLAG_VALOR_AUSENTE, linha['qualidade_verificada_status'])
+
+    def test_e_valor_negativo_e_implausivel(self):
+        # origem 1991-01, H6 -> target 1991-06
+        resultados = [{'ano': 1991, 'mes': 1, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
+        linha = cobertura[(cobertura['origem_piloto'] == '1991-01')
+                            & (cobertura['target_month'] == '1991-06')].iloc[0]
+        self.assertIn(pilo.QUALIDADE_FLAG_VALOR_IMPLAUSIVEL, linha['qualidade_verificada_status'])
+
+    def test_e_valor_absurdamente_alto_e_implausivel(self):
+        # origem 1991-02, H6 -> target 1991-07
+        resultados = [{'ano': 1991, 'mes': 2, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
+        linha = cobertura[(cobertura['origem_piloto'] == '1991-02')
+                            & (cobertura['target_month'] == '1991-07')].iloc[0]
+        self.assertIn(pilo.QUALIDADE_FLAG_VALOR_IMPLAUSIVEL, linha['qualidade_verificada_status'])
+
+    def test_e_registro_duplicado_e_detectado(self):
+        """Regressão — duplicata é uma propriedade da SÉRIE (mesmo
+        ano/mês aparecendo mais de 1 vez), nunca escondida por um
+        `.iloc[0]` que só olha a primeira ocorrência."""
+        resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(
+            resultados, serie_df=self._serie_com_duplicata())
+        linha = self._linha(cobertura, 2)   # target 1991-01
+        self.assertIn(pilo.QUALIDADE_FLAG_REGISTRO_DUPLICADO, linha['qualidade_verificada_status'])
+
+    def test_e_nunca_produz_uma_coluna_classificacao_unica(self):
+        """Regressão explícita do achado desta revisão: a primeira
+        versão tinha uma única coluna `classificacao` com o valor
+        'OBSERVACAO_CONFIRMADA' atribuído automaticamente a qualquer
+        mês com fonte vazia — isso superclamava verificação que não
+        tinha sido feita. Essa coluna não deve mais existir."""
+        resultados = [{'ano': 1990, 'mes': 12, 'resultado': {}}]
+        cobertura = pilo.verificar_cobertura_observacional(resultados, serie_df=self._serie_fabricada())
+        self.assertNotIn('classificacao', cobertura.columns)
+        self.assertNotIn('OBSERVACAO_CONFIRMADA', cobertura.values.astype(str))
 
 
 class RealSerieObservacionalTestCase(unittest.TestCase):
     """F — checagem contra o arquivo real data/serie_subst.csv (só
-    leitura local, nunca rede) para as 16 origens efetivamente adotadas
-    — confirma o achado desta tarefa: os 16x6=96 meses-alvo do piloto
-    têm todos `fonte` vazia (baseline MERRA-2 1981-1995 / estação
-    Sinobras 1996-presente, README.md), nenhum com tag de fallback
-    preliminar/estimado."""
+    leitura local, nunca rede) para as 16 origens efetivamente adotadas.
+    Confirma separadamente disponibilidade (todos presentes), procedência
+    documental (MERRA-2 para 1991, Estação Sinobras para 1998/2005/2010)
+    e qualidade (nenhuma flag nos dados reais) — nunca um único
+    "confirmado" agregando os três."""
 
-    def test_f_96_combinacoes_todas_confirmadas_no_arquivo_real(self):
+    def test_f_96_combinacoes_todas_disponiveis_no_arquivo_real(self):
         resultados = [{'ano': ano, 'mes': mes, 'resultado': {}} for ano, mes in pilo.PILOTO_ORIGENS]
         cobertura = pilo.verificar_cobertura_observacional(resultados)
         self.assertEqual(len(cobertura), 16 * 6)
-        self.assertTrue((cobertura['classificacao'] == 'OBSERVACAO_CONFIRMADA').all(),
-                          msg='pelo menos um mês-alvo do piloto não está confirmado no arquivo real '
+        self.assertTrue((cobertura['disponibilidade'] == 'PRESENTE').all(),
+                          msg='pelo menos um mês-alvo do piloto não está disponível no arquivo real '
                               '(mudança em data/serie_subst.csv desde que este teste foi escrito?)')
+
+    def test_f_nenhuma_procedencia_e_substituta(self):
+        resultados = [{'ano': ano, 'mes': mes, 'resultado': {}} for ano, mes in pilo.PILOTO_ORIGENS]
+        cobertura = pilo.verificar_cobertura_observacional(resultados)
+        self.assertFalse(cobertura['fonte_e_substituta_nao_usar'].any())
+
+    def test_f_qualidade_ok_em_todas_as_combinacoes_reais(self):
+        resultados = [{'ano': ano, 'mes': mes, 'resultado': {}} for ano, mes in pilo.PILOTO_ORIGENS]
+        cobertura = pilo.verificar_cobertura_observacional(resultados)
+        self.assertTrue((cobertura['qualidade_verificada_status'] == pilo.QUALIDADE_STATUS_OK).all())
+
+    def test_f_procedencia_documental_bate_com_o_corte_de_1995(self):
+        resultados = [{'ano': ano, 'mes': mes, 'resultado': {}} for ano, mes in pilo.PILOTO_ORIGENS]
+        cobertura = pilo.verificar_cobertura_observacional(resultados)
+        de_1991 = cobertura[cobertura['origem_piloto'].str.startswith('1991')]
+        # 1991-01 tem H1..H6 -> alvo até 1991-06, todos <= 1995 -> MERRA-2
+        self.assertTrue((de_1991['procedencia_documental'] == pilo.PROCEDENCIA_MERRA2).all())
+        de_2010 = cobertura[cobertura['origem_piloto'].str.startswith('2010')]
+        self.assertTrue((de_2010['procedencia_documental'] == pilo.PROCEDENCIA_ESTACAO_SINOBRAS).all())
 
 
 class AprovacaoPilotoTestCase(unittest.TestCase):
-    """G — critérios de aprovação do piloto (distintos da aprovação por
-    origem): todas aprovadas + sem erro inesperado + cobertura >= 90%."""
+    """G — critérios de aprovação de INFRAESTRUTURA do piloto (Seção 3,
+    revisão pontual): todas aprovadas + sem erro inesperado — a
+    cobertura/procedência observacional NUNCA entra aqui (ver
+    AptidaoReferenciaObservacionalTestCase para o verdito separado)."""
 
     def test_g_aprova_quando_tudo_ok(self):
         resultados = pilo.executar_piloto_historico(resolver_fns=_resolver_todas_ok)
-        cobertura = pilo.verificar_cobertura_observacional(resultados)
-        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, cobertura)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
         self.assertEqual(aprovacao['piloto_status'], 'APROVADO')
         self.assertEqual(aprovacao['n_origens_aprovadas'], 16)
         self.assertTrue(all(aprovacao['criterios'].values()))
@@ -301,28 +400,109 @@ class AprovacaoPilotoTestCase(unittest.TestCase):
     def test_g_reprova_com_uma_origem_falhando(self):
         resultados = pilo.executar_piloto_historico(
             resolver_fns=_resolver_com_uma_falha((2005, 1)))
-        cobertura = pilo.verificar_cobertura_observacional(resultados)
-        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, cobertura)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
         self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
         self.assertEqual(aprovacao['n_origens_aprovadas'], 15)
         self.assertFalse(aprovacao['criterios']['todas_origens_aprovadas'])
 
-    def test_g_sem_cobertura_informada_nunca_aprova_silenciosamente(self):
-        """Regressão — cobertura_df=None não pode virar um APROVADO
-        implícito; o critério fica None (NAO_AVALIADO), nunca True por
-        omissão."""
+    def test_g_criterios_nunca_incluem_cobertura_observacional(self):
+        """Regressão — a versão anterior misturava um critério de
+        cobertura observacional na aprovação de infraestrutura; agora
+        são funções completamente separadas."""
         resultados = pilo.executar_piloto_historico(resolver_fns=_resolver_todas_ok)
-        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, cobertura_df=None)
-        self.assertIsNone(aprovacao['criterios']['cobertura_observacional_ok'])
-        self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
+        self.assertNotIn('cobertura_observacional_ok', aprovacao['criterios'])
 
-    def test_g_reprova_por_cobertura_insuficiente(self):
-        resultados = pilo.executar_piloto_historico(resolver_fns=_resolver_todas_ok)
-        cobertura_ruim = pd.DataFrame({
-            'classificacao': ['OBSERVACAO_CONFIRMADA'] * 10 + ['MES_AUSENTE'] * 86})
-        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, cobertura_ruim)
-        self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
-        self.assertFalse(aprovacao['criterios']['cobertura_observacional_ok'])
+
+class AptidaoReferenciaObservacionalTestCase(unittest.TestCase):
+    """G2 — Seção 3 da tarefa: verdito SEPARADO sobre se a referência
+    observacional está apta para uma avaliação científica futura.
+    NUNCA aprova enquanto a correspondência espacial (Seção 2) não for
+    resolvida — bloqueio estrutural, sempre presente nesta revisão."""
+
+    def _cobertura_perfeita(self):
+        linhas = []
+        for a, m in pilo.PILOTO_ORIGENS:
+            for lead in range(1, 7):
+                linhas.append({'origem_piloto': f'{a}-{m:02d}', 'H_lead': lead,
+                                 'target_month': f'{a}-{m:02d}', 'disponibilidade': 'PRESENTE',
+                                 'procedencia_documental': pilo.PROCEDENCIA_ESTACAO_SINOBRAS,
+                                 'fonte_e_substituta_nao_usar': False,
+                                 'qualidade_verificada_status': pilo.QUALIDADE_STATUS_OK})
+        return pd.DataFrame(linhas)
+
+    def test_g2_nunca_apta_mesmo_com_cobertura_perfeita(self):
+        """O bloqueio de correspondência espacial (198 km, Seção 2) é
+        estrutural nesta revisão — mesmo cobertura/qualidade 100%
+        limpas não tornam a referência apta."""
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(self._cobertura_perfeita())
+        self.assertFalse(aptidao['apto_para_avaliacao_cientifica'])
+        self.assertTrue(any('correspondência espacial' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_cobertura_none_e_um_bloqueio_explicito(self):
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(None)
+        self.assertFalse(aptidao['apto_para_avaliacao_cientifica'])
+        self.assertTrue(any('não avaliada' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_mes_ausente_vira_bloqueio_nomeado(self):
+        cobertura = self._cobertura_perfeita()
+        cobertura.loc[0, 'disponibilidade'] = 'AUSENTE'
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(cobertura)
+        self.assertTrue(any('sem registro histórico disponível' in m for m in aptidao['motivos_bloqueio']))
+        self.assertEqual(aptidao['n_combinacoes_disponiveis'], len(cobertura) - 1)
+
+    def test_g2_fonte_substituta_vira_bloqueio_nomeado(self):
+        cobertura = self._cobertura_perfeita()
+        cobertura.loc[0, 'fonte_e_substituta_nao_usar'] = True
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(cobertura)
+        self.assertTrue(any('preliminar/estimada' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_flag_de_qualidade_vira_bloqueio_nomeado(self):
+        cobertura = self._cobertura_perfeita()
+        cobertura.loc[0, 'qualidade_verificada_status'] = pilo.QUALIDADE_FLAG_VALOR_AUSENTE
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(cobertura)
+        self.assertTrue(any('flag de qualidade' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_nunca_confundido_com_reprovacao_de_infraestrutura(self):
+        """A insuficiência da referência observacional nunca é reportada
+        como falha de acesso ao CFSv2 — os dois vocabulários de status
+        são completamente distintos."""
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(self._cobertura_perfeita())
+        self.assertNotIn('poc_status', aptidao)
+        self.assertNotIn('REPROVADO_ACESSO', str(aptidao))
+
+
+class RepresentacaoDiferenteTestCase(unittest.TestCase):
+    """Seção 4 da tarefa — qualquer origem que usar uma representação
+    diferente de NMME_HARMONIZED_MONTHLY é registrada explicitamente,
+    nunca tratada como equivalente à rota EMPIRICALLY_CONFIRMED."""
+
+    def test_representacao_diferente_e_marcada_true(self):
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
+        # Simula uma origem cujo resultado usou a Representação A —
+        # nunca acontece organicamente nesta fixture (B sempre
+        # disponível), então testamos a função de resumo diretamente
+        # com um resultado sintético.
+        resultados[0]['resultado']['dataset_representation_used'] = ncat.REPR_RAW_NATIVE_ENSEMBLE
+        resumo = pilo.montar_resumo_por_origem(resultados)
+        self.assertTrue(resumo.iloc[0]['representacao_diferente_da_validada'])
+
+    def test_representacao_validada_e_marcada_false(self):
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
+        resumo = pilo.montar_resumo_por_origem(resultados)
+        self.assertFalse(resumo.iloc[0]['representacao_diferente_da_validada'])
+
+    def test_representacao_ausente_nao_e_marcada_como_diferente(self):
+        """Uma origem sem representação usada (ex.: REPROVADO_ACESSO,
+        nenhuma rota respondeu) não deve ser contada como "diferente" —
+        ela simplesmente não usou nenhuma."""
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_com_uma_falha((2005, 1)))
+        resumo = pilo.montar_resumo_por_origem(resultados)
+        self.assertIsNone(resumo.iloc[0]['dataset_representation_used'])
+        self.assertFalse(resumo.iloc[0]['representacao_diferente_da_validada'])
 
 
 class DistanciaEspacialTestCase(unittest.TestCase):
@@ -348,29 +528,61 @@ class DistanciaEspacialTestCase(unittest.TestCase):
 class MetadataEArtifactsTestCase(unittest.TestCase):
     """I — escrever_saidas_piloto gera os artifacts esperados sem
     tocar em dashboard/produção; metadata nunca omite o status do
-    catálogo (Seção 1: CFSv2 continua POC_READY_DOCUMENTED)."""
+    catálogo (Seção 1: CFSv2 continua POC_READY_DOCUMENTED), e separa
+    claramente as coordenadas de cada lado (Seção 2)."""
 
-    def test_i_metadata_reflete_status_cfsv2_inalterado(self):
+    def _tudo(self):
         resultados = pilo.executar_piloto_historico(resolver_fns=_resolver_todas_ok)
         cobertura = pilo.verificar_cobertura_observacional(resultados)
-        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, cobertura)
-        meta = pilo.montar_metadata_piloto(resultados, cobertura, aprovacao)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(cobertura)
+        return resultados, cobertura, aprovacao, aptidao
+
+    def test_i_metadata_reflete_status_cfsv2_inalterado(self):
+        resultados, cobertura, aprovacao, aptidao = self._tudo()
+        meta = pilo.montar_metadata_piloto(resultados, cobertura, aprovacao, aptidao)
         self.assertIn('POC_READY_DOCUMENTED', meta['status_cfsv2_data_access'])
         self.assertTrue(meta['nenhuma_skill_calculada'])
         self.assertTrue(meta['nenhum_dashboard_alterado'])
         self.assertEqual(meta['representacao'], ncat.REPR_NMME_HARMONIZED_MONTHLY)
         self.assertEqual(meta['n_origens'], 16)
 
+    def test_i_metadata_nunca_chama_a_referencia_de_chirps(self):
+        """Regressão — a versão anterior tinha um campo
+        'chirps_referencia'; a série não é CHIRPS para o período do
+        piloto (achado desta tarefa), então nenhum campo do metadata
+        pode usar esse nome."""
+        resultados, cobertura, aprovacao, aptidao = self._tudo()
+        meta = pilo.montar_metadata_piloto(resultados, cobertura, aprovacao, aptidao)
+        self.assertNotIn('chirps_referencia', meta)
+
+    def test_i_metadata_registra_coordenadas_dos_dois_lados_e_distancia(self):
+        resultados, cobertura, aprovacao, aptidao = self._tudo()
+        meta = pilo.montar_metadata_piloto(resultados, cobertura, aprovacao, aptidao)
+        self.assertAlmostEqual(meta['previsao_cfsv2_lat'], -6.0203, places=3)
+        self.assertAlmostEqual(meta['serie_observacional_lat'], pilo.FAZENDAS_LAT, places=3)
+        self.assertGreater(meta['distancia_previsao_observacao_km'], 100.0)
+        self.assertIn('consequencias_avaliacao_cientifica_futura', meta)
+        self.assertIn('MERRA-2', meta['serie_observacional_procedencia_documental'])
+
+    def test_i_metadata_traz_os_dois_status_separados(self):
+        resultados, cobertura, aprovacao, aptidao = self._tudo()
+        meta = pilo.montar_metadata_piloto(resultados, cobertura, aprovacao, aptidao)
+        self.assertEqual(meta['piloto_status'], 'APROVADO')
+        self.assertIn('referencia_observacional_apta_para_avaliacao_cientifica', meta)
+        self.assertFalse(meta['referencia_observacional_apta_para_avaliacao_cientifica'])
+
     def test_i_escrever_saidas_gera_os_7_arquivos(self):
         import tempfile
         resultados = pilo.executar_piloto_historico(
             origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
         cobertura = pilo.verificar_cobertura_observacional(resultados)
-        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, cobertura)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(cobertura)
         antigo = pilo.ARTIFACTS_DIR
         try:
             pilo.ARTIFACTS_DIR = Path(tempfile.mkdtemp())
-            pilo.escrever_saidas_piloto(resultados, cobertura, aprovacao)
+            pilo.escrever_saidas_piloto(resultados, cobertura, aprovacao, aptidao)
             nomes = {p.name for p in pilo.ARTIFACTS_DIR.iterdir()}
             self.assertEqual(nomes, {'piloto_raw.csv', 'piloto_temporal_audit.csv',
                                        'piloto_access_audit.csv', 'piloto_resumo_por_origem.csv',

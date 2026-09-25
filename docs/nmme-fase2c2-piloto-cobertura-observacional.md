@@ -41,27 +41,47 @@ usa esse nome mais preciso na documentação do código.
 
 ## Classificação de cobertura das 16×6 = 96 combinações origem×lead
 
-`nmme_piloto_historico.verificar_cobertura_observacional` classifica
-cada combinação (origem, lead) → mês-alvo em 3 categorias:
+**Revisão pontual** — a primeira versão deste documento/módulo
+classificava cada combinação num único rótulo `OBSERVACAO_CONFIRMADA`,
+que superclamava verificação nunca feita: um mês com `fonte` vazia
+virava "confirmado" só por não ter uma tag de fallback, sem checar se o
+valor numérico existia, se não havia duplicata na série, ou se o valor
+era fisicamente plausível. `nmme_piloto_historico.
+verificar_cobertura_observacional` agora separa **3 conceitos
+independentes** por combinação (origem, lead) → mês-alvo, nunca
+colapsados num único "confirmado":
 
-| Classificação | Critério | Uso permitido como observação real |
+| Conceito | Coluna | O que verifica |
 |---|---|---|
-| `OBSERVACAO_CONFIRMADA` | mês presente, `fonte` vazia (baseline MERRA-2/Sinobras) OU `fonte='CHIRPS'` (CHIRPS Final) | Sim |
-| `VALOR_SUBSTITUIDO_NAO_USAR` | mês presente, mas `fonte` em `{CHC-Preliminar, OpenMeteo-ERA5}` — preliminar/estimado (CLAUDE.md, armadilha 6) | **Não** — a tarefa pede explicitamente para nunca tratar como observação real |
-| `MES_AUSENTE` | mês-alvo não está na série | Não (sem dado) |
+| Disponibilidade | `disponibilidade` | O mês-alvo tem QUALQUER registro na série (`PRESENTE`/`AUSENTE`) |
+| Procedência documental | `procedencia_documental` | De onde o registro vem, segundo README.md/fetch_monthly_data.py (MERRA-2, Estação Sinobras, CHIRPS Final, CHC Preliminary, ERA5) — descrição, nunca afirmação de qualidade |
+| Qualidade efetivamente verificada | `qualidade_verificada_status` | Checagens COMPUTADAS: `VALOR_AUSENTE` (NaN), `REGISTRO_DUPLICADO` (mesmo ano/mês 2+ vezes na série), `VALOR_FISICAMENTE_IMPLAUSIVEL` (fora de [0, 1.500] mm/mês, limite reaproveitado de `scripts/c3s_poc.py`) — `OK` quando nenhuma dispara |
+
+Adicionalmente, `fonte_e_substituta_nao_usar` preserva o guardrail já
+existente: `True` para `fonte` em `{CHC-Preliminar, OpenMeteo-ERA5}` —
+preliminar/estimado (CLAUDE.md, armadilha 6), nunca usável como
+observação real mesmo estando disponível e sem flag de qualidade.
 
 **Resultado empírico** (verificado nesta tarefa, `tests/
 test_nmme_piloto_historico.py::RealSerieObservacionalTestCase`, rodando
-contra o arquivo real): as **96/96** combinações origem×lead do piloto
-estão `OBSERVACAO_CONFIRMADA` — nenhum mês ausente, nenhum valor
-substituído/estimado. A cobertura observacional do piloto é **100%**,
-acima do critério mínimo de 90% já definido em
-`docs/nmme-fase2c2-especificacao.md` (Seção G).
+contra o arquivo real, para as 96 combinações do piloto):
+- **Disponibilidade**: 96/96 `PRESENTE` (nenhum mês ausente).
+- **Procedência documental**: 24/96 `MERRA-2` (as 4 combinações×6 leads
+  de origens em 1991) e 72/96 `Estação Sinobras` (1998/2005/2010).
+- **Substituído/estimado**: 0/96 (nenhuma combinação usa CHC-Preliminar/
+  OpenMeteo-ERA5).
+- **Qualidade verificada**: 96/96 `OK` (nenhum NaN, duplicata ou valor
+  implausível encontrado nos dados reais).
 
 Isso é esperado: o período do piloto (1991-2010) está inteiramente
 dentro do baseline histórico original (1981-2025), que não depende da
 cascata de fallback recente — só os meses mais novos (2026) usam
-CHIRPS/CHC-Preliminar/ERA5.
+CHIRPS/CHC-Preliminar/ERA5. **Isso NÃO significa que a referência está
+"100% confirmada" ou pronta para avaliação científica** — mesmo com
+disponibilidade/qualidade limpas, a aptidão para cálculo de skill
+(`avaliar_aptidao_referencia_observacional`) continua bloqueada pelo
+desalinhamento espacial descrito abaixo (bloqueio estrutural, sempre
+presente nesta revisão).
 
 ## Correspondência espacial — achado de um desalinhamento pré-existente
 
@@ -92,12 +112,18 @@ para que a previsão do CFSv2 em São Bento e a observação da série de
 produção (fazendas) possam divergir por razões puramente espaciais,
 não de habilidade do modelo.
 
-**Isso não bloqueia o piloto de infraestrutura** (o piloto só verifica
-acesso/parsing/guardrails, nunca skill) — mas é uma limitação que
-precisa estar explícita em qualquer avaliação científica futura
-(Fase 2C.2 completa, Seção F da especificação): qualquer RMSE/RPSS
-calculado estará medindo, em parte, esse desalinhamento espacial, não
-só a habilidade preditiva do CFSv2.
+**Isso não bloqueia a aprovação de INFRAESTRUTURA do piloto**
+(`avaliar_aprovacao_piloto` — acesso/seleção temporal/membros/
+horizontes/RAW, nunca depende da série observacional) — mas bloqueia
+estruturalmente a **aptidão da referência observacional para avaliação
+científica** (`avaliar_aptidao_referencia_observacional`, veredito
+SEPARADO — Seção 3, revisão pontual). Enquanto essa correspondência
+espacial não for resolvida por decisão explícita, essa função **sempre**
+devolve `apto_para_avaliacao_cientifica=False`, mesmo com
+disponibilidade/procedência/qualidade 100% limpas — qualquer RMSE/RPSS
+calculado no futuro estaria medindo, em parte, esse desalinhamento
+espacial, não só a habilidade preditiva do CFSv2 (Fase 2C.2 completa,
+Seção F da especificação).
 
 ## Decisão que precisa de aprovação
 
@@ -110,4 +136,6 @@ comparação ainda like-for-like). A decisão em aberto é se vale a pena,
 numa fase futura, buscar uma referência observacional mais próxima do
 ponto usado pelo CFSv2/C3S (ou mudar o ponto de avaliação do CFSv2/C3S
 para o centroide das fazendas) — fora do escopo desta tarefa, só
-registrado aqui para decisão consciente.
+registrado aqui para decisão consciente. Até essa decisão,
+`avaliar_aptidao_referencia_observacional` continua reportando esse
+bloqueio explicitamente a cada execução do piloto, nunca silenciado.
