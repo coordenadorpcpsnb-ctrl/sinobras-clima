@@ -114,9 +114,16 @@ class BackendsNaoCompartilhamBuilderTestCase(unittest.TestCase):
 
     def test_d_representacao_b_nao_implementada_ainda(self):
         """A Representação B (NMME_HARMONIZED_MONTHLY) está registrada
-        no catálogo mas nenhum builder de URL foi escrito para ela
-        nesta rodada (Seção 9/16) — deve falhar explicitamente, nunca
-        cair silenciosamente no builder da Representação A."""
+        no catálogo com seus próprios metadados, distintos dos da
+        Representação A — nunca reconciliados/confundidos entre si.
+        Nome do teste mantido por continuidade histórica (Rodada 5): a
+        premissa original ("nenhum builder foi escrito para B") ficou
+        desatualizada depois da revisão RANGEEDGES-fonte-principal
+        (montar_url_iri_cfsv2_nmme_harmonized existe e é a rota
+        PREFERIDA hoje, EMPIRICALLY_CONFIRMED pelo POC real — Fase
+        2C.1b, encerramento) — as asserções abaixo nunca dependeram
+        dessa premissa, só checam que os metadados de B continuam
+        distintos dos de A."""
         rota_b = [r for r in CFSV2.member_level_routes
                   if r.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY][0]
         self.assertEqual(rota_b.data_backend, ncat.SOURCE_BACKEND_IRIDL_LEGACY)

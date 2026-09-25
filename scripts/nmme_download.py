@@ -257,8 +257,14 @@ def ordem_tentativa_member_level(sistema):
     RuntimeError se nenhuma rota estiver pronta (Seção 5)."""
     ccsr_prontas = [r for r in rotas_por_backend(sistema, ncat.SOURCE_BACKEND_CCSR_BETA)
                      if r.status != ncat.ROUTE_STATUS_DISCOVERY_REQUIRED]
+    # Fase 2C.1b, encerramento — EMPIRICALLY_CONFIRMED (rota com POC
+    # real aprovado) conta como "pronta" aqui, no mesmo pé que
+    # POC_READY_DOCUMENTED_LEGACY (documentada mas ainda não aberta);
+    # allowlist explícita, nunca `!= DISCOVERY_REQUIRED` (isso deixaria
+    # passar qualquer status futuro sem revisão deliberada).
     legacy_prontas = [r for r in rotas_por_backend(sistema, ncat.SOURCE_BACKEND_IRIDL_LEGACY)
-                        if r.status == ncat.ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY]
+                        if r.status in (ncat.ROUTE_STATUS_POC_READY_DOCUMENTED_LEGACY,
+                                        ncat.ROUTE_STATUS_EMPIRICALLY_CONFIRMED)]
     legacy_b = [r for r in legacy_prontas if r.dataset_representation == ncat.REPR_NMME_HARMONIZED_MONTHLY]
     legacy_a = [r for r in legacy_prontas if r.dataset_representation == ncat.REPR_RAW_NATIVE_ENSEMBLE]
     outras_legacy = [r for r in legacy_prontas if r not in legacy_b and r not in legacy_a]
