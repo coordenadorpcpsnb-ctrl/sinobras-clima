@@ -245,11 +245,14 @@ def montar_resumo_por_origem(resultados_piloto):
         checklist = r.get('checklist', {})
         raw_df = r.get('raw_df', pd.DataFrame())
         representacao_usada = r.get('dataset_representation_used')
+        backend_usado = r.get('backend_used')
         linhas.append({
             'ano': item['ano'], 'mes': item['mes'],
             'init_date': f"{item['ano']}-{item['mes']:02d}",
             'poc_status': r.get('poc_status'),
-            'backend_used': r.get('backend_used'),
+            'backend_used': backend_usado,
+            'backend_diferente_da_validada': bool(
+                backend_usado is not None and backend_usado != ncat.SOURCE_BACKEND_IRIDL_LEGACY),
             'dataset_representation_used': representacao_usada,
             'representacao_diferente_da_validada': bool(
                 representacao_usada is not None
@@ -298,36 +301,103 @@ def concatenar_dataframes_piloto(resultados_piloto):
     return raw_final, temporal_final, access_final
 
 
-def avaliar_aprovacao_piloto(resultados_piloto):
+def _origens_aprovadas_com_rota_diferente(resultados_piloto):
+    """Ajuste pontual (Seção 1 da tarefa) — para cada origem com
+    `poc_status=APROVADO`, exige exatamente backend=IRIDL_LEGACY E
+    representação=NMME_HARMONIZED_MONTHLY (a rota EMPIRICALLY_CONFIRMED
+    da Fase 2C.1b). Isso NUNCA toca no mecanismo de fallback do POC
+    original (`nmme_download.ordem_tentativa_member_level` continua
+    tentando CCSR/Representação A exatamente como antes, e uma origem
+    que caia para elas continua podendo ficar `poc_status=APROVADO`
+    individualmente — os guardrails de integridade não distinguem
+    representação) — só REGISTRA a ocorrência aqui, para a agregação do
+    piloto poder reprovar por causa dela sem reescrever o que já existe
+    no nível de 1 origem."""
+    ocorrencias = []
+    for item in resultados_piloto:
+        r = item['resultado']
+        if r.get('poc_status') != 'APROVADO':
+            continue
+        backend_usado = r.get('backend_used')
+        representacao_usada = r.get('dataset_representation_used')
+        rota_ok = (backend_usado == ncat.SOURCE_BACKEND_IRIDL_LEGACY
+                   and representacao_usada == ncat.REPR_NMME_HARMONIZED_MONTHLY)
+        if not rota_ok:
+            ocorrencias.append({
+                'origem': f"{item['ano']}-{item['mes']:02d}",
+                'backend_used': backend_usado, 'dataset_representation_used': representacao_usada,
+            })
+    return ocorrencias
+
+
+def _verificar_integridade_das_origens(resultados_piloto, origens_esperadas):
+    """Seção 2 da tarefa — confirma que o agregado contém EXATAMENTE as
+    origens previstas: sem duplicata (mesma origem processada 2 vezes)
+    e sem ausência (uma origem prevista que nunca aparece no
+    agregado)."""
+    from collections import Counter
+    origens_observadas = [item['origem'] for item in resultados_piloto]
+    contagem = Counter(origens_observadas)
+    duplicadas = sorted(o for o, n in contagem.items() if n > 1)
+    esperadas = set(origens_esperadas)
+    observadas = set(origens_observadas)
+    ausentes = sorted(esperadas - observadas)
+    inesperadas = sorted(observadas - esperadas)
+    ok = not duplicadas and not ausentes and not inesperadas
+    return {'ok': ok, 'origens_duplicadas': duplicadas, 'origens_ausentes': ausentes,
+            'origens_inesperadas': inesperadas, 'n_esperadas': len(esperadas),
+            'n_observadas': len(origens_observadas)}
+
+
+def avaliar_aprovacao_piloto(resultados_piloto, origens_esperadas=PILOTO_ORIGENS):
     """Critérios objetivos de aprovação da INFRAESTRUTURA do PILOTO,
     distintos da aprovação de cada origem isolada
     (docs/nmme-fase2c2-especificacao.md, Seção G) e — revisão pontual,
-    Seção 3 da tarefa — deliberadamente SEPARADOS da aptidão da
+    Seção 3 da tarefa anterior — deliberadamente SEPARADOS da aptidão da
     referência observacional (`avaliar_aptidao_referencia_
-    observacional`, função à parte): (1) todas as 16 origens com
-    poc_status=APROVADO; (2) nenhum erro inesperado (fora do
-    vocabulário de status já conhecido do POC).
+    observacional`, função à parte):
+    1. todas as origens com poc_status=APROVADO;
+    2. nenhum erro inesperado (fora do vocabulário de status já
+       conhecido do POC);
+    3. (ajuste pontual, Seção 1) toda origem APROVADA usou exatamente
+       backend=IRIDL_LEGACY e representação=NMME_HARMONIZED_MONTHLY —
+       um fallback para outra rota, mesmo que a origem em si passe nos
+       guardrails de integridade, IMPEDE a aprovação AGREGADA do
+       piloto (a ocorrência fica registrada em
+       `origens_com_rota_diferente`, nunca escondida);
+    4. (ajuste pontual, Seção 2) o agregado contém exatamente as
+       origens esperadas — sem duplicata, sem ausência (detalhes em
+       `integridade_origens`).
 
     A insuficiência/procedência da série observacional NUNCA entra
     aqui — isso seria confundir "o CFSv2 respondeu e passou nos
     guardrails de integridade" com "a observação de referência está
-    pronta para comparação científica", exatamente o que a tarefa pede
-    para nunca confundir."""
+    pronta para comparação científica", exatamente o que a tarefa
+    anterior pediu para nunca confundir."""
     status_por_origem = [item['resultado'].get('poc_status') for item in resultados_piloto]
     n_total = len(resultados_piloto)
     n_aprovadas = sum(1 for s in status_por_origem if s == 'APROVADO')
     todas_aprovadas = n_aprovadas == n_total
     nenhum_erro_inesperado = not any(item['erro'] for item in resultados_piloto)
 
+    origens_com_rota_diferente = _origens_aprovadas_com_rota_diferente(resultados_piloto)
+    rota_validada_ok = not origens_com_rota_diferente
+
+    integridade_origens = _verificar_integridade_das_origens(resultados_piloto, origens_esperadas)
+
     criterios = {
         'todas_origens_aprovadas': todas_aprovadas,
         'nenhum_erro_inesperado': nenhum_erro_inesperado,
+        'todas_aprovadas_usaram_rota_validada': rota_validada_ok,
+        'integridade_das_origens_ok': integridade_origens['ok'],
     }
-    aprovado = todas_aprovadas and nenhum_erro_inesperado
+    aprovado = all(criterios.values())
     return {
         'piloto_status': 'APROVADO' if aprovado else 'REPROVADO',
         'n_origens_aprovadas': n_aprovadas, 'n_origens_total': n_total,
         'criterios': criterios,
+        'origens_com_rota_diferente': origens_com_rota_diferente,
+        'integridade_origens': integridade_origens,
     }
 
 
@@ -541,6 +611,14 @@ def montar_metadata_piloto(resultados_piloto, cobertura_df, aprovacao, aptidao):
         'n_origens_aprovadas': aprovacao['n_origens_aprovadas'],
         'n_origens_total': aprovacao['n_origens_total'],
         'criterios_aprovacao_piloto': aprovacao['criterios'],
+        # Ajuste pontual (Seção 1/2 da tarefa) — nunca escondido: se
+        # alguma origem aprovada usou rota diferente da validada, ou se
+        # o agregado não bate exatamente com as origens esperadas, a
+        # ocorrência fica aqui mesmo quando NÃO derruba piloto_status
+        # (o que não deveria acontecer, já que ambas são critérios
+        # bloqueantes — mas exposto de qualquer forma para depuração).
+        'origens_aprovadas_com_rota_diferente_da_validada': aprovacao['origens_com_rota_diferente'],
+        'integridade_das_origens': aprovacao['integridade_origens'],
         # Seção 3 — verdito SEPARADO, nunca combinado com piloto_status.
         'referencia_observacional_apta_para_avaliacao_cientifica':
             aptidao['apto_para_avaliacao_cientifica'],
@@ -592,10 +670,31 @@ def gerar_relatorio_piloto_markdown(resultados_piloto, resumo_df, cobertura_df, 
               "reportada como falha da primeira.", "",
               f"### Infraestrutura: {aprovacao['piloto_status']}", "",
               f"- Origens aprovadas: {aprovacao['n_origens_aprovadas']}/{aprovacao['n_origens_total']}"]
+    for criterio, valor in aprovacao['criterios'].items():
+        linhas.append(f"  - `{criterio}`: {valor}")
     n_repr_diferente = int(resumo_df['representacao_diferente_da_validada'].sum())
+    n_backend_diferente = int(resumo_df['backend_diferente_da_validada'].sum())
     linhas.append(f"- Origens com representação DIFERENTE da rota EMPIRICALLY_CONFIRMED "
                    f"(NMME_HARMONIZED_MONTHLY): {n_repr_diferente} "
                    f"{'⚠️ ver coluna representacao_diferente_da_validada no resumo por origem' if n_repr_diferente else ''}")
+    linhas.append(f"- Origens com backend DIFERENTE da rota EMPIRICALLY_CONFIRMED "
+                   f"(IRIDL_LEGACY): {n_backend_diferente} "
+                   f"{'⚠️ ver coluna backend_diferente_da_validada no resumo por origem' if n_backend_diferente else ''}")
+    if aprovacao['origens_com_rota_diferente']:
+        linhas.append("- ⚠️ Origens APROVADAS individualmente que usaram rota diferente da "
+                       "validada (impede a aprovação AGREGADA do piloto, item 1 do ajuste pontual):")
+        for oc in aprovacao['origens_com_rota_diferente']:
+            linhas.append(f"  - {oc['origem']}: backend={oc['backend_used']}, "
+                           f"representacao={oc['dataset_representation_used']}")
+    integridade = aprovacao['integridade_origens']
+    if not integridade['ok']:
+        linhas.append("- ⚠️ Integridade das origens comprometida (item 2 do ajuste pontual):")
+        if integridade['origens_duplicadas']:
+            linhas.append(f"  - duplicadas: {integridade['origens_duplicadas']}")
+        if integridade['origens_ausentes']:
+            linhas.append(f"  - ausentes: {integridade['origens_ausentes']}")
+        if integridade['origens_inesperadas']:
+            linhas.append(f"  - inesperadas (fora do plano): {integridade['origens_inesperadas']}")
     linhas += ["",
                f"### Aptidão da referência observacional para avaliação científica: "
                f"{'APTA' if aptidao['apto_para_avaliacao_cientifica'] else 'NÃO APTA'}", ""]
@@ -604,11 +703,12 @@ def gerar_relatorio_piloto_markdown(resultados_piloto, resumo_df, cobertura_df, 
     if not aptidao['motivos_bloqueio']:
         linhas.append("- (nenhum bloqueio identificado)")
     linhas += ["", "## Resumo por origem", "",
-              "| Origem | Status | RAW | Representação | ≠ validada | Membros/lead OK | "
-              "Mapeamento temporal | Unidade | Grade | Erro |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+              "| Origem | Status | RAW | Backend | ≠ validada | Representação | ≠ validada | "
+              "Membros/lead OK | Mapeamento temporal | Unidade | Grade | Erro |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for _, row in resumo_df.iterrows():
         linhas.append(f"| {row['init_date']} | {row['poc_status']} | {row['n_raw']} | "
+                       f"{row['backend_used']} | {row['backend_diferente_da_validada']} | "
                        f"{row['dataset_representation_used']} | "
                        f"{row['representacao_diferente_da_validada']} | "
                        f"{row['member_count_per_lead_ok']} | {row['temporal_mapping_confirmado']} | "
@@ -684,6 +784,15 @@ def main():
               f"({aprovacao['n_origens_aprovadas']}/{aprovacao['n_origens_total']} origens aprovadas)")
         for k, v in aprovacao['criterios'].items():
             print(f"  - {k}: {v}")
+        for oc in aprovacao['origens_com_rota_diferente']:
+            print(f"  - ⚠️ origem {oc['origem']} aprovada individualmente com rota diferente da "
+                  f"validada: backend={oc['backend_used']}, representacao={oc['dataset_representation_used']}")
+        integridade = aprovacao['integridade_origens']
+        if not integridade['ok']:
+            print(f"  - ⚠️ integridade das origens comprometida: "
+                  f"duplicadas={integridade['origens_duplicadas']} "
+                  f"ausentes={integridade['origens_ausentes']} "
+                  f"inesperadas={integridade['origens_inesperadas']}")
         print(f"\nreferencia_observacional_apta_para_avaliacao_cientifica="
               f"{aptidao['apto_para_avaliacao_cientifica']}")
         for motivo in aptidao['motivos_bloqueio']:

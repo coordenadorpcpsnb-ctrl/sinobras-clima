@@ -414,6 +414,132 @@ class AprovacaoPilotoTestCase(unittest.TestCase):
         self.assertNotIn('cobertura_observacional_ok', aprovacao['criterios'])
 
 
+class RotaValidadaNaAprovacaoTestCase(unittest.TestCase):
+    """Ajuste pontual — Seção 1 da tarefa: `avaliar_aprovacao_piloto`
+    exige que toda origem APROVADA tenha usado exatamente
+    backend=IRIDL_LEGACY e representação=NMME_HARMONIZED_MONTHLY. Um
+    fallback para outra rota nunca modifica o mecanismo de fallback do
+    POC original (a origem em si pode continuar `poc_status=APROVADO`)
+    — só impede a aprovação AGREGADA do piloto."""
+
+    def test_todas_as_16_aprovadas_na_rota_correta_aprova_o_piloto(self):
+        """Cenário obrigatório 1."""
+        resultados = pilo.executar_piloto_historico(resolver_fns=_resolver_todas_ok)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
+        self.assertEqual(aprovacao['piloto_status'], 'APROVADO')
+        self.assertTrue(aprovacao['criterios']['todas_aprovadas_usaram_rota_validada'])
+        self.assertEqual(aprovacao['origens_com_rota_diferente'], [])
+        # Todas as 16 usaram de fato a rota esperada nesta fixture.
+        for item in resultados:
+            self.assertEqual(item['resultado']['backend_used'], ncat.SOURCE_BACKEND_IRIDL_LEGACY)
+            self.assertEqual(item['resultado']['dataset_representation_used'],
+                              ncat.REPR_NMME_HARMONIZED_MONTHLY)
+
+    def test_origem_aprovada_com_representacao_diferente_reprova_o_agregado(self):
+        """Cenário obrigatório 2 — a origem em si continua APROVADO
+        individualmente (o guardrail de integridade do POC não
+        distingue representação); só a aprovação AGREGADA do piloto é
+        impedida."""
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
+        resultados[0]['resultado']['dataset_representation_used'] = ncat.REPR_RAW_NATIVE_ENSEMBLE
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, origens_esperadas=((2005, 1),))
+        self.assertEqual(resultados[0]['resultado']['poc_status'], 'APROVADO',
+                          msg='a origem individual nunca deve deixar de estar APROVADO só por '
+                              'causa da representação — isso reescreveria o guardrail do POC')
+        self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
+        self.assertFalse(aprovacao['criterios']['todas_aprovadas_usaram_rota_validada'])
+        self.assertEqual(len(aprovacao['origens_com_rota_diferente']), 1)
+        self.assertEqual(aprovacao['origens_com_rota_diferente'][0]['origem'], '2005-01')
+        self.assertEqual(aprovacao['origens_com_rota_diferente'][0]['dataset_representation_used'],
+                          ncat.REPR_RAW_NATIVE_ENSEMBLE)
+
+    def test_origem_aprovada_com_backend_diferente_reprova_o_agregado(self):
+        """Cenário obrigatório 3."""
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
+        resultados[0]['resultado']['backend_used'] = ncat.SOURCE_BACKEND_CCSR_BETA
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, origens_esperadas=((2005, 1),))
+        self.assertEqual(resultados[0]['resultado']['poc_status'], 'APROVADO')
+        self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
+        self.assertFalse(aprovacao['criterios']['todas_aprovadas_usaram_rota_validada'])
+        self.assertEqual(aprovacao['origens_com_rota_diferente'][0]['backend_used'],
+                          ncat.SOURCE_BACKEND_CCSR_BETA)
+
+    def test_origem_reprovada_com_rota_diferente_nao_conta_como_ocorrencia(self):
+        """Uma origem que já reprovou por outro motivo (não
+        `poc_status=APROVADO`) não deve aparecer em
+        `origens_com_rota_diferente` — essa lista é só sobre origens
+        aprovadas com rota errada, não sobre reprovações genéricas
+        (que já derrubam `todas_origens_aprovadas` por conta própria)."""
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_com_uma_falha((2005, 1)))
+        resultados[0]['resultado']['dataset_representation_used'] = ncat.REPR_RAW_NATIVE_ENSEMBLE
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, origens_esperadas=((2005, 1),))
+        self.assertEqual(aprovacao['origens_com_rota_diferente'], [])
+        self.assertFalse(aprovacao['criterios']['todas_origens_aprovadas'])
+
+    def test_nao_modifica_o_mecanismo_de_fallback_do_poc(self):
+        """Regressão estrutural — este ajuste nunca deve tocar em
+        nmme_download.ordem_tentativa_member_level nem em
+        nmme_poc.avaliar_aprovacao_poc; a verificação de rota vive
+        inteiramente em nmme_piloto_historico, só na camada de
+        agregação."""
+        import inspect
+        import nmme_download as ndl
+        src_ordem = inspect.getsource(ndl.ordem_tentativa_member_level)
+        src_avaliar_poc = inspect.getsource(npoc.avaliar_aprovacao_poc)
+        self.assertNotIn('rota_validada', src_ordem)
+        self.assertNotIn('rota_validada', src_avaliar_poc)
+
+
+class IntegridadeDasOrigensTestCase(unittest.TestCase):
+    """Ajuste pontual — Seção 2 da tarefa: o agregado precisa conter
+    exatamente as 16 origens previstas, sem duplicata nem ausência."""
+
+    def test_16_origens_sem_duplicata_nem_ausencia_aprova_o_criterio(self):
+        resultados = pilo.executar_piloto_historico(resolver_fns=_resolver_todas_ok)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
+        self.assertTrue(aprovacao['criterios']['integridade_das_origens_ok'])
+        integridade = aprovacao['integridade_origens']
+        self.assertEqual(integridade['n_esperadas'], 16)
+        self.assertEqual(integridade['n_observadas'], 16)
+        self.assertEqual(integridade['origens_duplicadas'], [])
+        self.assertEqual(integridade['origens_ausentes'], [])
+
+    def test_origem_ausente_reprova_o_agregado(self):
+        """Cenário obrigatório 4a — uma origem prevista nunca aparece
+        no resultado agregado."""
+        origens_incompletas = tuple(o for o in pilo.PILOTO_ORIGENS if o != (2005, 1))
+        resultados = pilo.executar_piloto_historico(
+            origens=origens_incompletas, resolver_fns=_resolver_todas_ok)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)   # origens_esperadas=PILOTO_ORIGENS (16)
+        self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
+        self.assertFalse(aprovacao['criterios']['integridade_das_origens_ok'])
+        self.assertEqual(aprovacao['integridade_origens']['origens_ausentes'], [(2005, 1)])
+
+    def test_origem_duplicada_reprova_o_agregado(self):
+        """Cenário obrigatório 4b — a mesma origem processada 2 vezes
+        no resultado agregado."""
+        origens_com_duplicata = pilo.PILOTO_ORIGENS + ((2005, 1),)
+        resultados = pilo.executar_piloto_historico(
+            origens=origens_com_duplicata, resolver_fns=_resolver_todas_ok)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados)
+        self.assertEqual(aprovacao['piloto_status'], 'REPROVADO')
+        self.assertFalse(aprovacao['criterios']['integridade_das_origens_ok'])
+        self.assertEqual(aprovacao['integridade_origens']['origens_duplicadas'], [(2005, 1)])
+
+    def test_origem_inesperada_fora_do_plano_reprova_o_agregado(self):
+        """Uma origem fora da lista esperada (nunca deveria acontecer
+        em produção, mas defendido mesmo assim) também compromete a
+        integridade."""
+        resultados = pilo.executar_piloto_historico(
+            origens=((1991, 1), (1991, 4)), resolver_fns=_resolver_todas_ok)
+        aprovacao = pilo.avaliar_aprovacao_piloto(resultados, origens_esperadas=((1991, 1),))
+        self.assertFalse(aprovacao['criterios']['integridade_das_origens_ok'])
+        self.assertEqual(aprovacao['integridade_origens']['origens_inesperadas'], [(1991, 4)])
+
+
 class AptidaoReferenciaObservacionalTestCase(unittest.TestCase):
     """G2 — Seção 3 da tarefa: verdito SEPARADO sobre se a referência
     observacional está apta para uma avaliação científica futura.
@@ -503,6 +629,19 @@ class RepresentacaoDiferenteTestCase(unittest.TestCase):
         resumo = pilo.montar_resumo_por_origem(resultados)
         self.assertIsNone(resumo.iloc[0]['dataset_representation_used'])
         self.assertFalse(resumo.iloc[0]['representacao_diferente_da_validada'])
+
+    def test_backend_diferente_e_marcada_true(self):
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
+        resultados[0]['resultado']['backend_used'] = ncat.SOURCE_BACKEND_CCSR_BETA
+        resumo = pilo.montar_resumo_por_origem(resultados)
+        self.assertTrue(resumo.iloc[0]['backend_diferente_da_validada'])
+
+    def test_backend_validado_e_marcada_false(self):
+        resultados = pilo.executar_piloto_historico(
+            origens=((2005, 1),), resolver_fns=_resolver_todas_ok)
+        resumo = pilo.montar_resumo_por_origem(resultados)
+        self.assertFalse(resumo.iloc[0]['backend_diferente_da_validada'])
 
 
 class DistanciaEspacialTestCase(unittest.TestCase):
