@@ -1,0 +1,41 @@
+{
+  "lote_id": "1999-2002",
+  "localizacao": "Fazendas_Sinobras_Centroide",
+  "localizacao_lat": -7.8,
+  "localizacao_lon": -47.95,
+  "n_origens": 48,
+  "n_origens_pendentes_nesta_execucao": 48,
+  "n_origens_reaproveitadas_do_disco": 0,
+  "lote_status": "APROVADO",
+  "criterios": {
+    "todas_origens_aprovadas": true,
+    "nenhum_erro_inesperado": true,
+    "todas_aprovadas_usaram_rota_validada": true,
+    "integridade_das_origens_ok": true
+  },
+  "n_origens_aprovadas": 48,
+  "origens_com_rota_diferente": [],
+  "integridade_origens": {
+    "ok": true,
+    "origens_duplicadas": [],
+    "origens_ausentes": [],
+    "origens_inesperadas": [],
+    "n_esperadas": 48,
+    "n_observadas": 48
+  },
+  "origens_com_inconsistencia_detectada": [],
+  "n_raw": 6912,
+  "n_raw_esperado": 6912,
+  "evidencia_poc_localizacao": {
+    "run_id": 36169942349,
+    "workflow": "nmme_poc_espacial_fazendas.yml",
+    "poc_status": "APROVADO",
+    "localizacao_id": "Fazendas_Sinobras_Centroide",
+    "localizacao_lat": -7.8,
+    "localizacao_lon": -47.95,
+    "auditoria_independente_confirmou": "144 registros RAW, 6 horizontes (H1-H6), 24 membros por horizonte, 6 auditorias temporais aprovadas, rota exclusiva IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY.",
+    "significado": "Aprova a INFRAESTRUTURA de acesso a este ponto (mesmo tipo de evidência já obtida para São Bento do Tocantins, run 36145108571) — nunca a aptidão científica da localização.",
+    "aptidao_cientifica_declarada": false,
+    "outras_localizacoes_promovidas": false
+  }
+}
