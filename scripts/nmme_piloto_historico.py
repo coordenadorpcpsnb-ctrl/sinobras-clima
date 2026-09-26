@@ -412,7 +412,7 @@ def avaliar_aprovacao_piloto(resultados_piloto, origens_esperadas=PILOTO_ORIGENS
     }
 
 
-def avaliar_aptidao_referencia_observacional(cobertura_df):
+def avaliar_aptidao_referencia_observacional(cobertura_df, distancia_km=None, ponto_descricao=None):
     """Seção 3 da tarefa — verdito SEPARADO de `avaliar_aprovacao_
     piloto`: nunca reportado como falha de acesso ao CFSv2, e nunca
     combinado no mesmo `piloto_status`. Responde: "a referência
@@ -424,6 +424,16 @@ def avaliar_aptidao_referencia_observacional(cobertura_df):
     com procedência substituída/estimada (CHC-Preliminar/ERA5), e
     qualquer flag de qualidade (`valor_ausente`, `registro_duplicado`,
     `valor_implausivel`) diferente de OK.
+
+    `distancia_km`/`ponto_descricao` (Fase 2C.2, auditoria de validação
+    científica — item 4 da tarefa) — aditivos: default `None` preserva
+    EXATAMENTE o cálculo original (distância até São Bento do Tocantins,
+    `distancia_fazendas_ate_municipio_km()`), usado por todo chamador
+    existente (piloto/extração histórica de São Bento). Quando
+    informados (ex.: pela auditoria do centroide das fazendas, cujo
+    ponto de grade do CFSv2 é MUITO mais próximo — ~23 km, não 198 km),
+    o bloqueio estrutural usa a distância/descrição fornecidas em vez
+    de recalcular para São Bento — nunca mistura as duas.
 
     Bloqueio ESTRUTURAL, sempre presente nesta revisão (Seção 2 da
     tarefa: "consequências para uma futura avaliação científica"): a
@@ -465,10 +475,13 @@ def avaliar_aptidao_referencia_observacional(cobertura_df):
 
     # Bloqueio estrutural — sempre presente nesta revisão (não resolvido
     # aqui, só documentado). Ver docstring acima.
-    dist_km = distancia_fazendas_ate_municipio_km()
-    bloqueios.append(f'correspondência espacial não resolvida — {round(dist_km, 1)} km entre a '
+    if distancia_km is None:
+        distancia_km = distancia_fazendas_ate_municipio_km()
+    if ponto_descricao is None:
+        ponto_descricao = 'São Bento do Tocantins'
+    bloqueios.append(f'correspondência espacial não resolvida — {round(distancia_km, 1)} km entre a '
                       f'referência observacional (centroide das fazendas) e o ponto do CFSv2 '
-                      f'(São Bento do Tocantins); decisão explícita pendente '
+                      f'({ponto_descricao}); decisão explícita pendente '
                       f'(docs/nmme-fase2c2-piloto-cobertura-observacional.md)')
 
     return {
