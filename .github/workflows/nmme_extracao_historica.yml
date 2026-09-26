@@ -9,19 +9,24 @@ name: NMME Extração Histórica CFSv2 (Fase 2C.2)
 # 36145108571, 16/16 aprovadas, rota IRIDL_LEGACY/NMME_HARMONIZED_MONTHLY
 # exclusiva).
 #
-# ARMAZENAMENTO PERMANENTE: cada lote aprovado é COMMITADO em
-# data/nmme_historico/ (não só artifact do GitHub Actions — retenção de
-# 30 dias é insuficiente para um histórico de 20 anos). RETOMADA: uma
-# origem já persistida com poc_status=APROVADO nunca é reconsultada —
-# rodar o mesmo lote de novo só retenta o que faltou.
+# ARMAZENAMENTO PERMANENTE: cada lote aprovado é COMMITADO no diretório
+# da localização selecionada — data/nmme_historico/ (São Bento do
+# Tocantins, default) ou data/nmme_historico_fazendas/ (centroide das
+# fazendas, lat=-7.80/lon=-47.95) — nunca só artifact do GitHub Actions
+# (retenção de 30 dias é insuficiente para um histórico de 20 anos), e
+# os dois diretórios nunca se misturam (revisão pontual, 4ª rodada).
+# RETOMADA: uma origem já persistida com poc_status=APROVADO E
+# localização correta nunca é reconsultada — rodar o mesmo lote/
+# localização de novo só retenta o que faltou.
 #
 # GUARDRAIL DE SEGURANÇA OPERACIONAL: default é dry_run_plan=true,
 # executar_lote_real=false — clicar em "Run workflow" sem mexer em nada
 # NUNCA acessa a rede NMME: só valida código, roda a suíte de testes,
-# mostra o plano dos 5 lotes (quantas origens já concluídas/pendentes em
-# cada um). Nunca roda mais de 1 lote por execução do workflow — cada
-# lote precisa ser disparado explicitamente (Seção 1 da tarefa: "não
-# executar automaticamente a extração completa").
+# mostra o plano dos 5 lotes das DUAS localidades (quantas origens já
+# concluídas/pendentes em cada uma). Nunca roda mais de 1 lote/
+# localização por execução do workflow — cada lote precisa ser
+# disparado explicitamente (Seção 1 da tarefa original: "não executar
+# automaticamente a extração completa").
 #
 # Nunca calcula skill, nunca modifica o dashboard, nunca promove
 # nenhuma rota/representação/sistema no catálogo.
@@ -30,9 +35,17 @@ on:
   workflow_dispatch:
     inputs:
       dry_run_plan:
-        description: 'true (default, seguro) = só valida código/testes e mostra o plano dos 5 lotes — nunca acessa a rede NMME'
+        description: 'true (default, seguro) = só valida código/testes e mostra o plano dos 5 lotes das duas localidades — nunca acessa a rede NMME'
         required: true
         default: 'true'
+      localizacao:
+        description: "Localização alvo de --executar-lote/--consolidar — 'sao_bento' (default, data/nmme_historico/) ou 'fazendas' (data/nmme_historico_fazendas/, centroide lat=-7.80/lon=-47.95)"
+        required: true
+        type: choice
+        default: 'sao_bento'
+        options:
+          - 'sao_bento'
+          - 'fazendas'
       lote_id:
         description: 'Lote a rodar (só usado com executar_lote_real=true) — nunca roda mais de 1 lote por execução'
         required: false
@@ -45,7 +58,7 @@ on:
           - '2003-2006'
           - '2007-2010'
       executar_lote_real:
-        description: 'true = roda de verdade o lote escolhido (só as origens pendentes — retomada automática). Acessa a rede de verdade.'
+        description: 'true = roda de verdade o lote escolhido, na localização selecionada (só as origens pendentes — retomada automática). Acessa a rede de verdade.'
         required: true
         default: 'false'
       confirm_lote_real:
@@ -53,7 +66,7 @@ on:
         required: false
         default: ''
       consolidar:
-        description: 'true = só lê os lotes já persistidos em data/nmme_historico/ e reporta o estado consolidado — nunca acessa a rede (independente de dry_run_plan)'
+        description: 'true = só lê os lotes já persistidos (na localização selecionada) e reporta o estado consolidado — nunca acessa a rede (independente de dry_run_plan)'
         required: true
         default: 'false'
 
@@ -113,7 +126,8 @@ jobs:
       # Python) — roda scripts/ci/persistir_e_commitar_historico.sh de
       # verdade (git real) contra um repositório local descartável,
       # cobrindo diretório inicialmente inexistente, execução sem
-      # mudanças e push concorrente (revisão pontual, problema 1).
+      # mudanças, push concorrente e as DUAS localidades sem misturar
+      # (revisão pontual, 2ª e 4ª rodadas).
       - name: Testar a lógica operacional de persistência/commit (git real, repositório local descartável)
         run: bash tests/test_workflow_extracao_historica.sh
 
@@ -121,16 +135,34 @@ jobs:
         run: python scripts/verificar_dashboard.py
 
       # Sempre roda (nunca acessa rede) — mostra quantas origens já
-      # estão concluídas (persistidas em data/nmme_historico/) e
-      # quantas ficam pendentes em cada um dos 5 lotes.
+      # estão concluídas (persistidas) e quantas ficam pendentes em
+      # cada um dos 5 lotes, para as DUAS localidades lado a lado.
       - name: Mostrar plano da extração (dry-run, nunca acessa a rede NMME)
         run: python scripts/nmme_extracao_historica.py --dry-run-plan
 
+      # Resolve o diretório de armazenamento da localização SELECIONADA
+      # (revisão pontual, 4ª rodada, item 2) — nunca hardcoded; usado
+      # pelos passos de persistência/publicação de artifact abaixo, que
+      # assim NUNCA tocam no diretório da outra localização.
+      - name: Resolver diretório da localização selecionada
+        id: resolver_diretorio
+        run: |
+          case "${{ inputs.localizacao }}" in
+            fazendas)
+              echo "diretorio=data/nmme_historico_fazendas" >> "$GITHUB_OUTPUT" ;;
+            sao_bento)
+              echo "diretorio=data/nmme_historico" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::localizacao desconhecida: ${{ inputs.localizacao }}"
+              exit 1 ;;
+          esac
+          echo "Localização selecionada: ${{ inputs.localizacao }}"
+
       # `continue-on-error: true` é o ponto central da revisão pontual
-      # (problema 1): `executar_lote()` já escreve os CSVs em
-      # data/nmme_historico/ ANTES de reportar reprovação (uma origem
-      # reprovada num lote de 48 nunca deve fazer o workflow perder as
-      # outras 47 que passaram) — mas antes desta correção, o
+      # (2ª rodada, problema 1): `executar_lote()` já escreve os CSVs
+      # no diretório da localização ANTES de reportar reprovação (uma
+      # origem reprovada num lote de 48 nunca deve fazer o workflow
+      # perder as outras 47 que passaram) — mas sem esta correção, o
       # SystemExit do passo Python interrompia o job inteiro e os
       # passos de commit/push SEGUINTES nunca chegavam a rodar,
       # perdendo os resultados parciais que já estavam no disco do
@@ -138,33 +170,41 @@ jobs:
       # commit; `steps.executar_lote.outcome` (não `.conclusion`, que
       # fica mascarado como sucesso) ainda registra a reprovação real,
       # usado no passo final para preservar a sinalização.
-      - name: Rodar lote real (Fase 2C.2 — só origens pendentes deste lote, retomada automática)
+      #
+      # `--localizacao` é repassado explicitamente (revisão pontual, 4ª
+      # rodada, item 1) — nunca assumido implicitamente São Bento.
+      - name: Rodar lote real (Fase 2C.2 — só origens pendentes deste lote/localização, retomada automática)
         id: executar_lote
         if: inputs.dry_run_plan != 'true' && inputs.executar_lote_real == 'true'
         continue-on-error: true
-        run: python scripts/nmme_extracao_historica.py --executar-lote "${{ inputs.lote_id }}"
+        run: |
+          python scripts/nmme_extracao_historica.py --executar-lote "${{ inputs.lote_id }}" \
+            --localizacao "${{ inputs.localizacao }}"
 
-      - name: Consolidação (lê data/nmme_historico/ já persistido — nunca acessa a rede)
+      - name: Consolidação (lê o que já está persistido na localização selecionada — nunca acessa a rede)
         if: inputs.consolidar == 'true'
-        run: python scripts/nmme_extracao_historica.py --consolidar
+        run: python scripts/nmme_extracao_historica.py --consolidar --localizacao "${{ inputs.localizacao }}"
 
       # Armazenamento PERMANENTE — commitado no repositório (nunca só
       # artifact do GitHub Actions, retenção de 30 dias insuficiente
       # para um histórico de 20 anos). Roda SEMPRE que um lote foi
       # tentado, mesmo se `executar_lote` acima foi REPROVADO — a
       # persistência dos resultados parciais aprovados não pode
-      # depender do lote inteiro ter sido aprovado (problema 1 da
-      # revisão). Lógica extraída para scripts/ci/persistir_e_
+      # depender do lote inteiro ter sido aprovado (2ª rodada, problema
+      # 1). Lógica extraída para scripts/ci/persistir_e_
       # commitar_historico.sh, testada de verdade (git real, sem mock)
       # contra um repositório local em
-      # tests/test_workflow_extracao_historica.sh — inclui o caso de
-      # data/nmme_historico/ ainda não existir (mkdir -p) e de push
-      # concorrente (pull --rebase).
+      # tests/test_workflow_extracao_historica.sh — inclui o caso de o
+      # diretório ainda não existir (mkdir -p), push concorrente
+      # (pull --rebase) e as duas localidades nunca se misturando (4ª
+      # rodada). Recebe o diretório da localização SELECIONADA como 1º
+      # argumento — nunca hardcoded para data/nmme_historico/.
       - name: Persistir resultados do lote (commit+push, mesmo se o lote foi reprovado)
         if: inputs.dry_run_plan != 'true' && inputs.executar_lote_real == 'true'
         run: |
           DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
-          bash scripts/ci/persistir_e_commitar_historico.sh "${{ inputs.lote_id }}" "$DATA"
+          bash scripts/ci/persistir_e_commitar_historico.sh \
+            "${{ steps.resolver_diretorio.outputs.diretorio }}" "${{ inputs.lote_id }}" "$DATA"
 
       # Só AGORA, depois de garantir que os resultados parciais (se
       # houver) já foram persistidos/commitados acima, a reprovação do
@@ -173,19 +213,23 @@ jobs:
       - name: Sinalizar reprovação do lote (se houver) — depois de persistir os resultados parciais
         if: steps.executar_lote.outcome == 'failure'
         run: |
-          echo "::error::Lote ${{ inputs.lote_id }} REPROVADO — os resultados parciais já foram persistidos/commitados no passo anterior; a EXECUÇÃO deste lote não foi aprovada (ver data/nmme_historico/lote_${{ inputs.lote_id }}_resumo_por_origem.csv)."
+          echo "::error::Lote ${{ inputs.lote_id }} (${{ inputs.localizacao }}) REPROVADO — os resultados parciais já foram persistidos/commitados no passo anterior; a EXECUÇÃO deste lote não foi aprovada (ver ${{ steps.resolver_diretorio.outputs.diretorio }}/lote_${{ inputs.lote_id }}_resumo_por_origem.csv)."
           exit 1
 
+      # Publica SOMENTE os arquivos da localização selecionada — nome
+      # do artifact identifica a localização sem ambiguidade (revisão
+      # pontual, 4ª rodada, item 3), path usa o diretório resolvido
+      # acima (nunca o caminho fixo de outra localização).
       - name: Publicar artifacts do lote (CSVs/JSON/relatório — cópia de curto prazo, nunca NetCDF/GRIB)
-        if: always()
+        if: always() && steps.resolver_diretorio.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: nmme-extracao-historica-lote-${{ inputs.lote_id }}
+          name: nmme-extracao-historica-${{ inputs.localizacao }}-lote-${{ inputs.lote_id }}
           path: |
-            data/nmme_historico/lote_${{ inputs.lote_id }}_raw.csv
-            data/nmme_historico/lote_${{ inputs.lote_id }}_temporal_audit.csv
-            data/nmme_historico/lote_${{ inputs.lote_id }}_access_audit.csv
-            data/nmme_historico/lote_${{ inputs.lote_id }}_resumo_por_origem.csv
-            data/nmme_historico/lote_${{ inputs.lote_id }}_metadata.json
+            ${{ steps.resolver_diretorio.outputs.diretorio }}/lote_${{ inputs.lote_id }}_raw.csv
+            ${{ steps.resolver_diretorio.outputs.diretorio }}/lote_${{ inputs.lote_id }}_temporal_audit.csv
+            ${{ steps.resolver_diretorio.outputs.diretorio }}/lote_${{ inputs.lote_id }}_access_audit.csv
+            ${{ steps.resolver_diretorio.outputs.diretorio }}/lote_${{ inputs.lote_id }}_resumo_por_origem.csv
+            ${{ steps.resolver_diretorio.outputs.diretorio }}/lote_${{ inputs.lote_id }}_metadata.json
           retention-days: 30
           if-no-files-found: ignore
