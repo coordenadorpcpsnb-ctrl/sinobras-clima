@@ -42,7 +42,9 @@ Roda com:
 
 import argparse
 import glob
+import io
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -148,7 +150,47 @@ def executar_auditoria_cobertura_por_origem_lead():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Item 2 — separar MERRA-2 de Estação Sinobras
+# Item 2 (2ª rodada) — combinações previsão×horizonte vs. observações
+# mensais INDEPENDENTES — nunca a mesma coisa
+# ══════════════════════════════════════════════════════════════════════════
+
+def analisar_dependencia_temporal_observacoes(cobertura_df):
+    """Item 2 (2ª rodada) — 1.440 combinações origem×lead NÃO são 1.440
+    observações independentes: o mesmo mês observado é o alvo de várias
+    combinações diferentes (uma origem de janeiro mirando lead 1 e uma
+    origem de dezembro do ano anterior mirando lead 2 podem mirar o
+    MESMO mês). Conta quantos meses DISTINTOS são realmente usados como
+    alvo, e quantas vezes cada um é reaproveitado — nunca deixa isso
+    implícito para uma futura estimativa de incerteza estatística, que
+    precisa tratar essas combinações como dependentes, não como uma
+    amostra i.i.d. de 1.440 pontos."""
+    reuso = cobertura_df['target_month'].value_counts()
+    return {
+        'n_combinacoes_origem_lead': int(len(cobertura_df)),
+        'n_meses_observados_distintos': int(len(reuso)),
+        'razao_combinacoes_por_mes_distinto': round(len(cobertura_df) / len(reuso), 2) if len(reuso) else None,
+        'reuso_por_mes_min': int(reuso.min()) if len(reuso) else None,
+        'reuso_por_mes_max': int(reuso.max()) if len(reuso) else None,
+        'reuso_por_mes_medio': round(float(reuso.mean()), 2) if len(reuso) else None,
+        'reuso_por_mes_mediano': int(reuso.median()) if len(reuso) else None,
+        'distribuicao_de_reuso': {int(k): int(v) for k, v in reuso.value_counts().sort_index().items()},
+        'interpretacao': (
+            f"{len(cobertura_df)} combinações origem×lead compartilham apenas "
+            f"{len(reuso)} meses observados distintos — cada mês é reaproveitado como alvo, em "
+            f"média, {round(len(cobertura_df) / len(reuso), 1) if len(reuso) else 0} vezes (a "
+            "maioria dos meses centrais da janela é usada pelas 6 combinações possíveis: origem "
+            "no próprio mês com H1, origem no mês anterior com H2, ..., origem 5 meses antes com "
+            "H6). Uma futura estimativa de incerteza (intervalo de confiança, erro padrão) que "
+            "tratasse as 1.440 combinações como observações independentes SUPERESTIMARIA o "
+            "tamanho efetivo da amostra em até 6x — precisa considerar a dependência temporal "
+            "(mesmo mês observado citado por várias previsões, além da autocorrelação natural "
+            "da precipitação mês a mês) antes de qualquer cálculo de significância."
+        ),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Item 2 (numeração original da tarefa 1) — separar MERRA-2 de Estação Sinobras
 # ══════════════════════════════════════════════════════════════════════════
 
 def resumir_por_procedencia(cobertura_df):
@@ -159,6 +201,35 @@ def resumir_por_procedencia(cobertura_df):
                 .size().rename('n_combinacoes').reset_index()
                 .sort_values('n_combinacoes', ascending=False))
     return resumo
+
+
+def analisar_distribuicao_pre_1996(cobertura_df):
+    """Item 4 (2ª rodada) — a 1ª versão deste relatório descrevia as
+    345 combinações pré-1996 como "concentradas nos leads mais longos
+    das origens de 1991", o que NUNCA foi checado contra os dados —
+    corrigido aqui com a distribuição REAL, computada, não suposta:
+    por ano-alvo, por ano de origem e por H_lead."""
+    pre = cobertura_df[cobertura_df['procedencia_documental'].astype(str).str.contains(
+        'MERRA-2', na=False)].copy()
+    if not len(pre):
+        return {'n_total': 0, 'por_ano_alvo': {}, 'por_ano_origem': {}, 'por_h_lead': {}}
+    pre['ano_alvo'] = pre['target_month'].str.slice(0, 4)
+    pre['ano_origem'] = pre['origem_piloto'].str.slice(0, 4)
+    return {
+        'n_total': int(len(pre)),
+        'por_ano_alvo': pre['ano_alvo'].value_counts().sort_index().to_dict(),
+        'por_ano_origem': pre['ano_origem'].value_counts().sort_index().to_dict(),
+        'por_h_lead': {int(k): int(v) for k, v in pre['H_lead'].value_counts().sort_index().items()},
+        'interpretacao': (
+            "Distribuição real (não suposta): as 345 combinações pré-1996 estão razoavelmente "
+            "distribuídas entre os 5 anos-alvo 1991-1995 (57 a 72 cada) e entre os 6 leads "
+            "(55 a 60 cada) — NÃO concentradas nos leads mais longos das origens de 1991, como "
+            "uma versão anterior deste relatório afirmava sem checar. A contagem menor em "
+            "1991 (57) e 1995 (57) é só efeito de borda: origens de 1991 com lead alto ainda "
+            "miram 1991-1992 (dentro da janela), e origens de 1995 com lead alto já miram 1996 "
+            "(fora do trecho MERRA-2, contadas em 'Estação Sinobras')."
+        ),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -173,18 +244,30 @@ def verificar_identidade_merra2_com_master_monthly():
     Colinas/Tocantinopolis — cuja origem/coordenadas NÃO têm nenhum
     script neste repositório que as gere ou documente: o arquivo já
     existia por completo no primeiro commit que o introduziu, "Create
-    index.html", sem metodologia registrada). Resultado, não suposição:
-    (a) idêntico (diferença de arredondamento) para ano<=1995 — ou seja,
-    o "MERRA-2" da série de produção É, literalmente, essa média de 3
-    municípios, nunca verificada como reanálise de grade única no ponto
-    das fazendas; (b) diverge substancialmente a partir de 1996,
-    consistente com a transição para leitura de campo Sinobras."""
+    index.html", sem metodologia registrada).
+
+    Revisão pontual (2ª rodada, item 1) — o que este cálculo PROVA e o
+    que ele NÃO prova, sem misturar os dois: (a) prova que os NÚMEROS de
+    serie_subst.csv (ano<=1995) e prec_reg de master_monthly.csv são
+    idênticos — os dois arquivos guardam o mesmo valor; (b) NÃO prova
+    que esse valor de fato veio do MERRA-2 — a única evidência de que é
+    "MERRA-2" é o rótulo do README, e a igualdade numérica confirma
+    apenas que as 3 colunas nomeadas (Araguaína/Colinas do Tocantins/
+    Tocantinópolis) foram usadas para compor `prec`, nunca QUAL foi a
+    fonte de dado que preencheu essas 3 colunas em primeiro lugar
+    (poderia ser MERRA-2, poderia ser outra reanálise, poderia ser
+    estação de superfície de cada cidade — nenhuma dessas hipóteses é
+    verificável a partir deste repositório). `fonte_original_
+    comprovada` fica sempre `False` por este motivo — nunca promovida a
+    `True` só porque os números batem."""
     serie = pd.read_csv(SERIE_OBSERVACIONAL_PATH)
     if not MASTER_MONTHLY_PATH.exists():
-        return {'comparavel': False, 'motivo': f'{MASTER_MONTHLY_PATH} não encontrado'}
+        return {'comparavel': False, 'motivo': f'{MASTER_MONTHLY_PATH} não encontrado',
+                'fonte_original_comprovada': False}
     master = pd.read_csv(MASTER_MONTHLY_PATH)
     if 'prec_reg' not in master.columns:
-        return {'comparavel': False, 'motivo': "coluna 'prec_reg' não existe em master_monthly.csv"}
+        return {'comparavel': False, 'motivo': "coluna 'prec_reg' não existe em master_monthly.csv",
+                'fonte_original_comprovada': False}
 
     merged = serie.merge(master[['year', 'month', 'prec_reg']],
                           left_on=['ano', 'mes'], right_on=['year', 'month'], how='inner')
@@ -197,21 +280,26 @@ def verificar_identidade_merra2_com_master_monthly():
         'comparavel': True,
         'n_meses_comparados_pre_1996': int(len(pre)),
         'diff_abs_maxima_pre_1996_mm': round(float(diff_pre.max()), 4) if len(diff_pre) else None,
-        'identico_pre_1996': bool(len(diff_pre) and diff_pre.max() < 0.01),
+        'identico_numericamente_pre_1996': bool(len(diff_pre) and diff_pre.max() < 0.01),
         'n_meses_comparados_pos_1996': int(len(pos)),
         'diff_abs_media_pos_1996_mm': round(float(diff_pos.mean()), 2) if len(diff_pos) else None,
         'diff_abs_maxima_pos_1996_mm': round(float(diff_pos.max()), 2) if len(diff_pos) else None,
         'diverge_pos_1996': bool(len(diff_pos) and diff_pos.mean() > 1.0),
+        # Item 1 (2ª rodada) — SEMPRE False: igualdade numérica com uma
+        # coluna rotulada "MERRA-2" não comprova que a fonte ORIGINAL
+        # dessas 3 séries municipais seja de fato o MERRA-2.
+        'fonte_original_comprovada': False,
         'interpretacao': (
             "O trecho 'MERRA-2' (ano<=1995) de serie_subst.csv é numericamente idêntico a "
             "prec_reg=média(Araguaína, Colinas do Tocantins, Tocantinópolis) de "
-            "master_monthly.csv. Nenhum script deste repositório documenta a origem, as "
-            "coordenadas, o procedimento de agregação ou a data de criação dessas 3 colunas — "
-            "o arquivo já as continha por completo no commit que o introduziu. O rótulo "
-            "'MERRA-2' do README não pôde ser confirmado como reanálise de grade única no "
-            "centroide das fazendas; é, na prática, uma média de 3 sedes municipais cuja "
-            "identidade como MERRA-2 (em vez de, por exemplo, estações de superfície das 3 "
-            "cidades) não é verificável a partir do repositório."
+            "master_monthly.csv — isso é um FATO verificado. O que continua NÃO COMPROVADO é a "
+            "fonte ORIGINAL dessas 3 séries municipais: a igualdade numérica só mostra que "
+            "'prec' é a média dessas 3 colunas, nunca de onde elas vieram. O rótulo 'MERRA-2' "
+            "do README é a única evidência disponível para essa origem, e não é verificável a "
+            "partir deste repositório (nenhum script, coordenada ou registro de commit anterior "
+            "documenta se são MERRA-2, outra reanálise, ou estações de superfície das 3 "
+            "cidades). Tratar como 'MERRA-2 confirmado' seria uma afirmação não sustentada pelos "
+            "dados disponíveis."
         ),
     }
 
@@ -220,9 +308,17 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
     """Item 3 — confirma por LEITURA DE CÓDIGO (nunca por execução —
     scripts/update_dashboard.py roda uma pipeline de produção inteira
     se importado, então este módulo só lê o texto do arquivo) que a
-    incorporação de novas leituras de campo (SINOBRAS_new.csv) usa
+    incorporação de NOVAS leituras de campo (SINOBRAS_new.csv) usa
     média aritmética simples, sem mínimo de estações e sem retenção da
-    leitura por estação individual em serie_subst.csv."""
+    leitura por estação individual em serie_subst.csv.
+
+    Revisão pontual (2ª rodada, item 1) — isto descreve o PROCEDIMENTO
+    ATUAL do código, que só se aplica a dados incorporados A PARTIR de
+    quando esse código passou a existir. NUNCA presumir que o backfill
+    histórico 1996-2010 foi produzido por este mesmo procedimento — ver
+    `verificar_dados_1996_2010_precedem_pipeline_atual` (o backfill já
+    estava completo no primeiro commit do repositório, antes deste
+    código)."""
     if not UPDATE_DASHBOARD_PATH.exists():
         return {'encontrado': False, 'motivo': f'{UPDATE_DASHBOARD_PATH} não encontrado'}
     codigo = UPDATE_DASHBOARD_PATH.read_text()
@@ -231,17 +327,66 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
         'arquivo': str(UPDATE_DASHBOARD_PATH.relative_to(ROOT)),
         'padrao_verificado': PADRAO_AGREGACAO_SINOBRAS,
         'encontrado': encontrado,
+        'aplica_se_a': 'incorporação de dados NOVOS (SINOBRAS_new.csv) a partir de quando este '
+                        'código passou a existir — nunca confirmado como o método usado para '
+                        'produzir o backfill histórico 1996-2010 (ver achado separado abaixo).',
         'interpretacao': (
             "Confirmado: a incorporação de SINOBRAS_new.csv usa "
             "df_new.groupby(['ano','mes'])['prec_mm'].mean() — média aritmética simples sobre "
             "QUANTAS estações/fazendas estiverem presentes naquele envio, sem exigência de "
             "número mínimo (1 fazenda reportando produz o mesmo tipo de valor que 34 "
             "reportando) e sem reter a leitura por estação individual — só a média sobrevive "
-            "em serie_subst.csv (coluna 'prec'), a granularidade por fazenda é descartada."
+            "em serie_subst.csv (coluna 'prec'), a granularidade por fazenda é descartada. Isso "
+            "descreve o procedimento ATUAL para dados NOVOS — não o backfill histórico."
         ) if encontrado else (
             "Padrão de agregação esperado não encontrado no arquivo atual — o método pode ter "
             "mudado desde esta auditoria; revisar scripts/update_dashboard.py manualmente antes "
             "de confiar nesta interpretação."
+        ),
+    }
+
+
+def verificar_dados_1996_2010_precedem_pipeline_atual():
+    """Item 3 (2ª rodada, item 1 da revisão) — NÃO presumir que os
+    dados de 1996-2011 foram produzidos pelo procedimento atual de
+    incorporação (`verificar_padrao_agregacao_sinobras_no_codigo`).
+    Verifica via `git log`/`git show` (nunca por suposição) se o
+    período 1996-2010 já estava completo no PRIMEIRO commit do
+    repositório que introduziu data/serie_subst.csv — se sim, esse
+    backfill preexiste a qualquer execução do código atual, e o método
+    que de fato o produziu é DESCONHECIDO (fora deste repositório, ou
+    nunca registrado)."""
+    try:
+        log = subprocess.run(
+            ['git', 'log', '--follow', '--diff-filter=A', '--format=%H', '--', 'data/serie_subst.csv'],
+            cwd=ROOT, capture_output=True, text=True, timeout=15, check=True)
+        commits = log.stdout.strip().splitlines()
+        if not commits:
+            return {'verificavel': False, 'motivo': 'nenhum commit de criação encontrado para serie_subst.csv'}
+        primeiro_commit = commits[-1]
+        show = subprocess.run(['git', 'show', f'{primeiro_commit}:data/serie_subst.csv'],
+                               cwd=ROOT, capture_output=True, text=True, timeout=15, check=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return {'verificavel': False, 'motivo': f'git indisponível ou falhou: {e}'}
+
+    df_primeiro_commit = pd.read_csv(io.StringIO(show.stdout))
+    sub = df_primeiro_commit[(df_primeiro_commit['ano'] >= 1996) & (df_primeiro_commit['ano'] <= 2010)]
+    n_esperado = 15 * 12   # 1996-2010, 15 anos completos
+
+    return {
+        'verificavel': True,
+        'primeiro_commit': primeiro_commit,
+        'n_meses_1996_2010_no_primeiro_commit': int(len(sub)),
+        'n_meses_esperado': n_esperado,
+        'ja_completo_no_primeiro_commit': bool(len(sub) == n_esperado),
+        'interpretacao': (
+            f"O período 1996-2010 já estava {'COMPLETO' if len(sub) == n_esperado else 'PARCIAL'} "
+            f"({len(sub)}/{n_esperado} meses) no primeiro commit deste repositório "
+            f"({primeiro_commit[:8]}) — ou seja, antes de qualquer execução do procedimento de "
+            "incorporação hoje presente em scripts/update_dashboard.py. O método que de fato "
+            "produziu esses valores históricos é DESCONHECIDO a partir deste repositório; não "
+            "deve ser presumido igual ao procedimento atual só porque ambos dizem respeito a "
+            "'dados Sinobras'."
         ),
     }
 
@@ -258,6 +403,7 @@ def montar_achados_documentacao():
         ),
         'identidade_merra2_master_monthly': verificar_identidade_merra2_com_master_monthly(),
         'agregacao_sinobras_no_codigo': verificar_padrao_agregacao_sinobras_no_codigo(),
+        'dados_1996_2010_precedem_pipeline_atual': verificar_dados_1996_2010_precedem_pipeline_atual(),
         'coordenadas_dos_3_municipios_pre_1996': (
             'Araguaína/Colinas do Tocantins/Tocantinópolis — nenhuma coordenada, nenhum script '
             'de geração e nenhum registro de commit anterior ao primeiro commit do repositório '
@@ -271,7 +417,40 @@ def montar_achados_documentacao():
             'satelital (CHIRPS/ERA5, período recente) e persistência de índices oceânicos, '
             'nunca a série de precipitação pré-2011 usada nesta auditoria.'
         ),
+        'documentos_necessarios_para_comprovar_procedencia': montar_lista_documentos_necessarios(),
     }
+
+
+def montar_lista_documentos_necessarios():
+    """Item 4 (2ª rodada) — lista OBJETIVA (não computada — não há como
+    verificar programaticamente a ausência de documentos fora deste
+    repositório) do que seria necessário para comprovar de verdade a
+    procedência histórica, tanto do trecho pré-1996 quanto do pós-1996.
+    Nenhum destes itens está disponível neste repositório hoje (ver os
+    achados acima)."""
+    return [
+        "Dados originais por estação/fazenda individual (não só a média mensal já publicada em "
+        "serie_subst.csv) para todo o período 1996-2011 — permitiria reconstruir quantas "
+        "fazendas reportaram em cada mês e recalcular a agregação com um critério explícito.",
+        "Coordenadas de cada uma das 34 fazendas/estações pluviométricas Sinobras — hoje só o "
+        "centroide agregado (lat=-7,80/lon=-47,95) é conhecido, nunca a posição individual.",
+        "Períodos de operação de cada estação/fazenda (quando cada uma começou/parou de medir, "
+        "e quaisquer interrupções de manutenção) — necessário para saber se a amostra por mês é "
+        "estável ao longo do tempo ou varia por entrada/saída de estações.",
+        "Identificação da fonte ORIGINAL das 3 séries municipais (Araguaína/Colinas do "
+        "Tocantins/Tocantinópolis) usadas no período 1981-1995: se são de fato extração MERRA-2 "
+        "(e, se sim, em qual ponto de grade/data de extração), ou outra reanálise, ou estações "
+        "de superfície de cada cidade.",
+        "Coordenadas exatas (ou o ponto/célula de grade) usadas para extrair essas 3 séries "
+        "municipais, sejam elas de reanálise ou de estação.",
+        "O script, planilha ou processo — mesmo que externo a este repositório — que gerou o "
+        "backfill 1996-2010 de serie_subst.csv antes do primeiro commit ('Create index.html'), "
+        "já que o procedimento hoje em scripts/update_dashboard.py não pode ser presumido como "
+        "o mesmo (ver achado 'dados_1996_2010_precedem_pipeline_atual').",
+        "Documentação do número mínimo de estações/fazendas (se algum) considerado necessário "
+        "para publicar um valor mensal válido — hoje o código aceita qualquer contagem >=1 sem "
+        "distinção.",
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -394,15 +573,63 @@ def identificar_periodos_utilizaveis(cobertura_df):
         'n_disponivel_e_qualidade_ok': len(qualidade_ok),
         'combinacoes_utilizaveis_por_procedencia': por_procedencia,
         'reanalise_merra2_tem_uso_limitado': (
-            'A procedência MERRA-2 (na verdade, achado do item 3: média de 3 municípios não '
-            'verificável) só se aplica a alvos com ano<=1995 — poucas combinações no início da '
-            'janela 1991-2010, concentradas nos leads mais longos das origens de 1991.'
+            'A procedência rotulada MERRA-2 (achado da Seção 4: fonte original não comprovada — '
+            'é, numericamente, a média de 3 municípios) só se aplica a alvos com ano<=1995: '
+            '345/1.440 combinações, razoavelmente distribuídas entre 1991-1995 e entre os 6 '
+            'leads (ver Seção 4, distribuição real pré-1996) — nunca concentradas num único trecho.'
         ),
         'recomendacao': (
             'Reportar qualquer avaliação futura SEPARADAMENTE para alvos MERRA-2/3-municípios '
             '(ano<=1995) e alvos Estação Sinobras (ano>=1996) — nunca uma métrica agregada '
             'única que misture as duas procedências, dado que já divergem em magnitude '
-            '(achado do item 3, diff média >1mm/mês pós-1996) e em suporte espacial (item 4).'
+            '(achado da Seção 4, diff média >1mm/mês pós-1996) e em suporte espacial (Seção 5).'
+        ),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Item 3 (2ª rodada) — protocolo de validação: amostra de uma climatologia
+# restrita a registros Sinobras (>=1996) sob janela expansível
+# ══════════════════════════════════════════════════════════════════════════
+
+def analisar_amostra_climatologia_sinobras_apenas(origens=ORIGENS_HISTORICAS,
+                                                    ano_inicio_sinobras=ANO_FIM_MERRA2 + 1):
+    """Item 3 (2ª rodada) — a abordagem (b) do protocolo de validação
+    (janela expansível, só informação anterior à emissão da previsão —
+    ver Seção 8.3 do relatório) exige uma climatologia de referência
+    construída SÓ com anos anteriores ao ano avaliado. Se essa
+    climatologia for restrita a registros Sinobras (>=1996 — a única
+    procedência com série de campo real neste repositório; a
+    procedência MERRA-2/3-municípios não teve sua fonte original
+    comprovada, achado do item 1), o número de anos prévios disponíveis
+    é PEQUENO ou ZERO para os primeiros anos da janela 1991-2010 —
+    calculado aqui, nunca suposto: `max(0, ano_origem - 1996)` anos
+    completos anteriores a cada ano de origem avaliado."""
+    anos_origem = sorted({ano for ano, mes in origens})
+    disponibilidade = {ano: max(0, ano - ano_inicio_sinobras) for ano in anos_origem}
+    n_zero = sum(1 for v in disponibilidade.values() if v == 0)
+    n_menor_5 = sum(1 for v in disponibilidade.values() if v < 5)
+    return {
+        'ano_inicio_sinobras': ano_inicio_sinobras,
+        'anos_origem_avaliados': anos_origem,
+        'anos_climatologia_sinobras_disponiveis_por_ano_origem': disponibilidade,
+        'n_anos_origem_com_zero_anos_previos': n_zero,
+        'n_anos_origem_com_menos_de_5_anos_previos': n_menor_5,
+        'interpretacao': (
+            "Na abordagem (b) — janela expansível, só informação anterior à emissão —, uma "
+            f"climatologia restrita a registros Sinobras (>={ano_inicio_sinobras}) teria ZERO anos "
+            f"prévios disponíveis para {n_zero} dos {len(anos_origem)} anos de origem avaliados "
+            f"(1991 a {ano_inicio_sinobras}, inclusive) e menos de 5 anos de amostra para "
+            f"{n_menor_5} deles — amostra pequena demais para uma climatologia estável nos "
+            "primeiros anos da janela. Exemplos concretos (calculados, não estimados): ano de "
+            f"origem 1997 → {disponibilidade.get(1997)} ano(s) prévio(s) disponível(is); 2000 → "
+            f"{disponibilidade.get(2000)}; 2005 → {disponibilidade.get(2005)}; 2010 → "
+            f"{disponibilidade.get(2010)}. Isso não invalida a abordagem (b) — é uma limitação "
+            "amostral real que precisa ser decidida explicitamente antes de qualquer cálculo de "
+            "skill: usar uma climatologia mais longa que misture a procedência MERRA-2/"
+            "3-municípios (cuja fonte original não é comprovada — achado da Seção 4) para os "
+            "primeiros anos, ou aceitar a amostra pequena/zero documentando a incerteza adicional "
+            "que isso implica."
         ),
     }
 
@@ -415,10 +642,13 @@ def executar_auditoria_completa():
     cobertura_df = executar_auditoria_cobertura_por_origem_lead()
     cobertura_calendario = verificar_cobertura_calendario_bruta()
     resumo_procedencia = resumir_por_procedencia(cobertura_df)
+    dependencia_temporal = analisar_dependencia_temporal_observacoes(cobertura_df)
+    distribuicao_pre_1996 = analisar_distribuicao_pre_1996(cobertura_df)
     achados_documentacao = montar_achados_documentacao()
     correspondencia_espacial = avaliar_correspondencia_espacial()
     alinhamento_temporal = verificar_alinhamento_temporal()
     periodos_utilizaveis = identificar_periodos_utilizaveis(cobertura_df)
+    amostra_climatologia_sinobras_apenas = analisar_amostra_climatologia_sinobras_apenas()
 
     aptidao = pilo.avaliar_aptidao_referencia_observacional(
         cobertura_df,
@@ -430,10 +660,13 @@ def executar_auditoria_completa():
         'evidencia_extracao_historica': EVIDENCIA_EXTRACAO_HISTORICA_FAZENDAS,
         'cobertura_calendario_bruta': cobertura_calendario,
         'resumo_procedencia': resumo_procedencia.to_dict(orient='records'),
+        'dependencia_temporal_observacoes': dependencia_temporal,
+        'distribuicao_pre_1996': distribuicao_pre_1996,
         'achados_documentacao': achados_documentacao,
         'correspondencia_espacial': correspondencia_espacial,
         'alinhamento_temporal': alinhamento_temporal,
         'periodos_utilizaveis': periodos_utilizaveis,
+        'amostra_climatologia_sinobras_apenas': amostra_climatologia_sinobras_apenas,
         'aptidao_referencia_observacional': aptidao,
         'nenhuma_skill_calculada': True, 'nenhum_dashboard_alterado': True,
         'nenhum_modelo_climatico_alterado': True,
@@ -444,10 +677,13 @@ def executar_auditoria_completa():
 def gerar_relatorio_markdown(cobertura_df, metadata):
     ap = metadata['aptidao_referencia_observacional']
     cal = metadata['cobertura_calendario_bruta']
+    dep = metadata['dependencia_temporal_observacoes']
     doc = metadata['achados_documentacao']
+    dist_pre96 = metadata['distribuicao_pre_1996']
     esp = metadata['correspondencia_espacial']
     tmp = metadata['alinhamento_temporal']
     per = metadata['periodos_utilizaveis']
+    amostra = metadata['amostra_climatologia_sinobras_apenas']
 
     linhas = [
         "# Auditoria da referência observacional — extração histórica CFSv2 (fazendas)",
@@ -480,7 +716,18 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         linhas.append(f"- `{row['procedencia_documental']}`: {row['n_combinacoes']} combinações")
     linhas += [
         "",
-        "## 3. Documentação efetivamente disponível",
+        "## 3. Combinações previsão×horizonte vs. observações mensais independentes",
+        "",
+        "**Nunca confundir as duas contagens — são coisas diferentes.**",
+        "",
+        f"- Combinações origem×lead: {dep['n_combinacoes_origem_lead']}.",
+        f"- Meses observados DISTINTOS usados como alvo: {dep['n_meses_observados_distintos']}.",
+        f"- Razão combinações/mês distinto: {dep['razao_combinacoes_por_mes_distinto']} "
+        f"(reuso por mês: mínimo {dep['reuso_por_mes_min']}, máximo {dep['reuso_por_mes_max']}, "
+        f"médio {dep['reuso_por_mes_medio']}, mediano {dep['reuso_por_mes_mediano']}).",
+        f"- {dep['interpretacao']}",
+        "",
+        "## 4. Documentação efetivamente disponível",
         "",
         f"- {doc['readme_descricao_unica']}",
         "",
@@ -492,7 +739,8 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         linhas += [
             f"- Meses comparados (ano<=1995): {idm['n_meses_comparados_pre_1996']}, diferença "
             f"absoluta máxima: {idm['diff_abs_maxima_pre_1996_mm']} mm — "
-            f"**idêntico: {idm['identico_pre_1996']}**.",
+            f"**idêntico numericamente: {idm['identico_numericamente_pre_1996']}** "
+            f"(fonte original comprovada: {idm['fonte_original_comprovada']}).",
             f"- Meses comparados (ano>=1996): {idm['n_meses_comparados_pos_1996']}, diferença "
             f"absoluta média: {idm['diff_abs_media_pos_1996_mm']} mm, máxima: "
             f"{idm['diff_abs_maxima_pos_1996_mm']} mm — **diverge: {idm['diverge_pos_1996']}**.",
@@ -507,7 +755,42 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         f"- Arquivo: `{doc['agregacao_sinobras_no_codigo'].get('arquivo', UPDATE_DASHBOARD_PATH.name)}`",
         f"- Padrão verificado: `{doc['agregacao_sinobras_no_codigo'].get('padrao_verificado', '')}` — "
         f"encontrado: {doc['agregacao_sinobras_no_codigo'].get('encontrado')}",
+        f"- Aplica-se a: {doc['agregacao_sinobras_no_codigo'].get('aplica_se_a')}",
         f"- {doc['agregacao_sinobras_no_codigo'].get('interpretacao')}",
+        "",
+        "### Backfill histórico 1996-2010 precede o pipeline atual (achado via git)",
+        "",
+    ]
+    bkf = doc['dados_1996_2010_precedem_pipeline_atual']
+    if bkf.get('verificavel'):
+        linhas += [
+            f"- Primeiro commit do repositório com `data/serie_subst.csv`: "
+            f"`{bkf['primeiro_commit'][:8]}`.",
+            f"- Meses 1996-2010 já presentes nesse primeiro commit: "
+            f"{bkf['n_meses_1996_2010_no_primeiro_commit']}/{bkf['n_meses_esperado']} — "
+            f"**já completo: {bkf['ja_completo_no_primeiro_commit']}**.",
+            f"- {bkf['interpretacao']}",
+        ]
+    else:
+        linhas.append(f"- Não verificável: {bkf.get('motivo')}")
+    linhas += [
+        "",
+        "### Distribuição real das 345 combinações pré-1996 (corrigido)",
+        "",
+        f"- Total de combinações com procedência MERRA-2/3-municípios: {dist_pre96['n_total']}.",
+        f"- Por ano-alvo: {dist_pre96['por_ano_alvo']}.",
+        f"- Por ano de origem: {dist_pre96['por_ano_origem']}.",
+        f"- Por horizonte (H_lead): {dist_pre96['por_h_lead']}.",
+        f"- {dist_pre96.get('interpretacao', '')}",
+        "",
+        "### Documentos necessários para comprovar a procedência histórica",
+        "",
+        "Nenhum destes está disponível neste repositório hoje (ver achados acima):",
+        "",
+    ]
+    for item in doc['documentos_necessarios_para_comprovar_procedencia']:
+        linhas.append(f"- {item}")
+    linhas += [
         "",
         f"### Coordenadas dos 3 municípios do período MERRA-2 (1981-1995)",
         "",
@@ -517,7 +800,7 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         "",
         f"- {doc['gaps_e_qualidade_documentados_previamente']}",
         "",
-        "## 4. Correspondência espacial",
+        "## 5. Correspondência espacial",
         "",
         f"- Distância REAL grade CFSv2 ↔ centroide das fazendas (lida do RAW aprovado): "
         f"**{esp['distancia_grade_cfsv2_ate_centroide_km']} km**.",
@@ -528,7 +811,7 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         f"- Observação pós-1996: {esp['observacao_pos_1996_e_area_ou_ponto']}",
         f"- **Descasamento de suporte espacial**: {esp['descasamento_de_suporte_espacial']}",
         "",
-        "## 5. Alinhamento temporal H1-H6",
+        "## 6. Alinhamento temporal H1-H6",
         "",
         f"- Combinações origem×lead auditadas: {tmp['n_combinacoes_origem_lead']}/{tmp['n_esperado']}.",
         f"- `mapping_status=OK` em todas: {tmp['todas_ok']} ({tmp['n_mapping_status_ok']} confirmadas).",
@@ -536,7 +819,7 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         f"{tmp['h1_igual_mes_inicializacao_confirmado']}.",
         f"- Mês-alvo mais distante (H6 da origem 2010-12): {tmp['origem_alvo_mais_distante']}.",
         "",
-        "## 6. Períodos utilizáveis",
+        "## 7. Períodos utilizáveis",
         "",
         f"- Combinações disponíveis, não substitutas (nunca CHC-Preliminar/ERA5) e com qualidade "
         f"OK: {per['n_disponivel_e_qualidade_ok']}/{per['n_total_combinacoes']}.",
@@ -547,49 +830,80 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         f"- {per['reanalise_merra2_tem_uso_limitado']}",
         f"- **Recomendação**: {per['recomendacao']}",
         "",
-        "## 7. Protocolo estatístico proposto (NÃO calculado nesta tarefa)",
+        "## 8. Protocolo estatístico proposto (NÃO calculado nesta tarefa)",
         "",
         "Proposta para uma etapa FUTURA e SEPARADA — nenhum destes cálculos foi executado aqui.",
         "",
-        "### 7.1 Determinístico",
+        "### 8.1 Determinístico",
         "- Viés médio (bias) e MAE do ensemble mean por lead (H1-H6), separadamente para alvos "
         "MERRA-2/3-municípios (ano<=1995) e Estação Sinobras (ano>=1996) — nunca agregados "
-        "entre si (achado do item 3: já divergem em magnitude).",
+        "entre si (achado da Seção 4: já divergem em magnitude).",
         "- Correlação de Pearson/Spearman entre ensemble mean e observação, por lead.",
         "",
-        "### 7.2 Probabilístico",
+        "### 8.2 Probabilístico",
         "- CRPS (Continuous Ranked Probability Score) do ensemble de 24 membros por lead.",
         "- Brier Skill Score (BSS) para terços de probabilidade (abaixo/normal/acima), com a "
-        "climatologia de referência definida na Seção 7.3 como benchmark.",
+        "climatologia de referência definida na Seção 8.3 como benchmark.",
         "- Diagrama de confiabilidade (reliability diagram) por lead, para checar calibração do "
         "ensemble.",
+        "- Qualquer estimativa de incerteza estatística (intervalo de confiança, erro padrão, "
+        "significância) deve tratar as combinações como dependentes, não como amostra i.i.d. "
+        "— ver Seção 3 (1.440 combinações compartilham só 245 meses observados distintos).",
         "",
-        "### 7.3 Climatologia de referência — mecanismo contra vazamento de informação",
+        "### 8.3 Protocolo de validação e climatologia de referência — duas abordagens, "
+        "não escolhidas aqui",
+        "",
+        "Apresentadas separadamente, com as diferenças entre elas — este módulo NÃO escolhe "
+        "um protocolo definitivo; a escolha fica para a etapa futura de cálculo de skill.",
+        "",
+        "**(a) Validação retrospectiva com exclusão do ano avaliado (leave-one-year-out, LOYO).** "
+        "Usa o período completo disponível (ex.: 1981-2010) menos o próprio ano-alvo Y para "
+        "montar a climatologia de referência de cada avaliação. Mais simples e auditável (o "
+        "conjunto de anos de cada climatologia é sempre \"todos menos Y\"), mas PODE incluir "
+        "anos POSTERIORES a Y na climatologia — informação que, na data real de emissão da "
+        "previsão de Y, ainda não existia. Isso não é vazamento literal treino/teste (a "
+        "climatologia não usa o próprio valor de Y), mas é uso de informação futura em relação "
+        "ao momento da previsão, e precisa ser declarado explicitamente se esta abordagem for "
+        "escolhida.",
+        "",
+        "**(b) Validação com janela temporal expansível, só informação anterior à emissão.** "
+        "Para avaliar o alvo do ano Y, usa só a climatologia calculada com anos < Y — nunca "
+        "anos posteriores. Operacionalmente mais realista (reproduz o que estaria disponível "
+        "no momento real da previsão), mas sofre de amostra pequena ou ZERO nos primeiros anos "
+        "da janela 1991-2010 quando restrita a registros Sinobras (>=1996) — ver análise "
+        "abaixo.",
+        "",
+        f"- Combinações origem×lead auditadas: {tmp['n_combinacoes_origem_lead']}.",
+        f"- Anos de origem avaliados: {amostra['anos_origem_avaliados'][0]}-"
+        f"{amostra['anos_origem_avaliados'][-1]}.",
+        f"- Anos de climatologia Sinobras-apenas (>={amostra['ano_inicio_sinobras']}) disponíveis "
+        f"por ano de origem, sob a abordagem (b): {amostra['anos_climatologia_sinobras_disponiveis_por_ano_origem']}.",
+        f"- Anos de origem com ZERO anos prévios disponíveis: "
+        f"{amostra['n_anos_origem_com_zero_anos_previos']}. Anos de origem com menos de 5 anos "
+        f"prévios: {amostra['n_anos_origem_com_menos_de_5_anos_previos']}.",
+        f"- {amostra['interpretacao']}",
+        "",
         "- **Nunca** usar a climatologia de referência do dashboard (1981-2025 completa) para "
-        "avaliar previsões cujo período de emissão (1991-2010) está DENTRO dela — isso "
-        "vazaria informação futura (relativa a cada ano avaliado) para dentro do "
-        "benchmark de comparação.",
-        "- Proposta: climatologia EXPANSÍVEL retrospectiva — para avaliar o alvo do ano Y, usar "
-        "só a climatologia calculada com anos < Y (ou, no mínimo, excluir o próprio ano Y e "
-        "os 2 anos vizinhos, para reduzir autocorrelação de baixa frequência tipo PDO). "
-        "Alternativa mais simples e auditável: climatologia leave-one-year-out (LOYO) sobre "
-        "1981-2010 inteiro, recalculada a cada alvo excluindo o ano do próprio alvo.",
-        "- Qualquer que seja a escolha, documentar explicitamente qual conjunto de anos define "
-        "a climatologia de cada avaliação, no mesmo arquivo/tabela do resultado — nunca "
-        "implícito.",
+        "avaliar previsões cujo período de emissão (1991-2010) está DENTRO dela sem declarar "
+        "isso explicitamente — em qualquer uma das duas abordagens acima, o conjunto de anos "
+        "que define a climatologia de CADA avaliação deve ser documentado no mesmo "
+        "arquivo/tabela do resultado, nunca implícito.",
         "",
-        "### 7.4 Decisões que precisam de aprovação explícita antes do cálculo de skill",
+        "### 8.4 Decisões que precisam de aprovação explícita antes do cálculo de skill",
         "1. Usar ou não os alvos MERRA-2/3-municípios (ano<=1995) na avaliação, dado que sua "
-        "procedência como reanálise não foi confirmada (item 3) e as coordenadas dos 3 "
+        "fonte original não foi comprovada (Seção 4) e as coordenadas dos 3 "
         "municípios não são verificáveis.",
         "2. Aceitar ou não a média de área (3 municípios ou até 34 fazendas) como proxy do "
-        "valor pontual de grade do CFSv2 (item 4) — e se aceitar, registrar isso como "
+        "valor pontual de grade do CFSv2 (Seção 5) — e se aceitar, registrar isso como "
         "premissa explícita do estudo, não como equivalência.",
-        "3. Definir o mecanismo exato de climatologia sem vazamento (Seção 7.3) antes de "
-        "qualquer BSS/anomalia ser calculado.",
+        "3. Escolher entre as abordagens (a) LOYO e (b) janela expansível da Seção 8.3 — ou "
+        "outra — e documentar explicitamente qual conjunto de anos define a climatologia de "
+        "cada avaliação, antes de qualquer BSS/anomalia ser calculado.",
         "4. Definir o tratamento de meses com `qualidade_verificada_status` diferente de OK "
         "— excluir da avaliação (recomendado) ou uma estratégia de imputação, nunca "
         "silenciosamente incluídos como se fossem OK.",
+        "5. Definir como tratar a dependência temporal entre combinações (Seção 3: 1.440 "
+        "combinações, 245 meses distintos) em qualquer estimativa de incerteza estatística.",
         "",
         "## Verdito de aptidão para avaliação científica (infraestrutura + observação)",
         "",
@@ -605,21 +919,27 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         "",
         "`avaliar_aptidao_referencia_observacional` (reaproveitada sem modificação) só verifica "
         "cobertura/procedência-substituta/qualidade numérica e a distância espacial — ela NÃO "
-        "avalia se a documentação de procedência é suficiente. As seções 3 e 4 acima levantam "
+        "avalia se a documentação de procedência é suficiente. As seções 4 e 5 acima levantam "
         "problemas que continuam pendentes mesmo se a distância espacial fosse aceita:",
-        "- A identidade do trecho \"MERRA-2\" (1981-1995) com uma média de 3 municípios sem "
-        "coordenadas/metodologia verificáveis (Seção 3) — usar isso como reanálise de grade "
-        "seria uma afirmação não sustentada pelo repositório.",
+        "- A fonte original do trecho \"MERRA-2\" (1981-1995) — numericamente idêntico a uma "
+        "média de 3 municípios sem coordenadas/metodologia verificáveis (Seção 4) — não "
+        "comprovada; tratar como reanálise de grade confirmada seria uma afirmação não "
+        "sustentada pelo repositório.",
         "- O descasamento de suporte espacial (célula de grade vs. média de área difusa e "
-        "variável, Seção 4) — não resolvido só por a distância ter melhorado.",
-        "- A agregação Sinobras sem mínimo de estações (Seção 3) — um mês com 1 fazenda "
-        "reportando é tratado, na série, exatamente como um mês com 34.",
+        "variável, Seção 5) — não resolvido só por a distância ter melhorado.",
+        "- A agregação Sinobras sem mínimo de estações (Seção 4) — um mês com 1 fazenda "
+        "reportando é tratado, na série, exatamente como um mês com 34 — e isso descreve só o "
+        "procedimento ATUAL do código, não o backfill histórico 1996-2010 (Seção 4), cujo "
+        "método real é desconhecido.",
+        "- A dependência temporal entre combinações origem×lead (Seção 3) — 1.440 combinações "
+        "não são 1.440 observações independentes.",
         "",
         "## Restrições respeitadas nesta tarefa",
         "",
         "- Nenhuma métrica de skill foi calculada.",
         "- O dashboard (docs/index.html) não foi tocado.",
         "- Nenhum modelo climático (SARIMAX/XGBoost) foi alterado.",
+        "- Nenhum dado histórico foi modificado.",
         "- Os 34.560 registros RAW já extraídos (data/nmme_historico_fazendas/) foram preservados "
         "integralmente — este módulo só LÊ esses arquivos.",
     ]

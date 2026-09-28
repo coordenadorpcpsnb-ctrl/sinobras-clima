@@ -112,7 +112,8 @@ class IdentidadeMerra2TestCase(unittest.TestCase):
                 aud.SERIE_OBSERVACIONAL_PATH, aud.MASTER_MONTHLY_PATH = original_serie, original_master
 
             self.assertTrue(resultado['comparavel'])
-            self.assertTrue(resultado['identico_pre_1996'])
+            self.assertTrue(resultado['identico_numericamente_pre_1996'])
+            self.assertFalse(resultado['fonte_original_comprovada'])
             self.assertTrue(resultado['diverge_pos_1996'])
             self.assertEqual(resultado['n_meses_comparados_pre_1996'], 2)
             self.assertEqual(resultado['n_meses_comparados_pos_1996'], 1)
@@ -125,14 +126,156 @@ class IdentidadeMerra2TestCase(unittest.TestCase):
         finally:
             aud.MASTER_MONTHLY_PATH = original_master
         self.assertFalse(resultado['comparavel'])
+        self.assertFalse(resultado['fonte_original_comprovada'])
 
     def test_c_dados_reais_confirmam_identidade_pre_1996(self):
         """Sanidade contra o dado real — o achado central do relatório
         (Seção 3) precisa continuar verdadeiro."""
         resultado = aud.verificar_identidade_merra2_com_master_monthly()
         self.assertTrue(resultado['comparavel'])
-        self.assertTrue(resultado['identico_pre_1996'])
+        self.assertTrue(resultado['identico_numericamente_pre_1996'])
+        self.assertFalse(resultado['fonte_original_comprovada'])
         self.assertGreater(resultado['n_meses_comparados_pre_1996'], 0)
+
+
+class BackfillPrecedePipelineAtualTestCase(unittest.TestCase):
+    """Item 1 (2ª rodada) — verifica via git, nunca por suposição, que o
+    backfill 1996-2010 já estava completo no primeiro commit do
+    repositório, antes de qualquer execução do procedimento atual de
+    scripts/update_dashboard.py."""
+
+    def test_a_dados_reais_primeiro_commit_ja_completo(self):
+        resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
+        self.assertTrue(resultado['verificavel'])
+        self.assertEqual(resultado['primeiro_commit'], '8a76a0fad509e14e00b25b635ba7261dc375996f')
+        self.assertEqual(resultado['n_meses_esperado'], 180)
+        self.assertEqual(resultado['n_meses_1996_2010_no_primeiro_commit'], 180)
+        self.assertTrue(resultado['ja_completo_no_primeiro_commit'])
+
+    def test_b_git_indisponivel_reporta_nao_verificavel(self):
+        import subprocess as sp
+        original_run = sp.run
+
+        def _run_com_falha(*args, **kwargs):
+            raise FileNotFoundError('git não encontrado (simulado)')
+
+        aud.subprocess.run = _run_com_falha
+        try:
+            resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
+        finally:
+            aud.subprocess.run = original_run
+        self.assertFalse(resultado['verificavel'])
+        self.assertIn('motivo', resultado)
+
+
+class MontarListaDocumentosNecessariosTestCase(unittest.TestCase):
+    """Item 4 (2ª rodada) — lista objetiva, não computada, do que falta
+    para comprovar procedência histórica."""
+
+    def test_a_lista_nao_vazia_de_strings_cobrindo_topicos_chave(self):
+        documentos = aud.montar_lista_documentos_necessarios()
+        self.assertIsInstance(documentos, list)
+        self.assertGreater(len(documentos), 0)
+        for item in documentos:
+            self.assertIsInstance(item, str)
+        texto_completo = ' '.join(documentos).lower()
+        for topico in ('coordenadas', 'municipais', 'período', 'backfill', 'estações'):
+            self.assertIn(topico, texto_completo)
+
+
+class AnalisarDistribuicaoPre1996TestCase(unittest.TestCase):
+    """Item 4 (2ª rodada) — distribuição real das combinações
+    pré-1996, nunca suposta."""
+
+    def _cobertura_sintetica(self):
+        return pd.DataFrame([
+            {'procedencia_documental': pilo.PROCEDENCIA_MERRA2, 'target_month': '1991-01',
+             'origem_piloto': '1991-01', 'H_lead': 1},
+            {'procedencia_documental': pilo.PROCEDENCIA_MERRA2, 'target_month': '1991-02',
+             'origem_piloto': '1991-01', 'H_lead': 2},
+            {'procedencia_documental': pilo.PROCEDENCIA_MERRA2, 'target_month': '1995-12',
+             'origem_piloto': '1995-11', 'H_lead': 2},
+            {'procedencia_documental': pilo.PROCEDENCIA_ESTACAO_SINOBRAS, 'target_month': '1996-06',
+             'origem_piloto': '1996-05', 'H_lead': 2},
+        ])
+
+    def test_a_conta_so_procedencia_merra2(self):
+        resultado = aud.analisar_distribuicao_pre_1996(self._cobertura_sintetica())
+        self.assertEqual(resultado['n_total'], 3)
+        self.assertEqual(resultado['por_ano_alvo']['1991'], 2)
+        self.assertEqual(resultado['por_ano_alvo']['1995'], 1)
+        self.assertEqual(resultado['por_h_lead'][1], 1)
+        self.assertEqual(resultado['por_h_lead'][2], 2)
+
+    def test_b_vazio_quando_sem_merra2(self):
+        vazio = pd.DataFrame([
+            {'procedencia_documental': pilo.PROCEDENCIA_ESTACAO_SINOBRAS, 'target_month': '1996-06',
+             'origem_piloto': '1996-05', 'H_lead': 2},
+        ])
+        resultado = aud.analisar_distribuicao_pre_1996(vazio)
+        self.assertEqual(resultado['n_total'], 0)
+
+    def test_c_dados_reais_345_combinacoes_distribuidas(self):
+        """Sanidade contra o dado real — corrige a alegação anterior
+        (nunca checada) de concentração nos leads longos de 1991."""
+        cobertura_df = aud.executar_auditoria_cobertura_por_origem_lead()
+        resultado = aud.analisar_distribuicao_pre_1996(cobertura_df)
+        self.assertEqual(resultado['n_total'], 345)
+        self.assertEqual(sum(resultado['por_ano_alvo'].values()), 345)
+        self.assertEqual(sum(resultado['por_h_lead'].values()), 345)
+        # Nenhum ano-alvo isolado concentra a maioria das 345 combinações.
+        for n in resultado['por_ano_alvo'].values():
+            self.assertLess(n, 345 * 0.5)
+
+
+class AnalisarDependenciaTemporalObservacoesTestCase(unittest.TestCase):
+    """Item 2 (2ª rodada) — combinações origem×lead não são observações
+    mensais independentes; o mesmo mês é reaproveitado como alvo por
+    várias combinações."""
+
+    def test_a_reuso_sintetico_calculado_corretamente(self):
+        cobertura_df = pd.DataFrame({
+            'target_month': ['2000-01', '2000-01', '2000-01', '2000-02'],
+        })
+        resultado = aud.analisar_dependencia_temporal_observacoes(cobertura_df)
+        self.assertEqual(resultado['n_combinacoes_origem_lead'], 4)
+        self.assertEqual(resultado['n_meses_observados_distintos'], 2)
+        self.assertEqual(resultado['reuso_por_mes_max'], 3)
+        self.assertEqual(resultado['reuso_por_mes_min'], 1)
+
+    def test_b_dados_reais_1440_combinacoes_245_meses_distintos(self):
+        """Sanidade contra o dado real — a base numérica do achado do
+        item 2 desta rodada."""
+        cobertura_df = aud.executar_auditoria_cobertura_por_origem_lead()
+        resultado = aud.analisar_dependencia_temporal_observacoes(cobertura_df)
+        self.assertEqual(resultado['n_combinacoes_origem_lead'], 1440)
+        self.assertEqual(resultado['n_meses_observados_distintos'], 245)
+        self.assertEqual(resultado['reuso_por_mes_max'], 6)
+
+
+class AnalisarAmostraClimatologiaSinobrasApenasTestCase(unittest.TestCase):
+    """Item 3 (2ª rodada) — sob a abordagem de janela expansível, uma
+    climatologia restrita a registros Sinobras (>=1996) tem amostra
+    pequena/zero nos primeiros anos avaliados."""
+
+    def test_a_disponibilidade_calculada_por_ano_origem(self):
+        resultado = aud.analisar_amostra_climatologia_sinobras_apenas(
+            origens=((1991, 1), (1996, 1), (1997, 1), (2000, 1)))
+        disp = resultado['anos_climatologia_sinobras_disponiveis_por_ano_origem']
+        self.assertEqual(disp[1991], 0)
+        self.assertEqual(disp[1996], 0)
+        self.assertEqual(disp[1997], 1)
+        self.assertEqual(disp[2000], 4)
+        self.assertEqual(resultado['n_anos_origem_com_zero_anos_previos'], 2)
+
+    def test_b_dados_reais_1996_e_1997_2000_2005_2010(self):
+        resultado = aud.analisar_amostra_climatologia_sinobras_apenas()
+        disp = resultado['anos_climatologia_sinobras_disponiveis_por_ano_origem']
+        self.assertEqual(disp[1996], 0)
+        self.assertEqual(disp[1997], 1)
+        self.assertEqual(disp[2000], 4)
+        self.assertEqual(disp[2005], 9)
+        self.assertEqual(disp[2010], 14)
 
 
 class AgregacaoSinobrasCodigoTestCase(unittest.TestCase):
@@ -288,7 +431,10 @@ class AuditoriaCompletaEndToEndTestCase(unittest.TestCase):
         relatorio = aud.gerar_relatorio_markdown(cobertura_df, metadata)
         self.assertIn('apto_para_avaliacao_cientifica', relatorio)
         self.assertIn('Protocolo estatístico proposto', relatorio)
-        self.assertIn('vazamento', relatorio)
+        self.assertIn('janela expansível', relatorio)
+        self.assertIn('meses observados', relatorio)
+        self.assertIn('fonte original comprovada', relatorio)
+        self.assertIn('Documentos necessários', relatorio)
 
 
 class ReusoDeInfraestruturaTestCase(unittest.TestCase):
