@@ -122,13 +122,24 @@ class MontarListaInformacoesNecessariasTestCase(unittest.TestCase):
     de SINOBRAS.csv."""
 
     def test_a_lista_cobre_topicos_chave(self):
+        """5ª rodada (2026) — a agregação espacial deixou de ser
+        incógnita (confirmada como zonal) e virou dois itens mais
+        específicos: critério de inclusão de pixel e tratamento de
+        pixel parcialmente interceptado."""
         lista = aud.montar_lista_informacoes_necessarias_reproducao()
         self.assertIsInstance(lista, list)
         self.assertGreater(len(lista), 0)
         texto = ' '.join(lista).lower()
-        for topico in ('versão', 'coordenada', 'resolução', 'agregação', 'processamento',
+        for topico in ('versão', 'polígono', 'zonal', 'pixel', 'processamento',
                        'temporal', 'unidades'):
             self.assertIn(topico, texto)
+
+    def test_c_registra_agregacao_espacial_como_resolvida_e_zonal(self):
+        lista = aud.montar_lista_informacoes_necessarias_reproducao()
+        texto = ' '.join(lista)
+        self.assertIn('RESOLVIDO', texto)
+        self.assertIn('ZONAL', texto)
+        self.assertIn('borda do polígono', texto)
 
     def test_b_todos_os_itens_sao_strings_nao_vazias(self):
         for item in aud.montar_lista_informacoes_necessarias_reproducao():
@@ -166,6 +177,101 @@ class AvaliarViabilidadeReferenciaChirpsTestCase(unittest.TestCase):
         self.assertIn('_chirps.py', ferramentas['ponto_unico'])
         self.assertIn('_chirps.py', ferramentas['zonal_envelope'])
         self.assertIn('backfill_chirps_historico.py', ferramentas['quebra_em_blocos'])
+        self.assertIn('NÃO EXISTE', ferramentas['zonal_por_fazenda_individual'])
+
+    def test_e_registra_conflito_com_armadilha_8(self):
+        """5ª rodada (2026) — reproduzir a metodologia zonal por
+        fazenda exigiria polígonos que o projeto decidiu
+        deliberadamente não manter (CLAUDE.md armadilha 8)."""
+        resultado = aud.avaliar_viabilidade_referencia_chirps_1991_2011()
+        self.assertTrue(resultado['poligonos_por_fazenda_conflitam_com_claude_md_armadilha_8'])
+        self.assertTrue(resultado['metodologia_ja_extraida_e_pontual_nao_zonal'])
+        self.assertIn('armadilha 8', resultado['interpretacao'])
+        self.assertIn('zonal', resultado['interpretacao'].lower())
+
+
+class CompararTresAlternativasMetodologicasTestCase(unittest.TestCase):
+    """5ª rodada (2026), atividades 5 e 6 — comparação puramente
+    descritiva das três alternativas de referência regional, nunca
+    uma implementação/cálculo de nenhuma delas."""
+
+    def test_a_retorna_as_tres_alternativas_e_sobreposicao(self):
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        for chave in ('alternativa_a_media_simples_atual', 'alternativa_b_media_ponderada_por_area',
+                      'alternativa_c_zonal_sobre_uniao', 'possibilidade_de_sobreposicao_espacial',
+                      'interpretacao'):
+            self.assertIn(chave, resultado)
+
+    def test_b_nenhuma_alternativa_e_calculada(self):
+        """Menções a `.mean()`/`.groupby()` no docstring/strings, citando
+        onde a metodologia (a) JÁ está implementada em
+        scripts/update_dashboard.py, são esperadas e não contam — o que
+        importa é que esta função nunca LÊ um DataFrame nem invoca
+        pandas."""
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        self.assertTrue(resultado['nenhuma_alternativa_calculada_ou_implementada'])
+        import inspect
+        src = inspect.getsource(aud.comparar_tres_alternativas_metodologicas)
+        for termo_proibido in ('pd.read_csv', 'requests.', 'urlopen', 'carregar_chirps_ponto(',
+                                'carregar_serie_producao('):
+            self.assertNotIn(termo_proibido, src)
+
+    def test_b2_funcao_nao_recebe_nenhum_dataframe(self):
+        import inspect
+        assinatura = inspect.signature(aud.comparar_tres_alternativas_metodologicas)
+        self.assertEqual(len(assinatura.parameters), 0)
+
+    def test_c_alternativa_a_e_a_metodologia_atual_em_producao(self):
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        alt_a = resultado['alternativa_a_media_simples_atual']
+        self.assertIn('update_dashboard.py', alt_a['onde_ja_esta_implementada'])
+        self.assertIn('IGUAL', alt_a['peso_por_fazenda'])
+        self.assertIn('nenhum', alt_a['requisito_de_dados_adicional'])
+
+    def test_d_alternativas_b_e_c_exigem_dados_nao_disponiveis(self):
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        alt_b = resultado['alternativa_b_media_ponderada_por_area']
+        alt_c = resultado['alternativa_c_zonal_sobre_uniao']
+        self.assertIn('não disponível', alt_b['requisito_de_dados_adicional'])
+        self.assertIn('armadilha 8', alt_b['requisito_de_dados_adicional'])
+        self.assertIn('polígonos individuais', alt_c['requisito_de_dados_adicional'])
+
+    def test_e_sobreposicao_nunca_afirmada_nem_descartada(self):
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        sobrep = resultado['possibilidade_de_sobreposicao_espacial']
+        self.assertFalse(sobrep['verificavel_com_os_dados_atuais'])
+        texto = sobrep['interpretacao'].lower()
+        self.assertIn('em aberto', texto)
+        self.assertIn('nem confirmada', texto)
+        self.assertIn('nem descartada', texto)
+
+    def test_f_distingue_compartilhar_pixel_de_sobrepor_poligono(self):
+        """Não presumir que os grupos de séries idênticas implicam
+        sobreposição de polígono — só compartilhamento de pixel."""
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        sinal = resultado['possibilidade_de_sobreposicao_espacial']['sinal_indireto_disponivel']
+        self.assertIn('NÃO', sinal)
+        self.assertIn('sobreposição de', sinal)
+        self.assertIn('pixels', sinal)
+
+    def test_g_interpretacao_explica_quando_alternativas_convergem(self):
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        texto = resultado['interpretacao']
+        self.assertIn('área', texto)
+        self.assertIn('sobrep', texto.lower())
+        self.assertNotIn('recomendamos', texto.lower())
+
+    def test_h_wired_em_executar_investigacao_completa(self):
+        metadata = aud.executar_investigacao_completa()
+        self.assertIn('comparacao_tres_alternativas_metodologicas', metadata)
+
+    def test_i_wired_no_relatorio_markdown(self):
+        metadata = aud.executar_investigacao_completa()
+        relatorio = aud.gerar_relatorio_markdown(metadata)
+        self.assertIn('três alternativas metodológicas', relatorio)
+        self.assertIn('média simples', relatorio.lower())
+        self.assertIn('ponderada pela área', relatorio.lower())
+        self.assertIn('união dos 34 polígonos', relatorio)
 
 
 class MontarPropostaContinuidadeTestCase(unittest.TestCase):
@@ -173,6 +279,16 @@ class MontarPropostaContinuidadeTestCase(unittest.TestCase):
         proposta = aud.montar_proposta_continuidade()
         self.assertIsInstance(proposta, list)
         self.assertGreater(len(proposta), 3)
+
+    def test_b_inclui_avaliar_alternativas_antes_de_implementar(self):
+        proposta = ' '.join(aud.montar_proposta_continuidade())
+        self.assertIn('não implementar automaticamente', proposta.lower())
+        self.assertIn('comparar_tres_alternativas_metodologicas', proposta)
+
+    def test_c_inclui_revisitar_armadilha_8(self):
+        proposta = ' '.join(aud.montar_proposta_continuidade())
+        self.assertIn('armadilha 8', proposta)
+        self.assertIn('anonimização', proposta.lower())
 
 
 class ExecutarInvestigacaoCompletaEndToEndTestCase(unittest.TestCase):

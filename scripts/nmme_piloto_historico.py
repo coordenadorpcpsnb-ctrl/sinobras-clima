@@ -129,12 +129,21 @@ FONTES_NAO_CONFIRMADAS = {'CHC-Preliminar', 'OpenMeteo-ERA5'}
 # verificadas documentalmente (ver docs/nmme-fase2c2-auditoria-chirps-
 # sinobras.md) — o rótulo abaixo reflete isso: informação do
 # responsável pelos dados, não um fato comprovado por este módulo.
+#
+# Revisão pontual (5ª rodada, 2026) — precisão adicional confirmada
+# pelo responsável pelos dados: a estimativa por fazenda é ZONAL
+# (média dos pixels CHIRPS dentro do polígono de cada fazenda), não
+# pontual (não é 1 pixel/coordenada única por fazenda). O critério de
+# inclusão de pixel (centro dentro do polígono? qualquer sobreposição?
+# fração de área?) e o tratamento de pixels parcialmente interceptados
+# continuam NÃO verificados documentalmente.
 ANO_FIM_MERRA2 = 1995   # README.md — 1981-1995 MERRA-2, 1996+ Sinobras
 PROCEDENCIA_MERRA2 = 'MERRA-2 (reanálise NASA, README.md: baseline 1981-1995)'
 PROCEDENCIA_ESTACAO_SINOBRAS = (
-    'SINOBRAS por fazenda (estimativa CHIRPS, informada pelo responsável pelos dados — NÃO '
-    'pluviômetro confirmado; versão/metodologia de extração ainda não verificadas '
-    'documentalmente; README.md: baseline 1996-presente)'
+    'SINOBRAS por fazenda (estimativa CHIRPS ZONAL — média dos pixels dentro do polígono de '
+    'cada fazenda, informada pelo responsável pelos dados — NÃO pluviômetro confirmado; '
+    'versão do CHIRPS, critério de inclusão de pixel e processamento temporal ainda não '
+    'verificados documentalmente; README.md: baseline 1996-presente)'
 )
 PROCEDENCIA_CHIRPS_FINAL = 'CHIRPS Final (fonte=CHIRPS, fetch_monthly_data.py)'
 PROCEDENCIA_CHC_PRELIMINAR = 'CHC Preliminary (fonte=CHC-Preliminar, fetch_monthly_data.py — preliminar/estimado)'
@@ -516,10 +525,11 @@ def avaliar_aptidao_referencia_observacional(cobertura_df, distancia_km=None, po
 
     if procedencia_pos_1996_nao_instrumental:
         bloqueios.append(
-            'referência pós-1996 é estimativa CHIRPS por fazenda (informada pelo responsável '
-            'pelos dados — NÃO leitura direta de pluviômetro confirmada; a empresa não tem '
-            'pluviômetro em todas as fazendas; versão/metodologia de extração do CHIRPS ainda '
-            'não verificadas documentalmente) — decisão explícita pendente '
+            'referência pós-1996 é estimativa CHIRPS ZONAL por fazenda (média dos pixels dentro '
+            'do polígono de cada fazenda, informada pelo responsável pelos dados — NÃO leitura '
+            'direta de pluviômetro confirmada; a empresa não tem pluviômetro em todas as '
+            'fazendas; versão do CHIRPS, critério de inclusão de pixel e processamento temporal '
+            'ainda não verificados documentalmente) — decisão explícita pendente '
             '(docs/nmme-fase2c2-auditoria-chirps-sinobras.md)')
 
     return {

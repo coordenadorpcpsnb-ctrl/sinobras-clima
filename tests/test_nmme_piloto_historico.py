@@ -615,6 +615,21 @@ class AptidaoReferenciaObservacionalTestCase(unittest.TestCase):
         self.assertTrue(any('correspondência espacial' in m for m in aptidao['motivos_bloqueio']))
         self.assertEqual(len(aptidao['motivos_bloqueio']), 2)
 
+    def test_g2_bloqueio_chirps_menciona_zonal(self):
+        """5ª rodada (2026) — precisão adicional: a estimativa é ZONAL
+        (média dos pixels dentro do polígono), não pontual."""
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(
+            self._cobertura_perfeita(), procedencia_pos_1996_nao_instrumental=True)
+        self.assertTrue(any('ZONAL' in m for m in aptidao['motivos_bloqueio']))
+        self.assertTrue(any('polígono' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_procedencia_estacao_sinobras_menciona_zonal(self):
+        """5ª rodada (2026) — a constante reusada em toda a cadeia de
+        auditoria reflete a metodologia zonal confirmada pelo
+        responsável pelos dados."""
+        self.assertIn('ZONAL', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertIn('polígono', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+
 
 class RepresentacaoDiferenteTestCase(unittest.TestCase):
     """Seção 4 da tarefa — qualquer origem que usar uma representação

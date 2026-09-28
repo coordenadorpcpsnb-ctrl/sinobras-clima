@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
 nmme_auditoria_chirps_sinobras.py — Fase 2C.2, investigação dedicada
-da reinterpretação CHIRPS (4ª rodada, 2026).
+da reinterpretação CHIRPS (4ª rodada, 2026) e do refinamento zonal
+(5ª rodada, 2026).
 
-Contexto: o responsável pelos dados informou que SINOBRAS.csv
-(registros por fazenda, 1996-2025, já auditado por
+Contexto (4ª rodada): o responsável pelos dados informou que
+SINOBRAS.csv (registros por fazenda, 1996-2025, já auditado por
 scripts/nmme_auditoria_sinobras_por_fazenda.py) contém ESTIMATIVAS
 extraídas do CHIRPS por fazenda — não leituras diretas de pluviômetro.
-A empresa não tem pluviômetro em todas as fazendas. A versão e a
-metodologia de extração do CHIRPS usadas para produzir SINOBRAS.csv
-ainda NÃO foram verificadas documentalmente.
+A empresa não tem pluviômetro em todas as fazendas.
+
+Contexto (5ª rodada, refinamento): o responsável pelos dados confirmou
+que a extração é ZONAL — média dos pixels CHIRPS contidos dentro do
+polígono de CADA fazenda, não um ponto único. A versão do CHIRPS, o
+critério de inclusão de pixel na borda do polígono, o tratamento de
+pixel parcialmente interceptado e o processamento temporal ainda NÃO
+foram verificados documentalmente.
 
 Este módulo:
 1. Compara `data/serie_subst.csv` (que reproduz SINOBRAS.csv para
@@ -20,9 +26,16 @@ Este módulo:
    já extraído neste repositório para o MESMO ponto. Nunca presume
    que os dois vêm da mesma metodologia — só compara.
 2. Lista as informações necessárias para reproduzir a extração de
-   SINOBRAS.csv (versão do CHIRPS, coordenadas/polígonos por fazenda,
-   resolução, agregação espacial, processamento temporal, unidades).
-3. Avalia a viabilidade técnica de uma referência CHIRPS espacial e
+   SINOBRAS.csv (versão do CHIRPS, polígono por fazenda, critério de
+   inclusão/tratamento de pixel na borda, processamento temporal,
+   unidades).
+3. Compara METODOLOGICAMENTE (5ª rodada) três alternativas de
+   referência regional apontadas pelo responsável pelos dados — média
+   simples das 34 fazendas (atual), média ponderada por área do
+   polígono, e média zonal sobre a união dos polígonos — e a
+   possibilidade (inverificável sem os polígonos) de sobreposição
+   espacial entre eles. Nenhuma das três é calculada ou implementada.
+4. Avalia a viabilidade técnica de uma referência CHIRPS espacial e
    temporalmente consistente para 1991-2011, informada pelas
    capacidades JÁ EXISTENTES de scripts/_chirps.py (nunca executa uma
    nova extração — isso seria substituir a referência observacional
@@ -31,9 +44,10 @@ Este módulo:
 Nunca calcula skill, nunca recalcula previsões/indicadores de
 desempenho, nunca substitui a referência observacional de produção,
 nunca modifica dados históricos, nunca altera o dashboard ou os
-modelos climáticos — só lê data/chirps_1981_2025.csv e
-data/serie_subst.csv (ambos já no repositório) e escreve um relatório
-técnico + tabelas de auditoria em artifacts/.
+modelos climáticos, nunca implementa nenhuma das três alternativas
+metodológicas — só lê data/chirps_1981_2025.csv e data/serie_subst.csv
+(ambos já no repositório) e escreve um relatório técnico + tabelas de
+auditoria em artifacts/.
 
 Roda com:
     python scripts/nmme_auditoria_chirps_sinobras.py --dry-run-plan
@@ -136,9 +150,14 @@ def comparar_chirps_ponto_com_serie_producao(chirps_df, serie_df):
             f"{resumo_pos['n_meses_identicos_diff_menor_0_01mm']}/{len(pos_1996)} meses "
             "IDÊNTICOS — a correlação alta e a razão mediana próxima de 1 são CONSISTENTES com "
             "ambas as séries terem origem CHIRPS, mas a ausência de identidade numérica mês a "
-            "mês mostra que NÃO são a mesma extração (ponto/pixel diferente, versão diferente do "
-            "CHIRPS, ou agregação espacial diferente — todas possibilidades em aberto, nenhuma "
-            "confirmada). Pré-1996: correlação "
+            "mês mostra que NÃO são a mesma extração. Revisão pontual (5ª rodada, 2026): uma "
+            "das causas dessa não-identidade deixou de ser hipótese — o responsável pelos dados "
+            "confirmou que SINOBRAS.csv é extração ZONAL (média dos pixels dentro do polígono de "
+            "cada fazenda), enquanto data/chirps_1981_2025.csv é PONTUAL (1 valor no centroide "
+            "agregado); ponto vs. zonal é agora um FATO conhecido, não uma das possibilidades em "
+            "aberto. As demais causas seguem em aberto, nenhuma confirmada: versão diferente do "
+            "CHIRPS servida pelo ClimateSERV, critério de inclusão de pixel na borda do polígono, "
+            "e processamento temporal diferente (ver item 3 abaixo). Pré-1996: correlação "
             f"{resumo_pre['correlacao']} — mais alta ainda que pós-1996, um achado "
             "curioso que NÃO deve ser lido como prova de que o trecho MERRA-2/3-municípios "
             "também é CHIRPS (isso permanece não comprovado, item 7 da tarefa) — só registrado "
@@ -157,38 +176,184 @@ def montar_lista_informacoes_necessarias_reproducao():
     explicitamente com o que JÁ é conhecido para
     data/chirps_1981_2025.csv (METODOLOGIA_CHIRPS_PONTO_CONHECIDA),
     para deixar claro que ter UM CHIRPS no repositório não supre a
-    necessidade de conhecer o OUTRO."""
+    necessidade de conhecer o OUTRO.
+
+    Revisão pontual (5ª rodada, 2026) — o responsável pelos dados
+    confirmou que a extração é ZONAL (média dos pixels dentro do
+    polígono de cada fazenda). Isso RESOLVE parcialmente o antigo item
+    de "resolução/regra de agregação espacial" (já sabemos que é
+    zonal, não pontual) mas ABRE dois itens mais específicos: o
+    critério de inclusão de pixel na borda do polígono, e o
+    tratamento de pixels parcialmente interceptados — nenhum dos dois
+    confirmado."""
     return [
         "Versão do produto CHIRPS usada para gerar SINOBRAS.csv (ex.: CHIRPS v2.0 Final vs. "
         "Preliminary) e a data de extração. Contraste: nem mesmo data/chirps_1981_2025.csv "
         "(extraído NESTE repositório) tem isso documentado — ClimateSERV serve a versão "
         "corrente, sem versionamento explícito registrado em "
-        "scripts/backfill_chirps_historico.py.",
-        "Coordenada ou polígono usado para extrair a estimativa de CADA uma das 34 fazendas — "
-        "SINOBRAS.csv não traz coordenadas (achado de "
-        "scripts/nmme_auditoria_sinobras_por_fazenda.py). Sem isso, não é possível saber se os "
-        "grupos de séries idênticas (FAZ02/03/04/05/08/09/19 e FAZ07/FAZ15) correspondem a "
-        "fazendas no mesmo pixel CHIRPS.",
-        "Resolução espacial usada — CHIRPS nativo é 0,05° (~5,5km no equador); confirmar se a "
-        "extração de SINOBRAS.csv usou essa resolução nativa (ponto único por fazenda, como "
-        "scripts/_chirps.py::buscar_prec_chirps faz para o centroide) ou uma agregação sobre "
-        "múltiplos pixels por fazenda (análogo a buscar_prec_chirps_zonal, mas por fazenda "
-        "individual).",
-        "Regra de agregação espacial — se mais de um pixel CHIRPS foi usado por fazenda, qual "
-        "critério (média simples? ponderada pela área de sobreposição?) resume os valores.",
+        "scripts/backfill_chirps_historico.py. PENDENTE.",
+        "Polígono usado para extrair a estimativa ZONAL de CADA uma das 34 fazendas (não uma "
+        "coordenada única — a extração é confirmadamente zonal) — SINOBRAS.csv não traz "
+        "polígonos nem coordenadas (achado de scripts/nmme_auditoria_sinobras_por_fazenda.py). "
+        "Sem isso, não é possível saber se os grupos de séries idênticas (FAZ02/03/04/05/08/"
+        "09/19 e FAZ07/FAZ15) correspondem a fazendas cujos polígonos cobrem o MESMO conjunto "
+        "de pixels CHIRPS. PENDENTE.",
+        "RESOLVIDO (5ª rodada): a agregação espacial é ZONAL — média dos pixels CHIRPS dentro "
+        "do polígono de cada fazenda (CHIRPS nativo 0,05°, ~5,5km no equador), confirmado pelo "
+        "responsável pelos dados. Contraste: data/chirps_1981_2025.csv (já extraído neste "
+        "repositório) é PONTUAL — 1 valor no centroide agregado, uma metodologia diferente por "
+        "desenho, não uma dúvida a resolver.",
+        "Critério de inclusão de pixel na borda do polígono — centro do pixel dentro do "
+        "polígono? qualquer sobreposição, por menor que seja? fração de área ponderada? — "
+        "determina quantos pixels entram na média de cada fazenda. PENDENTE.",
+        "Tratamento de pixels parcialmente interceptados pela borda do polígono — incluídos "
+        "por inteiro, excluídos, ou ponderados pela fração de área dentro do polígono? "
+        "PENDENTE.",
         "Processamento temporal — CHIRPS nativo é diário; confirmar a regra de agregação "
-        "diária→mensal (soma simples do mês? exigência de cobertura mínima de dias válidos?).",
+        "diária→mensal (soma simples do mês? exigência de cobertura mínima de dias válidos?). "
+        "PENDENTE.",
         "Unidades e arredondamento — SINOBRAS.csv está em mm/mês, valores inteiros; CHIRPS "
         "nativo é mm/dia. Confirmar se o arredondamento para inteiro foi feito na extração ou "
         "em uma etapa posterior (perda de precisão relevante para meses de chuva baixa, ex.: "
-        "jul/ago, onde CLAUDE.md armadilha 7 já documenta viés conhecido de fontes de satélite).",
+        "jul/ago, onde CLAUDE.md armadilha 7 já documenta viés conhecido de fontes de satélite). "
+        "PENDENTE.",
         "Ferramenta/serviço de extração usado (ClimateSERV, como este repositório usa? Google "
         "Earth Engine? download direto dos GeoTIFFs do CHIRPS?) — determina quais dos vieses "
         "conhecidos de ClimateSERV (CLAUDE.md armadilha 7, tabela ERA5/CHIRPS por mês) se "
-        "aplicam ou não a SINOBRAS.csv.",
+        "aplicam ou não a SINOBRAS.csv. PENDENTE.",
         "Confirmação de quais das 34 fazendas — se alguma — têm, além da estimativa CHIRPS, um "
-        "pluviômetro físico real instalado; a empresa não tem pluviômetro em todas.",
+        "pluviômetro físico real instalado; a empresa não tem pluviômetro em todas. PENDENTE.",
     ]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Itens 4/5/6 da 5ª rodada — comparação metodológica de três alternativas
+# de referência regional (SEM calcular ou implementar nenhuma delas)
+# ══════════════════════════════════════════════════════════════════════════
+
+def comparar_tres_alternativas_metodologicas():
+    """5ª rodada (2026), atividades 5 e 6 — compara METODOLOGICAMENTE
+    (nunca computa, nunca implementa) as três possibilidades de
+    referência regional apontadas pelo responsável pelos dados:
+
+        (a) média simples das estimativas das 34 fazendas — a
+            metodologia HISTÓRICA, já em produção
+            (`df_new.groupby(['ano','mes'])['prec_mm'].mean()` em
+            scripts/update_dashboard.py), peso IGUAL por fazenda,
+            independente da área do seu polígono;
+        (b) média das estimativas das 34 fazendas ponderada pela
+            respectiva área do polígono;
+        (c) média zonal diretamente sobre a UNIÃO dos polígonos das 34
+            fazendas, contando cada parcela espacial (pixel) uma única
+            vez, não uma soma/média de 34 médias por fazenda.
+
+    Atividade 6 é explícita: "Não implementar automaticamente nenhuma
+    das alternativas. Primeiro, avaliar suas diferenças metodológicas
+    e a possibilidade de sobreposição espacial." Esta função só avalia
+    — nenhuma das três alternativas é calculada ou escrita em nenhum
+    arquivo de dados por este módulo.
+
+    Ponto central, matemático e não dependente de dado ainda não
+    disponível: (a) e (b) só coincidem entre si se as 34 fazendas
+    tiverem área IGUAL (o que não se pode presumir sem os polígonos);
+    (b) e (c) só coincidem entre si se os polígonos das 34 fazendas
+    NÃO se sobrepuserem espacialmente (sobreposição faria (b) contar a
+    área sobreposta mais de uma vez, proporcionalmente a quantas
+    fazendas a compartilham — (c) conta cada parcela uma única vez por
+    desenho). Nenhuma das duas condições é verificável sem os
+    polígonos — que este repositório decidiu deliberadamente não
+    manter (CLAUDE.md armadilha 8)."""
+    alternativa_a = {
+        'nome': 'Média simples das 34 estimativas por fazenda (metodologia histórica, atual)',
+        'formula': 'média aritmética simples de prec_mm entre as 34 fazendas, por ano/mês',
+        'onde_ja_esta_implementada': "scripts/update_dashboard.py — "
+                                      "df_new.groupby(['ano','mes'])['prec_mm'].mean()",
+        'peso_por_fazenda': 'IGUAL para todas as 34 fazendas, independente da área do polígono',
+        'requisito_de_dados_adicional': 'nenhum — já é a série de produção (data/serie_subst.csv)',
+        'representa_area_real_quando': 'as 34 fazendas têm área igual entre si (não verificável '
+                                        'sem os polígonos) E os polígonos não se sobrepõem',
+    }
+    alternativa_b = {
+        'nome': 'Média das 34 estimativas por fazenda, ponderada pela área do polígono',
+        'formula': 'média ponderada de prec_mm entre as 34 fazendas, peso = área do polígono de '
+                    'cada fazenda, por ano/mês',
+        'onde_ja_esta_implementada': 'em nenhum lugar — não existe neste repositório',
+        'peso_por_fazenda': 'proporcional à área do polígono de cada fazenda',
+        'requisito_de_dados_adicional': 'a área do polígono de cada uma das 34 fazendas — não '
+                                         'disponível neste repositório (CLAUDE.md armadilha 8)',
+        'representa_area_real_quando': 'os polígonos das 34 fazendas não se sobrepõem entre si '
+                                        '(não verificável sem os polígonos)',
+    }
+    alternativa_c = {
+        'nome': 'Média zonal direta sobre a união dos 34 polígonos',
+        'formula': 'média dos pixels CHIRPS contidos na união geométrica dos 34 polígonos, cada '
+                    'pixel contado uma única vez, independente de quantas fazendas ele toque',
+        'onde_ja_esta_implementada': 'em nenhum lugar — scripts/_chirps.py::'
+                                      'buscar_prec_chirps_zonal existe, mas opera sobre o '
+                                      'envelope ÚNICO e ANONIMIZADO das 34 fazendas (CLAUDE.md '
+                                      'armadilha 8), não sobre a união exata dos 34 polígonos '
+                                      'individuais — o envelope é MAIOR que essa união (85.020,5 '
+                                      'ha vs. 48.737,3 ha da união dos 37 perímetros reais '
+                                      'antigos, por preencher reentrâncias entre fazendas)',
+        'peso_por_fazenda': 'não se aplica — não é uma média DE fazendas, é uma média direta '
+                             'sobre o espaço; equivale a ponderar por área só no caso sem '
+                             'sobreposição',
+        'requisito_de_dados_adicional': 'os 34 polígonos individuais (para a união exata) OU o '
+                                         'envelope único já existente (para uma aproximação '
+                                         'MAIOR que a união real, com área desconhecida de quanto '
+                                         'excede) + uma extração zonal nova sobre essa geometria',
+        'representa_area_real_quando': 'sempre — é a definição de área real, por construção; não '
+                                        'depende de as fazendas terem área igual nem de ausência '
+                                        'de sobreposição',
+    }
+    possibilidade_sobreposicao = {
+        'verificavel_com_os_dados_atuais': False,
+        'motivo': 'sobreposição espacial entre polígonos de fazenda só é verificável com os '
+                  'polígonos em mãos — este repositório não os mantém (CLAUDE.md armadilha 8, '
+                  'decisão deliberada de anonimização)',
+        'sinal_indireto_disponivel': 'os 2 grupos de séries mensais idênticas identificados em '
+                                      'scripts/nmme_auditoria_sinobras_por_fazenda.py '
+                                      '(FAZ02/03/04/05/08/09/19 e FAZ07/FAZ15) são um sinal de '
+                                      'que ALGUMAS fazendas compartilham o mesmo CONJUNTO DE '
+                                      'PIXELS CHIRPS cobertos — mas isso NÃO é a mesma coisa que '
+                                      'sobreposição de POLÍGONO: polígonos vizinhos, sem nenhuma '
+                                      'sobreposição de área, podem ainda assim cair sobre os '
+                                      'mesmos pixels grosseiros do CHIRPS (0,05°, ~5,5km) se '
+                                      'forem pequenos e próximos. Compartilhar pixel NÃO implica '
+                                      'sobrepor polígono, e sobrepor polígono não é a única causa '
+                                      'possível de série idêntica — nenhuma das duas é presumida '
+                                      'aqui.',
+        'interpretacao': 'a possibilidade de sobreposição espacial entre os polígonos das 34 '
+                          'fazendas permanece EM ABERTO, nem confirmada nem descartada — este '
+                          'módulo não afirma que existe, nem que não existe.',
+    }
+    return {
+        'alternativa_a_media_simples_atual': alternativa_a,
+        'alternativa_b_media_ponderada_por_area': alternativa_b,
+        'alternativa_c_zonal_sobre_uniao': alternativa_c,
+        'possibilidade_de_sobreposicao_espacial': possibilidade_sobreposicao,
+        'nenhuma_alternativa_calculada_ou_implementada': True,
+        'interpretacao': (
+            "As três alternativas NÃO são intercambiáveis por desenho, e nenhuma foi calculada "
+            "ou implementada aqui (atividade 6). (a), a metodologia histórica em produção, dá "
+            "peso IGUAL às 34 fazendas independente de área — diverge de (b) sempre que as áreas "
+            "das fazendas forem desiguais (o que não se pode presumir sem os polígonos, mas é "
+            "improvável que 34 fazendas tenham área exatamente igual). (b) e (c) só coincidem "
+            "entre si se os 34 polígonos NÃO se sobrepuserem espacialmente — com sobreposição, "
+            "(b) conta a área compartilhada mais de uma vez (proporcionalmente a quantas fazendas "
+            "a reivindicam), enquanto (c) conta cada parcela espacial uma única vez, por "
+            "construção. (c) é a mais correta espacialmente, mas exige infraestrutura que não "
+            "existe hoje: os 34 polígonos individuais (ou, como aproximação com área desconhecida "
+            "de erro, o envelope único e anonimizado) e uma extração zonal sobre essa geometria. "
+            "A possibilidade de sobreposição espacial entre os polígonos é HOJE INVERIFICÁVEL sem "
+            "os próprios polígonos — o sinal indireto disponível (grupos de séries mensais "
+            "idênticas) indica compartilhamento de PIXEL, não necessariamente sobreposição de "
+            "POLÍGONO, e as duas coisas não devem ser confundidas. Nenhuma decisão sobre qual "
+            "alternativa adotar é tomada aqui — essa é uma decisão explícita e futura, condicionada "
+            "a primeiro obter os polígonos (o que por sua vez exige revisitar CLAUDE.md armadilha "
+            "8) e/ou aceitar a aproximação do envelope único já existente."
+        ),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -202,7 +367,17 @@ def avaliar_viabilidade_referencia_chirps_1991_2011():
     observacional de produção não pode ser substituída
     automaticamente). Informada pelas capacidades JÁ EXISTENTES e já
     exercitadas de scripts/_chirps.py e
-    scripts/backfill_chirps_historico.py."""
+    scripts/backfill_chirps_historico.py.
+
+    Revisão pontual (5ª rodada, 2026) — com a extração ZONAL de
+    SINOBRAS.csv confirmada (não mais hipotética), a ressalva (2)
+    abaixo deixou de ser "ponto vs. zonal, possibilidade em aberto" e
+    passou a ser um FATO: data/chirps_1981_2025.csv é ponto único,
+    SINOBRAS.csv é zonal por polígono — são metodologias DIFERENTES
+    por desenho, não uma dúvida a resolver. Reproduzir a metodologia
+    de SINOBRAS.csv exigiria extração zonal POR FAZENDA INDIVIDUAL —
+    que colide com a decisão deliberada de CLAUDE.md armadilha 8 de
+    não manter polígonos por fazenda neste repositório (anonimização)."""
     ja_disponivel = CHIRPS_PONTO_PATH.exists()
     n_meses_1991_2011 = None
     if ja_disponivel:
@@ -213,41 +388,56 @@ def avaliar_viabilidade_referencia_chirps_1991_2011():
         'data_chirps_1981_2025_ja_cobre_1991_2011': ja_disponivel,
         'n_meses_1991_2011_ja_extraidos': n_meses_1991_2011,
         'n_meses_1991_2011_esperados': 252,   # 21 anos completos x 12
+        'metodologia_ja_extraida_e_pontual_nao_zonal': True,
+        'poligonos_por_fazenda_conflitam_com_claude_md_armadilha_8': True,
         'ferramentas_ja_existentes': {
             'ponto_unico': 'scripts/_chirps.py::buscar_prec_chirps — já usado para gerar '
                             'data/chirps_1981_2025.csv',
             'zonal_envelope': 'scripts/_chirps.py::buscar_prec_chirps_zonal — existe, cobre o '
-                               'envelope das 34 fazendas (CLAUDE.md armadilha 8), mas NUNCA '
-                               'passou pela suíte de falha de tests/test_fetch_fallback.py — '
-                               'promoção a primário é decisão separada, não tomada aqui nem '
-                               'antes.',
+                               'envelope ÚNICO e ANONIMIZADO das 34 fazendas (CLAUDE.md '
+                               'armadilha 8), não os 34 polígonos individuais; NUNCA passou '
+                               'pela suíte de falha de tests/test_fetch_fallback.py — promoção '
+                               'a primário é decisão separada, não tomada aqui nem antes.',
+            'zonal_por_fazenda_individual': 'NÃO EXISTE neste repositório — reproduzir a '
+                                             'metodologia de SINOBRAS.csv (zonal por polígono '
+                                             'de CADA fazenda) exigiria 34 extrações zonais '
+                                             'individuais, uma função ainda não escrita, e 34 '
+                                             'polígonos que o projeto decidiu deliberadamente '
+                                             'não manter no repositório.',
             'quebra_em_blocos': 'scripts/backfill_chirps_historico.py já resolve a limitação de '
                                  'período (ClimateSERV rejeita ~45 anos numa chamada só) — o '
                                  'padrão de blocos de ~10 anos já está implementado e testado '
                                  'contra o servidor real.',
         },
         'interpretacao': (
-            "TECNICAMENTE VIÁVEL, com ressalvas — nunca executado aqui. "
+            "TECNICAMENTE VIÁVEL só para uma referência PONTUAL — nunca executado aqui. "
             f"data/chirps_1981_2025.csv JÁ COBRE 1991-2011 ({n_meses_1991_2011}/252 meses "
             "esperados) com metodologia conhecida (ponto único, centroide das fazendas, "
-            "ClimateSERV) — tecnicamente, boa parte do trabalho de construir uma referência "
-            "CHIRPS consistente para esse período JÁ FOI FEITO, não precisa ser refeito do "
-            "zero. Ressalvas que impedem declarar isso 'pronto': (1) a VERSÃO do CHIRPS servida "
-            "pelo ClimateSERV pode ter mudado desde a extração original (não versionada, não "
-            "documentada — mesma lacuna que impede reproduzir SINOBRAS.csv, item 4 acima); "
-            "reextrair hoje pode não bater byte a byte com o arquivo já salvo; (2) ponto único "
-            "vs. zonal — o envelope de 34 fazendas tem ~85.020 ha, MUITO maior que 1 pixel "
-            "CHIRPS (0,05°, ~30 km²); um ponto único no centroide é um proxy, não uma média "
-            "representativa da área toda — buscar_prec_chirps_zonal existe mas não tem a "
-            "cobertura de teste de falha exigida para promoção a primário; (3) ainda que uma "
-            "referência CHIRPS ponto-único fosse aceita, ela SUBSTITUIRIA a referência "
-            "observacional atual (MERRA-2/3-municípios pré-1996 + SINOBRAS.csv pós-1996) — "
-            "decisão explícita que este módulo NÃO toma (restrição desta tarefa: não substituir "
-            "automaticamente a referência observacional). Próximo passo recomendado, se essa "
-            "substituição for aprovada no futuro: (a) reextrair 1991-2011 com "
-            "buscar_prec_chirps e comparar contra o data/chirps_1981_2025.csv já salvo para "
-            "confirmar estabilidade de versão; (b) rodar buscar_prec_chirps_zonal pela suíte de "
-            "falha de tests/test_fetch_fallback.py antes de considerar promovê-lo."
+            "ClimateSERV). Mas essa metodologia NÃO é a mesma de SINOBRAS.csv (zonal por "
+            "polígono de fazenda, confirmado pelo responsável pelos dados) — não é mais uma "
+            "ressalva em aberto, é um fato: comparar as duas sem marcar essa diferença seria "
+            "comparar metodologias distintas como se fossem a mesma. Ressalvas: (1) a VERSÃO "
+            "do CHIRPS servida pelo ClimateSERV pode ter mudado desde a extração original (não "
+            "versionada, não documentada — mesma lacuna que impede reproduzir SINOBRAS.csv, "
+            "item 4 acima); reextrair hoje pode não bater byte a byte com o arquivo já salvo; "
+            "(2) reproduzir a metodologia ZONAL POR FAZENDA de SINOBRAS.csv exigiria: (a) os "
+            "34 polígonos individuais, que o projeto decidiu deliberadamente NÃO manter neste "
+            "repositório (CLAUDE.md armadilha 8 — anonimização, decisão que precisaria ser "
+            "revisitada explicitamente, não contornada); e (b) uma função de extração zonal "
+            "POR FAZENDA que ainda não existe (buscar_prec_chirps_zonal hoje opera só sobre o "
+            "envelope único anonimizado, não 34 polígonos individuais); (3) mesmo uma "
+            "referência zonal sobre a UNIÃO do envelope (sem precisar dos 34 polígonos "
+            "individuais) teria o problema de buscar_prec_chirps_zonal nunca ter passado pela "
+            "suíte de falha de tests/test_fetch_fallback.py; (4) qualquer uma dessas "
+            "referências, se construída, SUBSTITUIRIA a referência observacional atual — "
+            "decisão explícita que este módulo NÃO toma (restrição desta tarefa). Próximo "
+            "passo recomendado, se aprovado no futuro: (a) reextrair 1991-2011 com "
+            "buscar_prec_chirps (ponto) e comparar contra o data/chirps_1981_2025.csv já "
+            "salvo para confirmar estabilidade de versão; (b) decidir explicitamente se manter "
+            "polígonos por fazenda é aceitável (revisão da armadilha 8) antes de cogitar "
+            "reproduzir a metodologia zonal por fazenda; (c) rodar buscar_prec_chirps_zonal "
+            "pela suíte de falha de tests/test_fetch_fallback.py antes de considerar promover "
+            "qualquer variante zonal a primário."
         ),
     }
 
@@ -259,18 +449,39 @@ def avaliar_viabilidade_referencia_chirps_1991_2011():
 def montar_proposta_continuidade():
     """Restrição desta tarefa — "produzir... uma proposta de
     continuidade". Lista objetiva de próximos passos, em ordem de
-    esforço crescente, nenhum executado aqui."""
+    esforço crescente, nenhum executado aqui.
+
+    5ª rodada (2026) — acrescentados dois passos explícitos pedidos
+    pelas atividades 5/6 do responsável pelos dados: avaliar as três
+    alternativas metodológicas (e a possibilidade de sobreposição
+    espacial) ANTES de implementar qualquer uma delas, e revisitar
+    explicitamente CLAUDE.md armadilha 8 antes de cogitar manter
+    polígonos por fazenda no repositório."""
     return [
         "Obter do responsável pelos dados um documento técnico (não apenas comunicação verbal) "
-        "descrevendo a extração de SINOBRAS.csv: versão do CHIRPS, ferramenta, coordenadas/"
-        "polígonos por fazenda, resolução, agregação espacial e temporal, unidades — ver "
+        "descrevendo a extração de SINOBRAS.csv: versão do CHIRPS, ferramenta, polígono por "
+        "fazenda, critério de inclusão de pixel na borda, tratamento de pixel parcialmente "
+        "interceptado, processamento temporal, unidades — ver "
         "montar_lista_informacoes_necessarias_reproducao() para a lista completa.",
         "Obter confirmação explícita de quais das 34 fazendas — se alguma — têm pluviômetro "
         "físico real, para não tratar nenhuma fazenda como instrumentada sem confirmação.",
-        "Com as coordenadas/polígonos em mãos, verificar computacionalmente se os 2 grupos de "
-        "séries idênticas (FAZ02/03/04/05/08/09/19 e FAZ07/FAZ15) correspondem a fazendas no "
-        "mesmo pixel CHIRPS (0,05°) — isso confirmaria ou refutaria a hipótese de "
-        "compartilhamento de pixel como explicação, sem precisar reextrair nada.",
+        "Com os polígonos em mãos, verificar computacionalmente se os 2 grupos de séries "
+        "idênticas (FAZ02/03/04/05/08/09/19 e FAZ07/FAZ15) correspondem a fazendas cujos "
+        "polígonos cobrem o mesmo conjunto de pixels CHIRPS (0,05°) — isso confirmaria ou "
+        "refutaria a hipótese de compartilhamento de pixel como explicação, sem presumir que "
+        "compartilhar pixel implica sobrepor polígono (ver "
+        "comparar_tres_alternativas_metodologicas()).",
+        "Avaliar EXPLICITAMENTE, antes de implementar qualquer uma, as diferenças metodológicas "
+        "entre as três alternativas de referência regional (média simples atual, média ponderada "
+        "por área, média zonal sobre a união dos polígonos) e a possibilidade de sobreposição "
+        "espacial entre os 34 polígonos — ver comparar_tres_alternativas_metodologicas() para a "
+        "comparação já feita aqui, sem cálculo ou implementação de nenhuma delas. Atividade 6 "
+        "desta rodada é explícita: não implementar automaticamente nenhuma alternativa.",
+        "Revisitar EXPLICITAMENTE a decisão de CLAUDE.md armadilha 8 (não manter polígonos por "
+        "fazenda no repositório, por anonimização) antes de cogitar qualquer alternativa que "
+        "exija esses polígonos (b e c) — essa é uma decisão de privacidade/governança de dados, "
+        "não uma decisão técnica, e não deve ser contornada implicitamente ao buscar os "
+        "polígonos por outra via.",
         "Reextrair 1991-2011 com scripts/_chirps.py::buscar_prec_chirps (ponto único, já "
         "testado) e comparar contra data/chirps_1981_2025.csv já salvo — se os valores "
         "baterem, confirma estabilidade de versão do CHIRPS ao longo do tempo; se não baterem, "
@@ -280,9 +491,12 @@ def montar_proposta_continuidade():
         "promovê-lo a fonte primária para qualquer finalidade.",
         "Só depois de tudo acima: decisão EXPLÍCITA e documentada (não automática, fora do "
         "escopo desta tarefa) sobre se/como uma referência CHIRPS construída internamente "
-        "substituiria, complementaria, ou seria reportada lado a lado com a referência "
-        "observacional atual (MERRA-2/3-municípios pré-1996 + SINOBRAS.csv pós-1996) para fins "
-        "de validação do CFSv2.",
+        "(pontual, ponderada por área, ou zonal sobre a união dos polígonos) substituiria, "
+        "complementaria, ou seria reportada lado a lado com a referência observacional atual "
+        "(MERRA-2/3-municípios pré-1996 + SINOBRAS.csv pós-1996) para fins de validação do "
+        "CFSv2, considerando a diferença entre a célula de grade do modelo e a área representada "
+        "pelos polígonos (ver descasamento_de_suporte_espacial em "
+        "scripts/nmme_auditoria_observacional_historica.py).",
     ]
 
 
@@ -295,14 +509,16 @@ def executar_investigacao_completa():
     serie_df = carregar_serie_producao()
     comparacao = comparar_chirps_ponto_com_serie_producao(chirps_df, serie_df)
     informacoes_necessarias = montar_lista_informacoes_necessarias_reproducao()
+    tres_alternativas = comparar_tres_alternativas_metodologicas()
     viabilidade = avaliar_viabilidade_referencia_chirps_1991_2011()
     proposta_continuidade = montar_proposta_continuidade()
 
     metadata = {
-        'fase': '2C.2 — investigação dedicada da reinterpretação CHIRPS (4ª rodada, 2026)',
+        'fase': '2C.2 — investigação dedicada da reinterpretação CHIRPS (4ª/5ª rodadas, 2026)',
         'metodologia_chirps_ponto_conhecida': METODOLOGIA_CHIRPS_PONTO_CONHECIDA,
         'comparacao_chirps_ponto_vs_serie_producao': comparacao,
         'informacoes_necessarias_para_reproducao': informacoes_necessarias,
+        'comparacao_tres_alternativas_metodologicas': tres_alternativas,
         'viabilidade_referencia_chirps_1991_2011': viabilidade,
         'proposta_de_continuidade': proposta_continuidade,
         'nenhuma_skill_calculada': True,
@@ -319,6 +535,7 @@ def executar_investigacao_completa():
 def gerar_relatorio_markdown(metadata):
     meto = metadata['metodologia_chirps_ponto_conhecida']
     comp = metadata['comparacao_chirps_ponto_vs_serie_producao']
+    tres = metadata['comparacao_tres_alternativas_metodologicas']
     viab = metadata['viabilidade_referencia_chirps_1991_2011']
 
     linhas = [
@@ -333,9 +550,10 @@ def gerar_relatorio_markdown(metadata):
         "O responsável pelos dados informou que SINOBRAS.csv (registros por fazenda, "
         "1996-2025, já auditado em docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md) contém "
         "ESTIMATIVAS extraídas do CHIRPS por fazenda — não leituras diretas de pluviômetro. A "
-        "empresa não tem pluviômetro em todas as fazendas. A classificação em "
-        "docs/nmme-fase2c2-auditoria-observacional-historica.md e em "
-        "scripts/nmme_piloto_historico.py foi corrigida para refletir isso (achado "
+        "empresa não tem pluviômetro em todas as fazendas. Em rodada posterior, confirmou que a "
+        "extração é ZONAL — média dos pixels CHIRPS dentro do polígono de CADA fazenda, não um "
+        "ponto único. A classificação em docs/nmme-fase2c2-auditoria-observacional-historica.md "
+        "e em scripts/nmme_piloto_historico.py foi corrigida para refletir isso (achado "
         "'reinterpretacao_chirps') — este documento é a investigação dedicada.",
         "",
         "## 1. Metodologia do CHIRPS já extraído neste repositório (referência de contraste)",
@@ -388,16 +606,52 @@ def gerar_relatorio_markdown(metadata):
     ]
     for item in metadata['informacoes_necessarias_para_reproducao']:
         linhas.append(f"- {item}")
+
+    alt_a, alt_b, alt_c = (tres['alternativa_a_media_simples_atual'],
+                            tres['alternativa_b_media_ponderada_por_area'],
+                            tres['alternativa_c_zonal_sobre_uniao'])
+    sobrep = tres['possibilidade_de_sobreposicao_espacial']
     linhas += [
         "",
-        "## 4. Viabilidade de uma referência CHIRPS consistente para 1991-2011",
+        "## 4. Comparação de três alternativas metodológicas para a referência regional "
+        "(5ª rodada)",
+        "",
+        "**Nenhuma das três foi calculada ou implementada — só comparação metodológica "
+        "(atividade 6).**",
+        "",
+        "### (a) Média simples das 34 estimativas por fazenda — metodologia histórica, atual",
+        "",
+        f"- Já implementada em: `{alt_a['onde_ja_esta_implementada']}`.",
+        f"- Peso por fazenda: {alt_a['peso_por_fazenda']}.",
+        f"- Requisito de dados adicional: {alt_a['requisito_de_dados_adicional']}.",
+        "",
+        "### (b) Média das 34 estimativas por fazenda, ponderada pela área do polígono",
+        "",
+        f"- Onde já está implementada: {alt_b['onde_ja_esta_implementada']}.",
+        f"- Peso por fazenda: {alt_b['peso_por_fazenda']}.",
+        f"- Requisito de dados adicional: {alt_b['requisito_de_dados_adicional']}.",
+        "",
+        "### (c) Média zonal direta sobre a união dos 34 polígonos",
+        "",
+        f"- Onde já está implementada: {alt_c['onde_ja_esta_implementada']}.",
+        f"- Requisito de dados adicional: {alt_c['requisito_de_dados_adicional']}.",
+        "",
+        "### Possibilidade de sobreposição espacial entre os polígonos",
+        "",
+        f"- Verificável com os dados atuais: {sobrep['verificavel_com_os_dados_atuais']}.",
+        f"- {sobrep['sinal_indireto_disponivel']}",
+        f"- {sobrep['interpretacao']}",
+        "",
+        f"- {tres['interpretacao']}",
+        "",
+        "## 5. Viabilidade de uma referência CHIRPS consistente para 1991-2011",
         "",
         f"- data/chirps_1981_2025.csv já cobre 1991-2011: "
         f"{viab['data_chirps_1981_2025_ja_cobre_1991_2011']} "
         f"({viab['n_meses_1991_2011_ja_extraidos']}/{viab['n_meses_1991_2011_esperados']} meses).",
         f"- {viab['interpretacao']}",
         "",
-        "## 5. Proposta de continuidade",
+        "## 6. Proposta de continuidade",
         "",
     ]
     for i, item in enumerate(metadata['proposta_de_continuidade'], 1):

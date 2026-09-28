@@ -195,9 +195,10 @@ class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
         self.assertIn('SINOBRAS.csv', documentos[0])
 
     def test_d_correspondencia_espacial_registra_necessidade_de_coordenadas(self):
-        """3ª/4ª rodada (ajuste pontual) — pede coordenada/pixel E o
-        mapeamento identificador→instrumento; nunca presume que as 27
-        séries distintas equivalem a 27 locais físicos independentes."""
+        """3ª/4ª/5ª rodada (ajuste pontual) — pede o polígono de "
+        extração E o mapeamento identificador→instrumento; nunca "
+        presume que as 27 séries distintas equivalem a 27 polígonos "
+        físicos independentes."""
         esp = aud.avaliar_correspondencia_espacial()
         self.assertIn('necessidade_de_coordenadas_individuais', esp)
         texto = esp['necessidade_de_coordenadas_individuais']
@@ -205,7 +206,11 @@ class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
         self.assertIn('mapeamento', texto)
         self.assertIn('pluviômetro', texto)
         self.assertIn('CHIRPS', texto)
-        self.assertIn('NUNCA uma contagem de locais físicos OU pixels CHIRPS independentes', texto)
+        self.assertIn('POLÍGONO', texto)
+        self.assertIn('ZONAL', texto)
+        self.assertIn('NUNCA uma contagem de locais físicos OU conjuntos de pixels CHIRPS '
+                       'independentes', texto)
+        self.assertIn('UNIÃO', texto)
 
     def test_f_observacao_pos_1996_registra_34_em_todos_os_360_meses(self):
         """Ajuste pontual 1 (3ª rodada) — o arquivo histórico auditado
@@ -265,8 +270,9 @@ class ReinterpretacaoChirpsTestCase(unittest.TestCase):
     def test_b_wired_em_montar_achados_documentacao(self):
         doc = aud.montar_achados_documentacao()
         self.assertIn('reinterpretacao_chirps', doc)
-        self.assertEqual(doc['reinterpretacao_chirps']['classificacao_corrigida_4a_rodada'],
+        self.assertEqual(doc['reinterpretacao_chirps']['classificacao_refinada_5a_rodada'],
                           pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertTrue(doc['reinterpretacao_chirps']['extracao_e_zonal_por_poligono'])
 
     def test_c_constante_procedencia_ja_reflete_chirps(self):
         """A correção de fundo é no reuso — PROCEDENCIA_ESTACAO_SINOBRAS
@@ -274,6 +280,8 @@ class ReinterpretacaoChirpsTestCase(unittest.TestCase):
         self.assertIn('CHIRPS', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
         self.assertIn('NÃO', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
         self.assertNotIn('leitura direta de campo', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertIn('ZONAL', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertIn('polígono', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
 
     def test_d_evidencia_sinobras_por_fazenda_tem_campos_chirps(self):
         ev = aud.EVIDENCIA_SINOBRAS_POR_FAZENDA
@@ -281,6 +289,9 @@ class ReinterpretacaoChirpsTestCase(unittest.TestCase):
         self.assertFalse(ev['fonte_verificada_documentalmente'])
         self.assertFalse(ev['empresa_possui_pluviometro_em_todas_as_fazendas'])
         self.assertEqual(ev['relatorio_chirps'], 'docs/nmme-fase2c2-auditoria-chirps-sinobras.md')
+        self.assertTrue(ev['extracao_e_zonal_por_poligono'])
+        self.assertFalse(ev['extracao_e_pontual'])
+        self.assertFalse(ev['poligonos_por_fazenda_disponiveis_no_repositorio'])
 
     def test_e_aptidao_recebe_o_parametro_chirps_nao_instrumental(self):
         """Item 8 (4ª rodada) — a chamada de aptidão do módulo principal
@@ -297,6 +308,23 @@ class ReinterpretacaoChirpsTestCase(unittest.TestCase):
         self.assertIn('Reinterpretação CHIRPS', relatorio)
         self.assertIn('Classificação anterior', relatorio)
         self.assertIn('Classificação corrigida', relatorio)
+        self.assertIn('Classificação refinada', relatorio)
+
+    def test_g_agregacao_registra_peso_igual_independente_da_area(self):
+        """Item 4 (5ª rodada) — a série regional atual pondera cada
+        fazenda igualmente, independente da área do seu polígono."""
+        achado = aud.verificar_padrao_agregacao_sinobras_no_codigo()
+        self.assertIn('IGUALMENTE', achado['interpretacao'])
+        self.assertIn('independentemente da área', achado['interpretacao'])
+
+    def test_h_protocolo_cfsv2_considera_uniao_dos_poligonos(self):
+        """Item 7 (5ª rodada) — o protocolo de comparação com o CFSv2
+        passa a considerar a diferença entre a célula de grade e a
+        UNIÃO dos polígonos das fazendas, nunca decidindo aqui."""
+        esp = aud.avaliar_correspondencia_espacial()
+        self.assertIn('UNIÃO', esp['descasamento_de_suporte_espacial'])
+        self.assertIn('protocolo de comparação', esp['descasamento_de_suporte_espacial'])
+        self.assertIn('NÃO decide', esp['descasamento_de_suporte_espacial'])
 
 
 class MontarListaDocumentosNecessariosTestCase(unittest.TestCase):
