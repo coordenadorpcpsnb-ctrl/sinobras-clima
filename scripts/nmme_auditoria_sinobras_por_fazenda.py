@@ -211,7 +211,16 @@ def identificar_grupos_series_identicas(df):
     """Compara os 360 (ou N) valores mensais completos de cada
     identificador — igualdade EXATA, não aproximada (os valores são
     inteiros no arquivo recebido). Agrupa por assinatura (tupla de
-    valores na mesma ordem cronológica), nunca por inspeção manual."""
+    valores na mesma ordem cronológica), nunca por inspeção manual.
+
+    Revisão pontual (4ª rodada, 2026) — computação inalterada (é
+    agnóstica à fonte dos dados); só a INTERPRETAÇÃO no retorno foi
+    revista à luz da nova informação de que SINOBRAS.csv é estimativa
+    CHIRPS por fazenda, não leitura de pluviômetro (ver
+    docs/nmme-fase2c2-auditoria-chirps-sinobras.md): a hipótese de
+    compartilhamento de PIXEL CHIRPS entre fazendas geograficamente
+    próximas passa a ser investigada ao lado das hipóteses anteriores
+    — nunca tratada como fato comprovado, e nunca a única hipótese."""
     pivot = df.pivot_table(index=['ano', 'mes'], columns='estacao', values='prec_mm', aggfunc='first')
     pivot = pivot.sort_index()
 
@@ -235,10 +244,17 @@ def identificar_grupos_series_identicas(df):
             f"{pivot.shape[1]} identificadores comparados mês a mês (igualdade exata, não "
             f"aproximada) produzem {len(assinaturas)} séries mensais numericamente distintas. "
             f"{len(grupos)} grupo(s) de identificadores compartilham a mesma série completa: "
-            f"{grupos}. Isto é um FATO computado — a INTERPRETAÇÃO (pluviômetro compartilhado, "
-            "replicação administrativa de dados, ou preenchimento de uma fazenda a partir de "
-            "outra) não é decidível a partir deste arquivo; nenhuma das hipóteses deve ser "
-            "presumida sem a documentação operacional correspondente."
+            f"{grupos}. Isto é um FATO computado — a INTERPRETAÇÃO não é decidível a partir "
+            "deste arquivo isoladamente. Hipóteses em aberto, NENHUMA presumida sem a "
+            "documentação operacional correspondente: (a) COMPARTILHAMENTO DE PIXEL CHIRPS — "
+            "dado que SINOBRAS.csv é estimativa CHIRPS por fazenda (informado pelo responsável "
+            "pelos dados, ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md), fazendas cujas "
+            "coordenadas nominais caem no mesmo pixel CHIRPS (~0,05°, ~5,5km no equador) "
+            "receberiam exatamente o mesmo valor extraído — hipótese mais parcimoniosa dado o "
+            "novo contexto, mas NÃO comprovada (exigiria as coordenadas de cada fazenda, ainda "
+            "ausentes); (b) pluviômetro físico compartilhado (se alguma das fazendas do grupo "
+            "de fato tiver instrumento); (c) replicação administrativa de um registro entre "
+            "fazendas distintas; (d) preenchimento (fill) de uma fazenda a partir de outra."
         ),
     }
 
@@ -249,31 +265,50 @@ def identificar_grupos_series_identicas(df):
 # ══════════════════════════════════════════════════════════════════════════
 
 def distinguir_identificadores_series_e_instrumentos(integridade, grupos):
-    """Três conceitos, nunca colapsados num único número: (1) rótulos
+    """Quatro conceitos, nunca colapsados num único número: (1) rótulos
     de fazenda no arquivo (convenção de nomenclatura); (2) séries
-    mensais numericamente distintas (fato computado); (3) instrumentos
-    pluviométricos fisicamente independentes (não verificável a partir
-    deste CSV, nunca presumido True nem False)."""
+    mensais numericamente distintas (fato computado); (3) pixels/
+    pontos de extração CHIRPS efetivamente distintos (não verificável
+    sem as coordenadas usadas na extração); (4) instrumentos
+    pluviométricos fisicamente independentes (nem sequer presumido que
+    existam — a empresa não tem pluviômetro em todas as fazendas,
+    informação do responsável pelos dados).
+
+    Revisão pontual (4ª rodada, 2026) — antes desta rodada, a única
+    pergunta em aberto era "instrumento compartilhado?". Com a nova
+    informação de que SINOBRAS.csv é estimativa CHIRPS (não leitura de
+    campo), a pergunta relevante passa a ser em primeiro lugar sobre
+    PIXELS/PONTOS DE EXTRAÇÃO, e só secundariamente sobre instrumentos
+    físicos — que podem nem existir para boa parte das 34 fazendas."""
     n_identificadores = integridade['n_identificadores']
     n_series_distintas = grupos['n_series_mensais_distintas']
     return {
         'n_identificadores_de_fazenda': n_identificadores,
         'n_series_mensais_numericamente_distintas': n_series_distintas,
+        'n_pontos_extracao_chirps_efetivamente_distintos_confirmados': None,
         'n_instrumentos_pluviometricos_efetivamente_independentes_confirmados': None,
         'interpretacao': (
-            f"Três conceitos diferentes, nunca tratados como equivalentes: (1) "
+            f"Quatro conceitos diferentes, nunca tratados como equivalentes: (1) "
             f"{n_identificadores} IDENTIFICADORES de fazenda (rótulos FAZxx do arquivo) — uma "
-            "convenção de nomenclatura administrativa, não uma contagem de instrumentos; (2) "
+            "convenção de nomenclatura administrativa; (2) "
             f"{n_series_distintas} SÉRIES MENSAIS numericamente distintas — um fato computado "
-            "diretamente dos dados (comparação exata dos valores mensais completos de cada "
-            "identificador); (3) instrumentos pluviométricos EFETIVAMENTE INDEPENDENTES — "
-            "DESCONHECIDO, não verificável a partir deste arquivo isoladamente. Ter menos "
-            f"séries distintas ({n_series_distintas}) que identificadores ({n_identificadores}) é "
-            "consistente com pluviômetro compartilhado entre fazendas, com replicação "
-            "administrativa de um registro entre fazendas realmente distintas, ou com "
-            "preenchimento (fill) de uma fazenda a partir de outra — as três hipóteses "
-            "permanecem em aberto sem a documentação operacional (coordenadas, períodos de "
-            "operação, um registro por instrumento) que este arquivo não contém."
+            "diretamente dos dados; (3) pontos/pixels de extração CHIRPS EFETIVAMENTE "
+            "DISTINTOS — DESCONHECIDO, exigiria as coordenadas usadas na extração de cada "
+            "fazenda (ainda ausentes); (4) instrumentos pluviométricos EFETIVAMENTE "
+            "INDEPENDENTES — DESCONHECIDO e, dado que SINOBRAS.csv foi informado pelo "
+            "responsável pelos dados como estimativa CHIRPS (a empresa não tem pluviômetro em "
+            "todas as fazendas), NEM SEQUER PRESUMIDO QUE EXISTA um instrumento físico para "
+            f"cada uma das {n_identificadores} fazendas. Ter menos séries distintas "
+            f"({n_series_distintas}) que identificadores ({n_identificadores}) é consistente, "
+            "em ordem de parcimônia dado o novo contexto, com: pixel CHIRPS compartilhado entre "
+            "fazendas geograficamente próximas (hipótese mais provável, mas não comprovada — "
+            "ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md); pluviômetro físico "
+            "compartilhado, SE alguma fazenda do grupo tiver instrumento; replicação "
+            "administrativa de um registro entre fazendas distintas; ou preenchimento (fill) de "
+            "uma fazenda a partir de outra — nenhuma das hipóteses deve ser presumida sem a "
+            "documentação operacional (coordenadas/polígonos usados na extração, versão/"
+            "metodologia do CHIRPS, e confirmação de quais fazendas — se alguma — têm "
+            "pluviômetro real) que este arquivo não contém."
         ),
     }
 
@@ -314,8 +349,11 @@ def analisar_sensibilidade_deduplicacao(df, grupos):
             "Teste de SENSIBILIDADE apenas, nunca uma correção proposta. A diferença entre "
             "pesar cada identificador igualmente (procedimento atual) e pesar cada série "
             "distinta uma única vez mostra o quanto a escolha de agregação espacial importa, "
-            "mas não decide qual delas é mais correta — depende de documentação operacional "
-            "ainda ausente sobre os grupos de séries idênticas."
+            "mas não decide qual delas é mais correta. Se a hipótese de pixel CHIRPS "
+            "compartilhado (ver 'interpretacao' de identificar_grupos_series_identicas) for "
+            "confirmada, pesar por série única corrigiria uma superponderação implícita de "
+            "pixels com mais fazendas mapeadas a eles — mas essa confirmação depende de "
+            "documentação operacional (coordenadas/pixels de extração) ainda ausente."
         ),
     }
 
@@ -325,48 +363,58 @@ def analisar_sensibilidade_deduplicacao(df, grupos):
 # ══════════════════════════════════════════════════════════════════════════
 
 def montar_achados_espaciais(grupos):
-    """Item 7 — registra a NECESSIDADE de coordenadas individuais E do
-    mapeamento identificador→instrumento, nunca as inventa nem as
-    presume. CLAUDE.md (armadilha 8) documenta que
-    data/fazendas.geojson foi deliberadamente substituído por um
-    envelope único sem identificação por fazenda — este arquivo
-    (SINOBRAS.csv) não traz coordenadas, e nenhum outro arquivo deste
-    repositório associa FAZxx a uma coordenada individual.
+    """Item 7 — registra a NECESSIDADE de coordenadas/pixels de
+    extração CHIRPS E do mapeamento identificador→instrumento físico
+    (se algum existir), nunca as inventa nem as presume. CLAUDE.md
+    (armadilha 8) documenta que data/fazendas.geojson foi
+    deliberadamente substituído por um envelope único sem
+    identificação por fazenda — este arquivo (SINOBRAS.csv) não traz
+    coordenadas, e nenhum outro arquivo deste repositório associa
+    FAZxx a uma coordenada individual.
 
-    Revisão pontual (3ª rodada) — as N séries mensais numericamente
-    distintas (Seção 3/4) são um FATO sobre os DADOS recebidos, nunca
-    uma contagem de locais físicos independentes: nunca presumir que
-    séries distintas equivalem a pontos de medição fisicamente
-    independentes, nem que identificadores com série idêntica
-    equivalem a 1 único instrumento — as duas equivalências exigem o
-    mapeamento operacional que este arquivo não contém."""
+    Revisão pontual (4ª rodada, 2026) — com a nova informação de que
+    SINOBRAS.csv é estimativa CHIRPS por fazenda (não leitura de
+    campo; a empresa não tem pluviômetro em todas as fazendas), a
+    pergunta espacial de fundo muda: não é mais "onde fica o
+    pluviômetro de cada fazenda", e sim "qual coordenada/pixel CHIRPS
+    foi usado para gerar a estimativa de cada fazenda". As N séries
+    mensais numericamente distintas (Seção 3/4) continuam um FATO
+    sobre os DADOS recebidos, nunca uma contagem de locais físicos
+    independentes nem de pixels CHIRPS distintos — nenhuma das duas
+    equivalências deve ser presumida sem o mapeamento operacional que
+    este arquivo não contém."""
     return {
         'coordenadas_individuais_disponiveis_no_arquivo': False,
         'coordenadas_individuais_disponiveis_no_repositorio': False,
         'mapeamento_identificador_para_instrumento_disponivel': False,
+        'mapeamento_identificador_para_pixel_chirps_disponivel': False,
         'interpretacao': (
             "SINOBRAS.csv identifica cada registro por `estacao` (FAZxx), mas não traz "
             "coordenada nenhuma — e nenhum outro arquivo deste repositório associa um FAZxx a "
             "uma coordenada individual (CLAUDE.md, armadilha 8: data/fazendas.geojson foi "
             "deliberadamente substituído por um envelope único de 85.020,5 ha sem identificação "
-            "por fazenda; decisão preservada aqui, não revertida). São necessárias DUAS coisas, "
-            f"nunca supridas por este arquivo: (1) as coordenadas de cada um dos "
-            f"{grupos['n_identificadores_comparados']} pontos de medição identificados por "
-            "FAZxx; e (2) o mapeamento de cada um desses identificadores para seu respectivo "
-            "instrumento físico — isto é, confirmar quais identificadores de fato compartilham "
-            "um único pluviômetro e quais são instrumentos fisicamente distintos. As "
+            "por fazenda; decisão preservada aqui, não revertida). Com a reinterpretação CHIRPS "
+            "(ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md), são necessárias TRÊS coisas, "
+            f"nunca supridas por este arquivo: (1) a coordenada/polígono usado para extrair a "
+            f"estimativa CHIRPS de cada um dos {grupos['n_identificadores_comparados']} "
+            "identificadores FAZxx; (2) a versão e a metodologia de extração do CHIRPS "
+            "empregadas; e (3), SE alguma fazenda tiver de fato um pluviômetro físico, o "
+            "mapeamento de qual(is) identificador(es) correspondem a instrumento real — a "
+            f"empresa não tem pluviômetro em todas as fazendas, então essa lista pode ser um "
+            f"subconjunto pequeno dos {grupos['n_identificadores_comparados']}, ou vazia. As "
             f"{grupos['n_series_mensais_distintas']} séries mensais numericamente distintas "
             "encontradas (Seção 3/4) são um FATO sobre os DADOS, não uma contagem de locais "
-            "físicos — NÃO presumir que elas correspondem a "
-            f"{grupos['n_series_mensais_distintas']} locais de medição fisicamente "
-            "independentes; sem o mapeamento identificador→instrumento, o número real de locais "
-            "físicos permanece desconhecido (pode ser 27, 34, ou outro valor). Sem essas duas "
-            "informações, o suporte espacial da observação — potencialmente múltiplos pontos, "
-            "não um único centroide — não pode ser comparado à célula de grade do CFSv2 (~1°, "
-            "ordem de 100km de lado). Sem elas, a distância de 22,91km do centroide agregado até "
-            "a grade do CFSv2 (docs/nmme-fase2c2-auditoria-observacional-historica.md, Seção 5) "
-            "continua sendo a distância de UM ponto agregado — nunca das medições individuais "
-            "por fazenda."
+            "físicos NEM de pixels CHIRPS distintos — NÃO presumir que elas correspondem a "
+            f"{grupos['n_series_mensais_distintas']} pontos de extração fisicamente "
+            "independentes; sem o mapeamento identificador→coordenada/pixel, o número real de "
+            f"pontos de extração permanece desconhecido (pode ser {grupos['n_series_mensais_distintas']}, "
+            f"{grupos['n_identificadores_comparados']}, ou outro valor). Sem "
+            "essas informações, o suporte espacial da observação — potencialmente múltiplos "
+            "pixels CHIRPS, não um único centroide — não pode ser comparado à célula de grade "
+            "do CFSv2 (~1°, ordem de 100km de lado). Sem elas, a distância de 22,91km do "
+            "centroide agregado até a grade do CFSv2 (docs/nmme-fase2c2-auditoria-"
+            "observacional-historica.md, Seção 5) continua sendo a distância de UM ponto "
+            "agregado — nunca das estimativas individuais por fazenda."
         ),
     }
 
@@ -427,6 +475,12 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         "série histórica de produção nem elimina séries duplicadas. O arquivo original não foi "
         "incorporado a este repositório.**",
         "",
+        "> **Atualização (4ª rodada, 2026)**: o responsável pelos dados informou que "
+        "SINOBRAS.csv contém ESTIMATIVAS extraídas do CHIRPS por fazenda, não medições diretas "
+        "de pluviômetro — a empresa não tem pluviômetro em todas as fazendas. As seções abaixo "
+        "foram revisadas para refletir essa informação (não comprovada documentalmente ainda). "
+        "Ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md para a investigação dedicada.",
+        "",
         "## Evidência analisada",
         "",
         f"- Arquivo: `{arq['nome']}`.",
@@ -466,9 +520,11 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         "`nmme_auditoria_observacional_historica.verificar_padrao_agregacao_sinobras_no_codigo`) "
         "foi REPRODUZIDA de forma independente a partir deste arquivo e bate com "
         "data/serie_subst.csv. Isso confirma a linhagem NUMÉRICA entre o arquivo recebido e a "
-        "série consolidada — não confirma a metodologia de medição em campo, eventuais "
-        "preenchimentos (fill) retrospectivos, nem a independência dos instrumentos "
-        "pluviométricos, que permanecem SEM COMPROVAÇÃO por este arquivo.",
+        "série consolidada — não confirma a versão nem a metodologia de extração do CHIRPS "
+        "usadas para gerar essas estimativas (informado pelo responsável pelos dados, não "
+        "verificado documentalmente), eventuais preenchimentos (fill) retrospectivos, nem se "
+        "alguma fazenda tem, além da estimativa CHIRPS, um pluviômetro físico real — tudo isso "
+        "permanece SEM COMPROVAÇÃO por este arquivo.",
         "",
         "## 3. Grupos de séries mensais idênticas (identificados automaticamente)",
         "",
@@ -478,16 +534,19 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         f"{grp['n_grupos_com_mais_de_1_identificador']} — {grp['grupos_de_series_identicas']}.",
         f"- {grp['interpretacao']}",
         "",
-        "## 4. Identificadores × séries distintas × instrumentos independentes",
+        "## 4. Identificadores × séries distintas × pixels CHIRPS × instrumentos independentes",
         "",
-        "**Três conceitos diferentes — nunca tratados como equivalentes nesta auditoria.**",
+        "**Quatro conceitos diferentes — nunca tratados como equivalentes nesta auditoria.**",
         "",
         f"- Identificadores de fazenda: {dist['n_identificadores_de_fazenda']}.",
         f"- Séries mensais numericamente distintas: "
         f"{dist['n_series_mensais_numericamente_distintas']}.",
+        f"- Pontos de extração CHIRPS efetivamente distintos confirmados: "
+        f"{dist['n_pontos_extracao_chirps_efetivamente_distintos_confirmados']} "
+        "(desconhecido — exigiria as coordenadas de extração de cada fazenda).",
         f"- Instrumentos pluviométricos efetivamente independentes confirmados: "
         f"{dist['n_instrumentos_pluviometricos_efetivamente_independentes_confirmados']} "
-        "(desconhecido — não verificável a partir deste arquivo).",
+        "(desconhecido — nem sequer presumido que exista instrumento físico para cada fazenda).",
         f"- {dist['interpretacao']}",
         "",
         "### Sensibilidade da agregação espacial (informativo — nunca uma correção proposta)",
@@ -499,8 +558,8 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         f"{sens['mes_da_diferenca_maxima']}.",
         f"- {sens['interpretacao']}",
         "",
-        "## 5. Análise espacial — necessidade de coordenadas individuais e do mapeamento "
-        "identificador→instrumento",
+        "## 5. Análise espacial — necessidade de coordenadas/pixels de extração e do "
+        "mapeamento identificador→instrumento",
         "",
         f"- Coordenadas individuais disponíveis neste arquivo: "
         f"{esp['coordenadas_individuais_disponiveis_no_arquivo']}.",
@@ -508,6 +567,8 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         f"{esp['coordenadas_individuais_disponiveis_no_repositorio']}.",
         f"- Mapeamento identificador→instrumento físico disponível: "
         f"{esp['mapeamento_identificador_para_instrumento_disponivel']}.",
+        f"- Mapeamento identificador→pixel CHIRPS disponível: "
+        f"{esp['mapeamento_identificador_para_pixel_chirps_disponivel']}.",
         f"- {esp['interpretacao']}",
         "",
         "## Conclusões desta auditoria (item 6 da tarefa)",
@@ -515,10 +576,12 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         "- A agregação numérica histórica de 1996-2025 (`prec` de data/serie_subst.csv) foi "
         "REPRODUZIDA de forma independente a partir de SINOBRAS.csv — achado numérico, "
         "verificado acima (Seção 2).",
-        "- A metodologia de medição em campo (tipo de pluviômetro, protocolo de leitura, "
-        "frequência de manutenção), eventuais preenchimentos/interpolações retrospectivas, e a "
-        "independência efetiva dos instrumentos pluviométricos PERMANECEM SEM COMPROVAÇÃO — "
-        "nenhum destes três pontos é decidível a partir deste arquivo isoladamente.",
+        "- O responsável pelos dados informou que SINOBRAS.csv é estimativa CHIRPS por fazenda, "
+        "não leitura de pluviômetro — a versão/metodologia de extração do CHIRPS, eventuais "
+        "preenchimentos/interpolações retrospectivas, e se alguma fazenda tem, além disso, um "
+        "pluviômetro físico real PERMANECEM SEM COMPROVAÇÃO — nenhum destes pontos é decidível "
+        "a partir deste arquivo isoladamente (ver docs/nmme-fase2c2-auditoria-chirps-"
+        "sinobras.md).",
         "- Nenhuma série duplicada foi eliminada e nenhuma série histórica de produção foi "
         "alterada por esta auditoria — os grupos de séries idênticas (Seção 3) são só "
         "DOCUMENTADOS, nunca resolvidos ou removidos.",

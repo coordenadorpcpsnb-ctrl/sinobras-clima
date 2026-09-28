@@ -195,16 +195,17 @@ class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
         self.assertIn('SINOBRAS.csv', documentos[0])
 
     def test_d_correspondencia_espacial_registra_necessidade_de_coordenadas(self):
-        """3ª rodada (ajuste pontual) — pede coordenadas E o mapeamento
-        identificador→instrumento; nunca presume que as 27 séries
-        distintas equivalem a 27 locais físicos independentes."""
+        """3ª/4ª rodada (ajuste pontual) — pede coordenada/pixel E o
+        mapeamento identificador→instrumento; nunca presume que as 27
+        séries distintas equivalem a 27 locais físicos independentes."""
         esp = aud.avaliar_correspondencia_espacial()
         self.assertIn('necessidade_de_coordenadas_individuais', esp)
         texto = esp['necessidade_de_coordenadas_individuais']
-        self.assertIn('coordenadas', texto)
+        self.assertIn('coordenada', texto)
         self.assertIn('mapeamento', texto)
-        self.assertIn('instrumento', texto)
-        self.assertIn('NUNCA uma contagem de locais físicos independentes', texto)
+        self.assertIn('pluviômetro', texto)
+        self.assertIn('CHIRPS', texto)
+        self.assertIn('NUNCA uma contagem de locais físicos OU pixels CHIRPS independentes', texto)
 
     def test_f_observacao_pos_1996_registra_34_em_todos_os_360_meses(self):
         """Ajuste pontual 1 (3ª rodada) — o arquivo histórico auditado
@@ -244,6 +245,58 @@ class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
         src = inspect.getsource(aud.montar_achado_nova_evidencia_sinobras_por_fazenda)
         self.assertNotIn('read_csv', src)
         self.assertNotIn('open(', src)
+
+
+class ReinterpretacaoChirpsTestCase(unittest.TestCase):
+    """Item 1/2/8 (4ª rodada, 2026) — correção explícita: o responsável
+    pelos dados informou que SINOBRAS.csv é estimativa CHIRPS por
+    fazenda, não leitura direta de pluviômetro. Testa que a correção
+    foi registrada (não apagada), que a classificação anterior é
+    citada, e que a aptidão científica reflete a nova informação."""
+
+    def test_a_achado_registra_antes_e_depois(self):
+        achado = aud.montar_achado_reinterpretacao_chirps()
+        self.assertIn('leitura direta de campo', achado['classificacao_anterior_ate_3a_rodada'])
+        self.assertIn('CHIRPS', achado['classificacao_corrigida_4a_rodada'])
+        self.assertNotIn('leitura direta', achado['classificacao_corrigida_4a_rodada'])
+        self.assertFalse(achado['fonte_verificada_documentalmente'])
+        self.assertFalse(achado['empresa_possui_pluviometro_em_todas_as_fazendas'])
+
+    def test_b_wired_em_montar_achados_documentacao(self):
+        doc = aud.montar_achados_documentacao()
+        self.assertIn('reinterpretacao_chirps', doc)
+        self.assertEqual(doc['reinterpretacao_chirps']['classificacao_corrigida_4a_rodada'],
+                          pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+
+    def test_c_constante_procedencia_ja_reflete_chirps(self):
+        """A correção de fundo é no reuso — PROCEDENCIA_ESTACAO_SINOBRAS
+        em nmme_piloto_historico.py — nunca reimplementada aqui."""
+        self.assertIn('CHIRPS', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertIn('NÃO', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertNotIn('leitura direta de campo', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+
+    def test_d_evidencia_sinobras_por_fazenda_tem_campos_chirps(self):
+        ev = aud.EVIDENCIA_SINOBRAS_POR_FAZENDA
+        self.assertFalse(ev['fonte_e_leitura_direta_de_pluviometro'])
+        self.assertFalse(ev['fonte_verificada_documentalmente'])
+        self.assertFalse(ev['empresa_possui_pluviometro_em_todas_as_fazendas'])
+        self.assertEqual(ev['relatorio_chirps'], 'docs/nmme-fase2c2-auditoria-chirps-sinobras.md')
+
+    def test_e_aptidao_recebe_o_parametro_chirps_nao_instrumental(self):
+        """Item 8 (4ª rodada) — a chamada de aptidão do módulo principal
+        passa procedencia_pos_1996_nao_instrumental=True, adicionando
+        um bloqueio explícito sobre a fonte CHIRPS não verificada."""
+        cobertura_df, metadata = aud.executar_auditoria_completa()
+        aptidao = metadata['aptidao_referencia_observacional']
+        self.assertFalse(aptidao['apto_para_avaliacao_cientifica'])
+        self.assertTrue(any('estimativa CHIRPS' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_f_relatorio_markdown_inclui_secao_chirps(self):
+        cobertura_df, metadata = aud.executar_auditoria_completa()
+        relatorio = aud.gerar_relatorio_markdown(cobertura_df, metadata)
+        self.assertIn('Reinterpretação CHIRPS', relatorio)
+        self.assertIn('Classificação anterior', relatorio)
+        self.assertIn('Classificação corrigida', relatorio)
 
 
 class MontarListaDocumentosNecessariosTestCase(unittest.TestCase):

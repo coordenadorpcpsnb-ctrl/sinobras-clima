@@ -235,9 +235,10 @@ class IdentificarGruposSeriesIdenticasTestCase(unittest.TestCase):
 
 class DistinguirIdentificadoresSeriesInstrumentosTestCase(unittest.TestCase):
     """Item 5 — nunca presume equivalência entre identificadores,
-    séries distintas e instrumentos independentes."""
+    séries distintas, pixels de extração CHIRPS e instrumentos
+    independentes (quatro conceitos, 4ª rodada 2026)."""
 
-    def test_a_instrumentos_independentes_sempre_none(self):
+    def test_a_instrumentos_e_pixels_independentes_sempre_none(self):
         integridade = {'n_identificadores': 34}
         grupos = {'n_series_mensais_distintas': 27}
         resultado = aud.distinguir_identificadores_series_e_instrumentos(integridade, grupos)
@@ -245,7 +246,11 @@ class DistinguirIdentificadoresSeriesInstrumentosTestCase(unittest.TestCase):
         self.assertEqual(resultado['n_series_mensais_numericamente_distintas'], 27)
         self.assertIsNone(
             resultado['n_instrumentos_pluviometricos_efetivamente_independentes_confirmados'])
+        self.assertIsNone(
+            resultado['n_pontos_extracao_chirps_efetivamente_distintos_confirmados'])
         self.assertIn('DESCONHECIDO', resultado['interpretacao'])
+        self.assertIn('NEM SEQUER PRESUMIDO QUE EXISTA', resultado['interpretacao'])
+        self.assertIn('pixel CHIRPS compartilhado', resultado['interpretacao'])
 
 
 class AnalisarSensibilidadeDeduplicacaoTestCase(unittest.TestCase):
@@ -275,9 +280,10 @@ class AnalisarSensibilidadeDeduplicacaoTestCase(unittest.TestCase):
 
 
 class MontarAchadosEspaciaisTestCase(unittest.TestCase):
-    """Item 7 — registra a NECESSIDADE de coordenadas individuais E do
-    mapeamento identificador→instrumento, nunca as inventa nem presume
-    que séries distintas equivalem a locais físicos independentes."""
+    """Item 7 — registra a NECESSIDADE de coordenadas/pixels de
+    extração CHIRPS E do mapeamento identificador→instrumento, nunca
+    as inventa nem presume que séries distintas equivalem a locais
+    físicos (ou pixels) independentes."""
 
     def test_a_coordenadas_e_mapeamento_registrados_como_ausentes(self):
         grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
@@ -285,8 +291,10 @@ class MontarAchadosEspaciaisTestCase(unittest.TestCase):
         self.assertFalse(resultado['coordenadas_individuais_disponiveis_no_arquivo'])
         self.assertFalse(resultado['coordenadas_individuais_disponiveis_no_repositorio'])
         self.assertFalse(resultado['mapeamento_identificador_para_instrumento_disponivel'])
-        self.assertIn('coordenadas', resultado['interpretacao'])
+        self.assertFalse(resultado['mapeamento_identificador_para_pixel_chirps_disponivel'])
+        self.assertIn('coordenada', resultado['interpretacao'])
         self.assertIn('mapeamento', resultado['interpretacao'])
+        self.assertIn('CHIRPS', resultado['interpretacao'])
 
     def test_b_nunca_presume_series_distintas_como_locais_independentes(self):
         grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
@@ -294,6 +302,7 @@ class MontarAchadosEspaciaisTestCase(unittest.TestCase):
         self.assertIn('NÃO presumir', resultado['interpretacao'])
         self.assertIn('34', resultado['interpretacao'])
         self.assertIn('27', resultado['interpretacao'])
+        self.assertIn('pluviômetro', resultado['interpretacao'])
 
 
 class ExecutarAuditoriaCompletaEndToEndTestCase(unittest.TestCase):
@@ -354,8 +363,11 @@ class ExecutarAuditoriaCompletaEndToEndTestCase(unittest.TestCase):
             self.assertIn('SHA-256', relatorio)
             self.assertIn(aud.calcular_sha256(arquivo), relatorio)
             self.assertIn('DESCONHECIDO', relatorio)
-            self.assertIn('coordenadas individuais', relatorio)
+            self.assertIn('Coordenadas individuais disponíveis', relatorio)
             self.assertIn('SEM COMPROVAÇÃO', relatorio)
+            self.assertIn('CHIRPS', relatorio)
+            self.assertIn('pixel CHIRPS', relatorio)
+            self.assertIn('pluviômetro', relatorio)
 
 
 class ZeroSkillNuncaModificaProducaoTestCase(unittest.TestCase):

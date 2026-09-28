@@ -11,7 +11,21 @@ documento é gerado a partir de leitura **local** de `data/serie_subst.csv`
 (sem rede) e do código-fonte de `scripts/fetch_monthly_data.py` —
 nenhum dado foi inventado ou assumido sem checar o arquivo/código real.
 
-## Achado principal — a série de referência NÃO é CHIRPS para o período do piloto
+## Achado principal (CORRIGIDO — 4ª rodada, 2026) — o trecho 1996+ é, segundo o responsável pelos dados, estimativa CHIRPS por fazenda
+
+> **Correção manual pontual, fora do fluxo normal de regeneração deste
+> relatório** (`--executar-piloto-real` exige acesso real à rede NMME,
+> não refeito nesta rodada — restrição desta tarefa: não recalcular
+> previsões/indicadores). O texto original abaixo (título e primeiros
+> parágrafos) afirmava categoricamente "a série de referência NÃO é
+> CHIRPS" para 1996-2025 — isso deixou de ser sustentável: o
+> responsável pelos dados informou que o arquivo fonte desse trecho
+> (SINOBRAS.csv) contém ESTIMATIVAS extraídas do CHIRPS por fazenda, e
+> não leituras diretas de pluviômetro (a empresa não tem pluviômetro em
+> todas as fazendas). Ver detalhamento completo em
+> `docs/nmme-fase2c2-auditoria-chirps-sinobras.md`. O restante desta
+> seção é mantido como registro histórico do que este módulo afirmava
+> antes da correção — não apagado, só anotado.
 
 `README.md` descreve `data/serie_subst.csv` como: **"Série histórica
 (MERRA-2 1981-1995 + Sinobras 1996-hoje)"**. Isso foi confirmado
@@ -21,23 +35,26 @@ são de **2026** (jan-ago/2026) — os meses mais recentes, preenchidos
 pela cascata de `fetch_monthly_data.py` (CHIRPS Final → CHC Preliminary
 → Open-Meteo ERA5-Land) introduzida depois que a série de base já
 existia. As **540 linhas restantes (1981-2025)** têm `fonte` vazia —
-não são CHIRPS, são o baseline histórico original:
+o texto original as descrevia assim:
 
-- **1981–1995**: reanálise **MERRA-2** (NASA) — não é observação
-  in situ nem satélite de precipitação dedicado (CHIRPS), é um produto
-  de reanálise atmosférica.
-- **1996–2025**: leituras das **estações da própria Sinobras** — dado
-  de campo direto (pluviômetros da empresa), não derivado de satélite.
+- **1981–1995**: reanálise **MERRA-2** (NASA) — fonte original ainda
+  não comprovada (ver docs/nmme-fase2c2-auditoria-observacional-
+  historica.md, Seção 4); permanece não comprovada nesta correção.
+- ~~**1996–2025**: leituras das **estações da própria Sinobras** — dado
+  de campo direto (pluviômetros da empresa), não derivado de
+  satélite.~~ **CORRIGIDO**: informado pelo responsável pelos dados
+  como estimativa CHIRPS por fazenda — NÃO confirmado como leitura de
+  pluviômetro; versão/metodologia de extração do CHIRPS ainda não
+  verificadas documentalmente.
 
-**Nenhuma das 16 origens do piloto (1991, 1998, 2005, 2010) usa
-CHIRPS como referência** — 1991 usa MERRA-2; 1998/2005/2010 usam a
-estação Sinobras. Isso é uma correção necessária de terminologia: nos
+**Terminologia** (texto original, ainda válido para 1981-1995): nos
 documentos anteriores desta fase (`docs/nmme-fase2c2-especificacao.md`),
 a observação de referência foi chamada genericamente de "CHIRPS" por
-seguir a nomenclatura predominante do resto do projeto — o nome correto
-para o período 1991-2010 é "a série histórica de produção
-(MERRA-2/Sinobras)", não CHIRPS. `scripts/nmme_piloto_historico.py`
-usa esse nome mais preciso na documentação do código.
+seguir a nomenclatura predominante do resto do projeto. Para 1991-1995
+(dentro do piloto) o nome mais preciso continua "MERRA-2 (fonte não
+comprovada)"; para 1996+ o nome mais preciso passou a ser "SINOBRAS por
+fazenda (estimativa CHIRPS informada, não verificada)" — ver
+`scripts/nmme_piloto_historico.py::PROCEDENCIA_ESTACAO_SINOBRAS`.
 
 ## Classificação de cobertura das 16×6 = 96 combinações origem×lead
 
