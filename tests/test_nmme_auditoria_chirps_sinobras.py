@@ -273,6 +273,111 @@ class CompararTresAlternativasMetodologicasTestCase(unittest.TestCase):
         self.assertIn('ponderada pela área', relatorio.lower())
         self.assertIn('união dos 34 polígonos', relatorio)
 
+    def test_j_ausencia_de_sobreposicao_nao_e_declarada_suficiente_para_b_igual_c(self):
+        """Ajuste final (2026) — a correção pedida: ausência de
+        sobreposição é NECESSÁRIA mas NÃO SUFICIENTE para (b) e (c)
+        coincidirem; também depende do critério de inclusão/ponderação
+        de pixel ser o mesmo nos dois cálculos."""
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        sobrep = resultado['possibilidade_de_sobreposicao_espacial']
+        self.assertIn('ausencia_de_sobreposicao_e_suficiente_para_b_igual_c', sobrep)
+        self.assertFalse(sobrep['ausencia_de_sobreposicao_e_suficiente_para_b_igual_c'])
+        self.assertIn('motivo_nao_suficiente', sobrep)
+        self.assertIn('critério de inclusão', sobrep['motivo_nao_suficiente'])
+
+    def test_k_interpretacao_nao_afirma_que_sem_sobreposicao_basta(self):
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        texto = resultado['interpretacao']
+        self.assertIn('DUAS condições', texto)
+        self.assertIn('NÃO garante a equivalência', texto)
+        self.assertIn('critério de inclusão', texto)
+
+    def test_l_nenhuma_alternativa_classificada_como_universalmente_mais_correta(self):
+        """Ajuste final (2026) — não classificar nenhuma alternativa
+        como universalmente mais correta; explicitar que a escolha
+        depende da variável espacial que se pretende representar."""
+        resultado = aud.comparar_tres_alternativas_metodologicas()
+        self.assertIn('qual_alternativa_e_mais_correta', resultado)
+        texto = resultado['qual_alternativa_e_mais_correta']
+        self.assertIn('NENHUMA', texto)
+        self.assertIn('universalmente mais correta', texto.lower())
+        self.assertNotIn('é a mais correta espacialmente', resultado['interpretacao'])
+        self.assertIn('universalmente mais correta', resultado['interpretacao'].lower())
+
+    def test_m_wired_no_relatorio_markdown_secao_qual_e_mais_correta(self):
+        metadata = aud.executar_investigacao_completa()
+        relatorio = aud.gerar_relatorio_markdown(metadata)
+        self.assertIn('Qual alternativa é mais correta', relatorio)
+        self.assertIn('NENHUMA', relatorio)
+        self.assertNotIn('(c) é a mais correta espacialmente', relatorio)
+
+
+class AuditarExtracaoChirpsCentralExistenteTestCase(unittest.TestCase):
+    """Ajuste final (2026) — auditoria de CÓDIGO de scripts/_chirps.py,
+    nenhuma chamada de rede. Achados reproduzidos, com mais detalhe,
+    em tests/test_chirps_extracao_sintetica.py; aqui só confirmamos que
+    a função de auditoria os relata corretamente e distingue
+    CONFIRMADO de PENDENTE."""
+
+    def test_a_confirma_riscos_conhecidos(self):
+        resultado = aud.auditar_extracao_chirps_central_existente()
+        self.assertTrue(resultado['confirmado_valor_ausente_pode_virar_zero'])
+        self.assertTrue(resultado['confirmado_zero_real_e_ausencia_sao_indistinguiveis_na_saida'])
+        self.assertTrue(resultado['confirmado_sem_cobertura_minima_de_dias_exigida'])
+        self.assertTrue(resultado['confirmado_resultado_sem_coluna_de_contagem_de_dias'])
+        self.assertTrue(resultado['confirmado_dias_omitidos_tambem_nao_contam_nem_sinalizam'])
+        self.assertTrue(resultado['confirmado_ponto_central_e_multiplo_exato_da_resolucao_chirps'])
+
+    def test_b_distingue_confirmado_de_pendente(self):
+        resultado = aud.auditar_extracao_chirps_central_existente()
+        self.assertIn('pendente_convencao_de_alinhamento_do_grid_chirps', resultado)
+        self.assertIn('não verificado', resultado['pendente_convencao_de_alinhamento_do_grid_chirps'].lower())
+
+    def test_c_impacto_nao_afirma_que_ja_ocorreu(self):
+        """O achado é sobre o CÓDIGO — não uma afirmação de que os
+        dados já extraídos estão errados (não comprovado)."""
+        resultado = aud.auditar_extracao_chirps_central_existente()
+        self.assertIn('RISCO', resultado['impacto'])
+        self.assertIn('não comprovado', resultado['impacto'])
+
+    def test_d_propoe_correcao_mas_nao_aplica(self):
+        resultado = aud.auditar_extracao_chirps_central_existente()
+        self.assertIn('proposta_de_correcao_nao_aplicada', resultado)
+        self.assertIn('NÃO aplicada', resultado['proposta_de_correcao_nao_aplicada'])
+
+    def test_e_nunca_acessa_rede(self):
+        """Menção a 'climateserv.api.request_data' no docstring,
+        explicando ONDE os achados são reproduzidos sinteticamente
+        (tests/test_chirps_extracao_sintetica.py), é esperada e não
+        conta — o que importa é que esta função nunca CHAMA a API."""
+        import inspect
+        src = inspect.getsource(aud.auditar_extracao_chirps_central_existente)
+        for termo_proibido in ('requests.', 'urlopen', 'import requests',
+                                'api.request_data(', '_chirps.buscar_prec'):
+            self.assertNotIn(termo_proibido, src)
+
+    def test_f_nao_modifica_chirps_py(self):
+        """A função só LÊ/relata — não escreve em scripts/_chirps.py."""
+        import inspect
+        src = inspect.getsource(aud.auditar_extracao_chirps_central_existente)
+        self.assertNotIn('.write', src)
+        self.assertNotIn('open(', src)
+
+    def test_g_cita_a_suite_de_testes_sinteticos(self):
+        resultado = aud.auditar_extracao_chirps_central_existente()
+        self.assertIn('test_chirps_extracao_sintetica.py', resultado['testes_sinteticos'])
+
+    def test_h_wired_em_executar_investigacao_completa(self):
+        metadata = aud.executar_investigacao_completa()
+        self.assertIn('auditoria_codigo_extracao_central_existente', metadata)
+
+    def test_i_wired_no_relatorio_markdown(self):
+        metadata = aud.executar_investigacao_completa()
+        relatorio = aud.gerar_relatorio_markdown(metadata)
+        self.assertIn('Auditoria do código da extração central existente', relatorio)
+        self.assertIn('Confirmado', relatorio)
+        self.assertIn('Proposta de correção (não aplicada)', relatorio)
+
 
 class MontarPropostaContinuidadeTestCase(unittest.TestCase):
     def test_a_lista_nao_vazia_de_proximos_passos(self):
@@ -289,6 +394,11 @@ class MontarPropostaContinuidadeTestCase(unittest.TestCase):
         proposta = ' '.join(aud.montar_proposta_continuidade())
         self.assertIn('armadilha 8', proposta)
         self.assertIn('anonimização', proposta.lower())
+
+    def test_d_inclui_avaliar_correcao_da_extracao_central_antes_de_aplicar(self):
+        proposta = ' '.join(aud.montar_proposta_continuidade())
+        self.assertIn('auditar_extracao_chirps_central_existente', proposta)
+        self.assertIn('NÃO foi aplicada nesta rodada', proposta)
 
 
 class ExecutarInvestigacaoCompletaEndToEndTestCase(unittest.TestCase):

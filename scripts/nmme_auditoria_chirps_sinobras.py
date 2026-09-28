@@ -35,11 +35,25 @@ Este módulo:
    polígono, e média zonal sobre a união dos polígonos — e a
    possibilidade (inverificável sem os polígonos) de sobreposição
    espacial entre eles. Nenhuma das três é calculada ou implementada.
+   Ajuste final (2026): a ausência de sobreposição entre os polígonos
+   é NECESSÁRIA mas NÃO SUFICIENTE para a média ponderada por área e a
+   média zonal sobre a união coincidirem — a equivalência também
+   depende do critério de inclusão/ponderação de pixel ser o mesmo nos
+   dois cálculos. Nenhuma das três alternativas é classificada como
+   universalmente mais correta — a escolha depende de qual variável
+   espacial se pretende representar.
 4. Avalia a viabilidade técnica de uma referência CHIRPS espacial e
    temporalmente consistente para 1991-2011, informada pelas
    capacidades JÁ EXISTENTES de scripts/_chirps.py (nunca executa uma
    nova extração — isso seria substituir a referência observacional
    atual, fora do escopo desta tarefa).
+5. Audita o CÓDIGO (não os dados, nenhuma extração nova) de
+   scripts/_chirps.py — tratamento de valor ausente do ClimateSERV,
+   agregação diária→mensal sem cobertura mínima, e a geometria da
+   caixa usada na extração central — distinguindo o que está
+   CONFIRMADO por leitura de código do que continua PENDENTE de
+   verificação. Nenhuma alteração de comportamento do pipeline de
+   produção é feita aqui — só diagnóstico e proposta de correção.
 
 Nunca calcula skill, nunca recalcula previsões/indicadores de
 desempenho, nunca substitui a referência observacional de produção,
@@ -253,16 +267,37 @@ def comparar_tres_alternativas_metodologicas():
     — nenhuma das três alternativas é calculada ou escrita em nenhum
     arquivo de dados por este módulo.
 
-    Ponto central, matemático e não dependente de dado ainda não
-    disponível: (a) e (b) só coincidem entre si se as 34 fazendas
-    tiverem área IGUAL (o que não se pode presumir sem os polígonos);
-    (b) e (c) só coincidem entre si se os polígonos das 34 fazendas
-    NÃO se sobrepuserem espacialmente (sobreposição faria (b) contar a
-    área sobreposta mais de uma vez, proporcionalmente a quantas
-    fazendas a compartilham — (c) conta cada parcela uma única vez por
-    desenho). Nenhuma das duas condições é verificável sem os
-    polígonos — que este repositório decidiu deliberadamente não
-    manter (CLAUDE.md armadilha 8)."""
+    Ponto central, matemático: (a) e (b) só coincidem entre si se as 34
+    fazendas tiverem área IGUAL (o que não se pode presumir sem os
+    polígonos).
+
+    Revisão pontual (ajuste final, 2026) — a condição para (b)/(c)
+    coincidirem é mais exigente do que "sem sobreposição": a ausência
+    de sobreposição espacial entre os polígonos é NECESSÁRIA, mas
+    SOZINHA NÃO É SUFICIENTE. (b) e (c) só coincidem se DUAS condições
+    valerem ao mesmo tempo: (i) os 34 polígonos NÃO se sobrepõem
+    espacialmente (sobreposição faria (b) contar a área compartilhada
+    mais de uma vez, proporcionalmente a quantas fazendas a
+    compartilham — (c) conta cada parcela uma única vez por desenho);
+    E (ii) o critério de inclusão/ponderação de pixel usado para
+    calcular a estimativa zonal de CADA fazenda (o insumo de (b)) é o
+    MESMO critério usado no cálculo direto sobre a união (c) — mesma
+    regra para pixel na borda, mesmo tratamento de pixel parcialmente
+    interceptado. Sem (ii), (b) e (c) podem divergir mesmo com
+    polígonos que não se sobrepõem — ex.: um pixel poderia ser incluído
+    por inteiro na fazenda cujo centro do pixel cai dentro do polígono
+    (critério "centro dentro"), mas ter sua contribuição fracionada de
+    outra forma no cálculo direto sobre a união (critério "fração de
+    área"). Nenhuma das duas condições é verificável hoje: (i) exige os
+    polígonos, que este repositório decidiu deliberadamente não manter
+    (CLAUDE.md armadilha 8); (ii) exige o critério de inclusão de
+    pixel, item ainda PENDENTE (ver
+    montar_lista_informacoes_necessarias_reproducao()). Consequência:
+    NENHUMA das três alternativas deve ser classificada como
+    universalmente "mais correta" — cada uma responde a uma pergunta
+    espacial diferente (ver 'qual_alternativa_e_mais_correta' no
+    retorno desta função); a escolha depende de qual variável se
+    pretende representar, não de uma hierarquia de precisão."""
     alternativa_a = {
         'nome': 'Média simples das 34 estimativas por fazenda (metodologia histórica, atual)',
         'formula': 'média aritmética simples de prec_mm entre as 34 fazendas, por ano/mês',
@@ -281,8 +316,13 @@ def comparar_tres_alternativas_metodologicas():
         'peso_por_fazenda': 'proporcional à área do polígono de cada fazenda',
         'requisito_de_dados_adicional': 'a área do polígono de cada uma das 34 fazendas — não '
                                          'disponível neste repositório (CLAUDE.md armadilha 8)',
-        'representa_area_real_quando': 'os polígonos das 34 fazendas não se sobrepõem entre si '
-                                        '(não verificável sem os polígonos)',
+        'representa_area_real_quando': 'os polígonos das 34 fazendas não se sobrepõem entre si E '
+                                        '(condição adicional, não só a ausência de sobreposição) '
+                                        'o critério de inclusão/ponderação de pixel usado na '
+                                        'estimativa zonal de cada fazenda é o mesmo que seria '
+                                        'usado num cálculo direto sobre a união dos polígonos — '
+                                        'nenhuma das duas condições verificável sem os polígonos '
+                                        'e sem o critério de inclusão de pixel (ambos ausentes)',
     }
     alternativa_c = {
         'nome': 'Média zonal direta sobre a união dos 34 polígonos',
@@ -326,32 +366,65 @@ def comparar_tres_alternativas_metodologicas():
         'interpretacao': 'a possibilidade de sobreposição espacial entre os polígonos das 34 '
                           'fazendas permanece EM ABERTO, nem confirmada nem descartada — este '
                           'módulo não afirma que existe, nem que não existe.',
+        'ausencia_de_sobreposicao_e_suficiente_para_b_igual_c': False,
+        'motivo_nao_suficiente': (
+            'mesmo SEM nenhuma sobreposição entre os polígonos, (b) e (c) só coincidem se o '
+            'critério de inclusão/ponderação de pixel usado para calcular a estimativa zonal '
+            'de CADA fazenda (o insumo de (b)) for IDÊNTICO ao critério usado no cálculo '
+            'direto sobre a união dos polígonos (c) — mesma regra para pixel na borda, mesmo '
+            'tratamento de pixel parcialmente interceptado. Esse critério é hoje DESCONHECIDO '
+            'para SINOBRAS.csv (ver montar_lista_informacoes_necessarias_reproducao()), então '
+            'a equivalência entre (b) e (c) não pode ser presumida nem mesmo se a ausência de '
+            'sobreposição um dia for confirmada.'
+        ),
     }
+    qual_alternativa_e_mais_correta = (
+        'NENHUMA é universalmente mais correta — cada uma responde a uma pergunta espacial '
+        'diferente, não são três aproximações da mesma resposta com precisão crescente: (a) '
+        'responde "qual a chuva média entre unidades de manejo (fazendas), tratando cada uma '
+        'com peso igual, independente do tamanho"; (b) responde "qual a chuva média entre as '
+        'estimativas por fazenda, ponderada pela área de cada unidade de manejo"; (c) responde '
+        '"qual a chuva média sobre o espaço físico total coberto pelas fazendas, cada parcela '
+        'contando uma única vez, independente de quantas fazendas a reivindicam". A escolha '
+        'certa depende de qual dessas três variáveis o uso pretendido (ex.: balanço hídrico '
+        'por fazenda vs. balanço hídrico regional agregado vs. comparação com a célula de '
+        'grade do CFSv2) precisa representar — não de uma hierarquia de exatidão onde uma '
+        'alternativa sempre vence as outras duas.'
+    )
     return {
         'alternativa_a_media_simples_atual': alternativa_a,
         'alternativa_b_media_ponderada_por_area': alternativa_b,
         'alternativa_c_zonal_sobre_uniao': alternativa_c,
         'possibilidade_de_sobreposicao_espacial': possibilidade_sobreposicao,
         'nenhuma_alternativa_calculada_ou_implementada': True,
+        'qual_alternativa_e_mais_correta': qual_alternativa_e_mais_correta,
         'interpretacao': (
             "As três alternativas NÃO são intercambiáveis por desenho, e nenhuma foi calculada "
             "ou implementada aqui (atividade 6). (a), a metodologia histórica em produção, dá "
             "peso IGUAL às 34 fazendas independente de área — diverge de (b) sempre que as áreas "
             "das fazendas forem desiguais (o que não se pode presumir sem os polígonos, mas é "
             "improvável que 34 fazendas tenham área exatamente igual). (b) e (c) só coincidem "
-            "entre si se os 34 polígonos NÃO se sobrepuserem espacialmente — com sobreposição, "
-            "(b) conta a área compartilhada mais de uma vez (proporcionalmente a quantas fazendas "
-            "a reivindicam), enquanto (c) conta cada parcela espacial uma única vez, por "
-            "construção. (c) é a mais correta espacialmente, mas exige infraestrutura que não "
+            "entre si se DUAS condições valerem ao mesmo tempo — não uma só: os 34 polígonos NÃO "
+            "se sobrepõem espacialmente E o critério de inclusão/ponderação de pixel é o MESMO "
+            "nos dois cálculos. A ausência de sobreposição, sozinha, NÃO garante a equivalência: "
+            "com sobreposição, (b) conta a área compartilhada mais de uma vez (proporcionalmente "
+            "a quantas fazendas a reivindicam), enquanto (c) conta cada parcela espacial uma "
+            "única vez, por construção — mas mesmo SEM sobreposição, um critério de inclusão de "
+            "pixel diferente entre o cálculo por fazenda (que alimenta (b)) e o cálculo direto "
+            "sobre a união (c) já basta para as duas divergirem. NENHUMA das três alternativas "
+            "deve ser classificada como universalmente mais correta (ver "
+            "'qual_alternativa_e_mais_correta' acima) — a escolha depende de qual variável "
+            "espacial se pretende representar. Construir (b) ou (c) exige infraestrutura que não "
             "existe hoje: os 34 polígonos individuais (ou, como aproximação com área desconhecida "
-            "de erro, o envelope único e anonimizado) e uma extração zonal sobre essa geometria. "
-            "A possibilidade de sobreposição espacial entre os polígonos é HOJE INVERIFICÁVEL sem "
-            "os próprios polígonos — o sinal indireto disponível (grupos de séries mensais "
-            "idênticas) indica compartilhamento de PIXEL, não necessariamente sobreposição de "
-            "POLÍGONO, e as duas coisas não devem ser confundidas. Nenhuma decisão sobre qual "
-            "alternativa adotar é tomada aqui — essa é uma decisão explícita e futura, condicionada "
-            "a primeiro obter os polígonos (o que por sua vez exige revisitar CLAUDE.md armadilha "
-            "8) e/ou aceitar a aproximação do envelope único já existente."
+            "de erro, o envelope único e anonimizado), o critério de inclusão de pixel (ainda "
+            "PENDENTE) e, para (c), uma extração zonal nova sobre essa geometria. A possibilidade "
+            "de sobreposição espacial entre os polígonos é HOJE INVERIFICÁVEL sem os próprios "
+            "polígonos — o sinal indireto disponível (grupos de séries mensais idênticas) indica "
+            "compartilhamento de PIXEL, não necessariamente sobreposição de POLÍGONO, e as duas "
+            "coisas não devem ser confundidas. Nenhuma decisão sobre qual alternativa adotar é "
+            "tomada aqui — essa é uma decisão explícita e futura, condicionada a primeiro obter "
+            "os polígonos e o critério de inclusão de pixel (o que por sua vez exige revisitar "
+            "CLAUDE.md armadilha 8) e/ou aceitar a aproximação do envelope único já existente."
         ),
     }
 
@@ -443,6 +516,100 @@ def avaliar_viabilidade_referencia_chirps_1991_2011():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Ajuste final (2026) — auditoria do CÓDIGO da extração central existente
+# (scripts/_chirps.py), distinguindo o CONFIRMADO do PENDENTE
+# ══════════════════════════════════════════════════════════════════════════
+
+def auditar_extracao_chirps_central_existente():
+    """Ajuste final (2026) — inspeciona scripts/_chirps.py por LEITURA
+    DE CÓDIGO (nenhuma chamada de rede, nenhuma nova extração) e
+    reporta, separadamente, o que está CONFIRMADO (fato verificável no
+    código-fonte ou por aritmética exata) do que continua PENDENTE
+    (depende de documentação externa não disponível aqui — ex.: a
+    convenção de alinhamento do grid CHIRPS).
+
+    Os três achados CONFIRMADOS têm reprodução sintética em
+    tests/test_chirps_extracao_sintetica.py (mockando
+    climateserv.api.request_data — nenhuma rede real):
+
+    1. `(r.get('value') or {}).get('avg') or 0.0` em
+       _buscar_prec_chirps_geom trata um dia SEM DADO (avg ausente ou
+       None) exatamente como um dia de chuva real ZERO — mesmo valor
+       de saída, nenhum sinal de qual dos dois ocorreu. Viola o
+       princípio já aplicado a TSA/PDO (CLAUDE.md armadilha 6: "0.0 é
+       uma afirmação, não um vazio").
+    2. A agregação diária→mensal (`.groupby(['ano','mes'])['prec'].sum()`)
+       não exige nenhuma cobertura mínima de dias, e o DataFrame
+       retornado não carrega nenhuma coluna de contagem/cobertura —
+       um mês com 1 dia de dado e um mês com 31 são indistinguíveis na
+       saída. Dias OMITIDOS inteiramente da resposta (nem como None)
+       são um segundo modo de incompletude, igualmente sem sinal.
+    3. FAZENDAS_LAT (-7.80) e FAZENDAS_LON (-47.95) são múltiplos
+       EXATOS da resolução do CHIRPS (0.05°) nos dois eixos (aritmética
+       exata, Decimal) — condição geométrica que, dependendo da
+       convenção de alinhamento do grid CHIRPS (não verificada aqui),
+       pode pôr o ponto central sobre uma borda ou quina de pixel, ao
+       contrário do que o comentário de `_geometria_ponto` presume
+       ("a média do polígono equivale ao valor do pixel que contém o
+       ponto").
+
+    NENHUMA alteração de comportamento é feita em scripts/_chirps.py
+    por esta função — só um comentário explicativo foi adicionado no
+    código-fonte, apontando para este achado (documentação, não
+    correção). A correção proposta abaixo NÃO é aplicada — corrigir o
+    pipeline de produção exige apresentar antes o impacto e a proposta,
+    que é exatamente o que este achado faz; aplicar a correção em si é
+    uma decisão separada, fora do escopo desta tarefa."""
+    return {
+        'metodo_de_auditoria': 'leitura de código-fonte + testes sintéticos mockados — '
+                                'nenhuma chamada de rede, nenhuma nova extração',
+        'testes_sinteticos': 'tests/test_chirps_extracao_sintetica.py (9 testes)',
+        'confirmado_valor_ausente_pode_virar_zero': True,
+        'confirmado_zero_real_e_ausencia_sao_indistinguiveis_na_saida': True,
+        'confirmado_sem_cobertura_minima_de_dias_exigida': True,
+        'confirmado_resultado_sem_coluna_de_contagem_de_dias': True,
+        'confirmado_dias_omitidos_tambem_nao_contam_nem_sinalizam': True,
+        'confirmado_ponto_central_e_multiplo_exato_da_resolucao_chirps': True,
+        'pendente_convencao_de_alinhamento_do_grid_chirps': (
+            'se os pixels do CHIRPS têm CENTRO em múltiplos de 0,05° (caso em que o ponto '
+            'central cairia exatamente numa quina compartilhada por até 4 pixels) ou BORDA em '
+            'múltiplos de 0,05° (caso em que o ponto cairia exatamente sobre uma borda) — as '
+            'duas convenções são comuns em produtos gridded, e a diferença muda a conclusão '
+            'sobre se a caixa de _geometria_ponto (delta=0,01°) cruza para um pixel vizinho. '
+            'Não verificado aqui — exigiria documentação técnica do grid CHIRPS, não uma nova '
+            'extração de precipitação, então poderia em princípio ser resolvido sem violar a '
+            'restrição desta tarefa, mas não foi verificado nesta rodada.'
+        ),
+        'impacto': (
+            'RISCO, não comprovado que já tenha se manifestado nos dados hoje salvos em '
+            'data/chirps_1981_2025.csv — não há evidência de que o ClimateSERV alguma vez '
+            'tenha retornado avg=None para um dia dentro do período já extraído; o achado é '
+            'sobre o CÓDIGO (o que aconteceria SE isso ocorrer), não uma afirmação de que os '
+            'dados já extraídos estão errados. Se o ClimateSERV retornar dias com avg ausente '
+            '(rede instável, processamento parcial do lado do serviço, dia realmente sem '
+            'cobertura de satélite), o mês correspondente seria subestimado silenciosamente, '
+            'sem nenhum aviso no log nem qualquer coluna que permita a um usuário futuro '
+            'auditar a cobertura de dias por mês.'
+        ),
+        'proposta_de_correcao_nao_aplicada': (
+            'NÃO aplicada aqui — apresentada para avaliação futura, conforme exigido antes de '
+            'qualquer mudança de comportamento do pipeline de produção. Proposta: (1) trocar '
+            '`.get(\'avg\') or 0.0` por uma checagem explícita — se \'avg\' ausente ou None, '
+            'marcar o dia como NaN (não 0.0) e excluí-lo do numerador da soma mensal; (2) '
+            'propagar no DataFrame retornado por buscar_prec_chirps/buscar_prec_chirps_zonal '
+            'uma coluna adicional (ex. \'n_dias_validos\') com a contagem de dias reais '
+            'usados naquele mês, para que o chamador (fetch_monthly_data.py, '
+            'backfill_chirps_historico.py) possa decidir explicitamente um limiar mínimo de '
+            'cobertura — mesmo padrão já usado para TSA/PDO (persistência com sinalização de '
+            'origem, nunca 0.0 silencioso, CLAUDE.md armadilha 6); (3) para a geometria, '
+            'confirmar documentalmente a convenção de alinhamento do grid CHIRPS antes de '
+            'decidir se _geometria_ponto precisa de um delta maior ou de uma escolha '
+            'explícita de qual pixel usar quando o ponto cai sobre uma borda/quina.'
+        ),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Proposta de continuidade (exigida pelas restrições desta tarefa)
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -489,6 +656,12 @@ def montar_proposta_continuidade():
         "Rodar scripts/_chirps.py::buscar_prec_chirps_zonal pela suíte de falha de "
         "tests/test_fetch_fallback.py (hoje só cobre buscar_prec_chirps) antes de considerar "
         "promovê-lo a fonte primária para qualquer finalidade.",
+        "Avaliar e, se aprovada, aplicar a proposta de correção (ajuste final, 2026) para o "
+        "tratamento de valor ausente em scripts/_chirps.py — ver "
+        "auditar_extracao_chirps_central_existente() — ANTES disso, apresentar o impacto real "
+        "medido (não só o risco teórico já documentado) e confirmar com o responsável pelos "
+        "dados se o ClimateSERV já retornou dias sem avg para o período já extraído; a correção "
+        "NÃO foi aplicada nesta rodada, só diagnosticada.",
         "Só depois de tudo acima: decisão EXPLÍCITA e documentada (não automática, fora do "
         "escopo desta tarefa) sobre se/como uma referência CHIRPS construída internamente "
         "(pontual, ponderada por área, ou zonal sobre a união dos polígonos) substituiria, "
@@ -511,15 +684,18 @@ def executar_investigacao_completa():
     informacoes_necessarias = montar_lista_informacoes_necessarias_reproducao()
     tres_alternativas = comparar_tres_alternativas_metodologicas()
     viabilidade = avaliar_viabilidade_referencia_chirps_1991_2011()
+    auditoria_codigo_extracao = auditar_extracao_chirps_central_existente()
     proposta_continuidade = montar_proposta_continuidade()
 
     metadata = {
-        'fase': '2C.2 — investigação dedicada da reinterpretação CHIRPS (4ª/5ª rodadas, 2026)',
+        'fase': '2C.2 — investigação dedicada da reinterpretação CHIRPS (4ª/5ª rodadas + ajuste '
+                'final, 2026)',
         'metodologia_chirps_ponto_conhecida': METODOLOGIA_CHIRPS_PONTO_CONHECIDA,
         'comparacao_chirps_ponto_vs_serie_producao': comparacao,
         'informacoes_necessarias_para_reproducao': informacoes_necessarias,
         'comparacao_tres_alternativas_metodologicas': tres_alternativas,
         'viabilidade_referencia_chirps_1991_2011': viabilidade,
+        'auditoria_codigo_extracao_central_existente': auditoria_codigo_extracao,
         'proposta_de_continuidade': proposta_continuidade,
         'nenhuma_skill_calculada': True,
         'nenhuma_previsao_ou_indicador_recalculado': True,
@@ -537,6 +713,7 @@ def gerar_relatorio_markdown(metadata):
     comp = metadata['comparacao_chirps_ponto_vs_serie_producao']
     tres = metadata['comparacao_tres_alternativas_metodologicas']
     viab = metadata['viabilidade_referencia_chirps_1991_2011']
+    audcod = metadata['auditoria_codigo_extracao_central_existente']
 
     linhas = [
         "# Investigação CHIRPS — reinterpretação da referência observacional Sinobras",
@@ -641,6 +818,13 @@ def gerar_relatorio_markdown(metadata):
         f"- Verificável com os dados atuais: {sobrep['verificavel_com_os_dados_atuais']}.",
         f"- {sobrep['sinal_indireto_disponivel']}",
         f"- {sobrep['interpretacao']}",
+        f"- Ausência de sobreposição é suficiente, sozinha, para (b) = (c): "
+        f"{sobrep['ausencia_de_sobreposicao_e_suficiente_para_b_igual_c']}. "
+        f"{sobrep['motivo_nao_suficiente']}",
+        "",
+        "### Qual alternativa é mais correta",
+        "",
+        f"- {tres['qual_alternativa_e_mais_correta']}",
         "",
         f"- {tres['interpretacao']}",
         "",
@@ -651,7 +835,43 @@ def gerar_relatorio_markdown(metadata):
         f"({viab['n_meses_1991_2011_ja_extraidos']}/{viab['n_meses_1991_2011_esperados']} meses).",
         f"- {viab['interpretacao']}",
         "",
-        "## 6. Proposta de continuidade",
+        "## 6. Auditoria do código da extração central existente (scripts/_chirps.py, ajuste "
+        "final)",
+        "",
+        "**Auditoria de CÓDIGO — nenhuma chamada de rede, nenhuma nova extração. Achados "
+        "reproduzidos por testes sintéticos em `tests/test_chirps_extracao_sintetica.py` (9 "
+        "testes). Nenhuma alteração de comportamento do pipeline de produção foi feita — só um "
+        "comentário explicativo em scripts/_chirps.py.**",
+        "",
+        "### Confirmado (por leitura de código / aritmética exata)",
+        "",
+        f"- Um dia sem dado (avg ausente ou None) pode virar precipitação 0.0: "
+        f"{audcod['confirmado_valor_ausente_pode_virar_zero']}.",
+        f"- Chuva real zero e dia sem dado são indistinguíveis na saída: "
+        f"{audcod['confirmado_zero_real_e_ausencia_sao_indistinguiveis_na_saida']}.",
+        f"- Confirmado que NÃO há exigência de cobertura mínima de dias na agregação mensal: "
+        f"{audcod['confirmado_sem_cobertura_minima_de_dias_exigida']}.",
+        f"- Confirmado que o resultado NÃO carrega nenhuma coluna de contagem/cobertura de "
+        f"dias: {audcod['confirmado_resultado_sem_coluna_de_contagem_de_dias']}.",
+        f"- Dias omitidos inteiramente da resposta também não contam nem são sinalizados: "
+        f"{audcod['confirmado_dias_omitidos_tambem_nao_contam_nem_sinalizam']}.",
+        f"- Ponto central (FAZENDAS_LAT/FAZENDAS_LON) é múltiplo exato da resolução do CHIRPS "
+        f"(0,05°) nos dois eixos: "
+        f"{audcod['confirmado_ponto_central_e_multiplo_exato_da_resolucao_chirps']}.",
+        "",
+        "### Pendente",
+        "",
+        f"- {audcod['pendente_convencao_de_alinhamento_do_grid_chirps']}",
+        "",
+        "### Impacto",
+        "",
+        f"- {audcod['impacto']}",
+        "",
+        "### Proposta de correção (não aplicada)",
+        "",
+        f"- {audcod['proposta_de_correcao_nao_aplicada']}",
+        "",
+        "## 7. Proposta de continuidade",
         "",
     ]
     for i, item in enumerate(metadata['proposta_de_continuidade'], 1):

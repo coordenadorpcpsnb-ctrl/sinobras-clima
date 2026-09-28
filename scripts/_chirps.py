@@ -92,6 +92,20 @@ def _buscar_prec_chirps_geom(ini, fim, geom, rotulo='CHIRPS'):
     # derrubar o pipeline inteiro — vira fallback, como qualquer outra
     # falha do CHIRPS.
     try:
+        # Achado de auditoria (5ª rodada, ajuste final, 2026; ver
+        # docs/nmme-fase2c2-auditoria-chirps-sinobras.md e
+        # tests/test_chirps_extracao_sintetica.py) — CONFIRMADO, não
+        # corrigido aqui (correção de comportamento de produção exige
+        # apresentação prévia de impacto, fora do escopo desta
+        # auditoria): `(r.get('value') or {}).get('avg') or 0.0` trata
+        # um dia SEM DADO (avg ausente ou None) EXATAMENTE como um dia
+        # de chuva real ZERO — as duas situações produzem o mesmo
+        # valor, sem nenhum sinal de qual ocorreu. Viola o princípio já
+        # aplicado a TSA/PDO em CLAUDE.md armadilha 6 ("0.0 é uma
+        # afirmação, não um vazio"). Some-se a isso: a agregação abaixo
+        # não exige cobertura mínima de dias no mês, e dias omitidos
+        # inteiramente da resposta (nem sequer como None) também não
+        # contam — dois modos distintos de incompletude silenciosa.
         df = pd.DataFrame([{
             'ano': r['year'], 'mes': r['month'],
             'prec': (r.get('value') or {}).get('avg') or 0.0,
