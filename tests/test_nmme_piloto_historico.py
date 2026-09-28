@@ -597,6 +597,39 @@ class AptidaoReferenciaObservacionalTestCase(unittest.TestCase):
         self.assertNotIn('poc_status', aptidao)
         self.assertNotIn('REPROVADO_ACESSO', str(aptidao))
 
+    def test_g2_default_nunca_menciona_chirps_como_bloqueio(self):
+        """4ª rodada (2026) — o novo parâmetro é aditivo: default False
+        preserva o comportamento original para todo chamador existente
+        (nenhuma menção a CHIRPS como bloqueio quando não solicitado)."""
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(self._cobertura_perfeita())
+        self.assertFalse(any('CHIRPS' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_procedencia_pos_1996_nao_instrumental_adiciona_bloqueio(self):
+        """4ª rodada (2026) — quando True, adiciona um bloqueio
+        estrutural sobre a procedência CHIRPS pós-1996, sem substituir
+        os demais bloqueios (espacial continua presente)."""
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(
+            self._cobertura_perfeita(), procedencia_pos_1996_nao_instrumental=True)
+        self.assertFalse(aptidao['apto_para_avaliacao_cientifica'])
+        self.assertTrue(any('estimativa CHIRPS' in m for m in aptidao['motivos_bloqueio']))
+        self.assertTrue(any('correspondência espacial' in m for m in aptidao['motivos_bloqueio']))
+        self.assertEqual(len(aptidao['motivos_bloqueio']), 2)
+
+    def test_g2_bloqueio_chirps_menciona_zonal(self):
+        """5ª rodada (2026) — precisão adicional: a estimativa é ZONAL
+        (média dos pixels dentro do polígono), não pontual."""
+        aptidao = pilo.avaliar_aptidao_referencia_observacional(
+            self._cobertura_perfeita(), procedencia_pos_1996_nao_instrumental=True)
+        self.assertTrue(any('ZONAL' in m for m in aptidao['motivos_bloqueio']))
+        self.assertTrue(any('polígono' in m for m in aptidao['motivos_bloqueio']))
+
+    def test_g2_procedencia_estacao_sinobras_menciona_zonal(self):
+        """5ª rodada (2026) — a constante reusada em toda a cadeia de
+        auditoria reflete a metodologia zonal confirmada pelo
+        responsável pelos dados."""
+        self.assertIn('ZONAL', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+        self.assertIn('polígono', pilo.PROCEDENCIA_ESTACAO_SINOBRAS)
+
 
 class RepresentacaoDiferenteTestCase(unittest.TestCase):
     """Seção 4 da tarefa — qualquer origem que usar uma representação
@@ -687,10 +720,14 @@ class MetadataEArtifactsTestCase(unittest.TestCase):
         self.assertEqual(meta['n_origens'], 16)
 
     def test_i_metadata_nunca_chama_a_referencia_de_chirps(self):
-        """Regressão — a versão anterior tinha um campo
-        'chirps_referencia'; a série não é CHIRPS para o período do
-        piloto (achado desta tarefa), então nenhum campo do metadata
-        pode usar esse nome."""
+        """Regressão estrutural — a versão anterior tinha um campo
+        'chirps_referencia' (nome de campo, não afirmação sobre a
+        fonte); nenhum campo do metadata pode reintroduzir esse nome.
+        Nota (4ª rodada, 2026): esta série É, segundo o responsável
+        pelos dados, estimativa CHIRPS para 1996-presente (ver
+        docs/nmme-fase2c2-auditoria-chirps-sinobras.md) — a checagem
+        aqui é só sobre o NOME do campo, não sobre se a fonte é ou não
+        CHIRPS."""
         resultados, cobertura, aprovacao, aptidao = self._tudo()
         meta = pilo.montar_metadata_piloto(resultados, cobertura, aprovacao, aptidao)
         self.assertNotIn('chirps_referencia', meta)

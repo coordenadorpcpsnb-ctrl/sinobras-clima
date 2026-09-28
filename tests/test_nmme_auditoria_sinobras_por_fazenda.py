@@ -232,12 +232,25 @@ class IdentificarGruposSeriesIdenticasTestCase(unittest.TestCase):
         self.assertEqual(resultado['n_series_mensais_distintas'], 2)
         self.assertEqual(resultado['grupos_de_series_identicas'], [])
 
+    def test_c_interpretacao_reflete_extracao_zonal_nao_pontual(self):
+        """5ª rodada (2026) — a hipótese de compartilhamento é sobre
+        CONJUNTO de pixels cobertos pelo polígono, não pixel único;
+        nunca presume polígono idêntico a partir de série idêntica."""
+        df = pd.DataFrame(_sinobras_completo_4_estacoes_3_meses(),
+                           columns=['ano', 'mes', 'prec_mm', 'estacao'])
+        resultado = aud.identificar_grupos_series_identicas(df)
+        self.assertIn('ZONAL', resultado['interpretacao'])
+        self.assertIn('MESMO CONJUNTO DE PIXELS', resultado['interpretacao'])
+        self.assertIn('polígonos', resultado['interpretacao'])
+        self.assertIn('NÃO comprovada', resultado['interpretacao'])
+
 
 class DistinguirIdentificadoresSeriesInstrumentosTestCase(unittest.TestCase):
     """Item 5 — nunca presume equivalência entre identificadores,
-    séries distintas e instrumentos independentes."""
+    séries distintas, conjuntos de pixels CHIRPS (extração zonal) e
+    instrumentos independentes (quatro conceitos, 4ª/5ª rodada 2026)."""
 
-    def test_a_instrumentos_independentes_sempre_none(self):
+    def test_a_instrumentos_e_conjuntos_de_pixels_sempre_none(self):
         integridade = {'n_identificadores': 34}
         grupos = {'n_series_mensais_distintas': 27}
         resultado = aud.distinguir_identificadores_series_e_instrumentos(integridade, grupos)
@@ -245,7 +258,12 @@ class DistinguirIdentificadoresSeriesInstrumentosTestCase(unittest.TestCase):
         self.assertEqual(resultado['n_series_mensais_numericamente_distintas'], 27)
         self.assertIsNone(
             resultado['n_instrumentos_pluviometricos_efetivamente_independentes_confirmados'])
+        self.assertIsNone(
+            resultado['n_conjuntos_de_pixels_chirps_efetivamente_distintos_confirmados'])
         self.assertIn('DESCONHECIDO', resultado['interpretacao'])
+        self.assertIn('NEM SEQUER PRESUMIDO QUE EXISTA', resultado['interpretacao'])
+        self.assertIn('ZONAL', resultado['interpretacao'])
+        self.assertIn('MESMO conjunto de pixels CHIRPS', resultado['interpretacao'])
 
 
 class AnalisarSensibilidadeDeduplicacaoTestCase(unittest.TestCase):
@@ -275,18 +293,23 @@ class AnalisarSensibilidadeDeduplicacaoTestCase(unittest.TestCase):
 
 
 class MontarAchadosEspaciaisTestCase(unittest.TestCase):
-    """Item 7 — registra a NECESSIDADE de coordenadas individuais E do
-    mapeamento identificador→instrumento, nunca as inventa nem presume
-    que séries distintas equivalem a locais físicos independentes."""
+    """Item 7 — registra a NECESSIDADE dos polígonos de extração zonal
+    E do mapeamento identificador→instrumento, nunca as inventa nem
+    presume que séries distintas equivalem a locais físicos (ou
+    conjuntos de pixels) independentes."""
 
-    def test_a_coordenadas_e_mapeamento_registrados_como_ausentes(self):
+    def test_a_poligonos_e_mapeamento_registrados_como_ausentes(self):
         grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
         resultado = aud.montar_achados_espaciais(grupos)
         self.assertFalse(resultado['coordenadas_individuais_disponiveis_no_arquivo'])
         self.assertFalse(resultado['coordenadas_individuais_disponiveis_no_repositorio'])
+        self.assertFalse(resultado['poligonos_de_extracao_disponiveis_no_repositorio'])
         self.assertFalse(resultado['mapeamento_identificador_para_instrumento_disponivel'])
-        self.assertIn('coordenadas', resultado['interpretacao'])
+        self.assertFalse(resultado['mapeamento_identificador_para_pixel_chirps_disponivel'])
+        self.assertIn('POLÍGONO', resultado['interpretacao'])
         self.assertIn('mapeamento', resultado['interpretacao'])
+        self.assertIn('CHIRPS', resultado['interpretacao'])
+        self.assertIn('ZONAL', resultado['interpretacao'])
 
     def test_b_nunca_presume_series_distintas_como_locais_independentes(self):
         grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
@@ -294,6 +317,15 @@ class MontarAchadosEspaciaisTestCase(unittest.TestCase):
         self.assertIn('NÃO presumir', resultado['interpretacao'])
         self.assertIn('34', resultado['interpretacao'])
         self.assertIn('27', resultado['interpretacao'])
+        self.assertIn('pluviômetro', resultado['interpretacao'])
+        self.assertIn('MESMO conjunto de pixels', resultado['interpretacao'])
+
+    def test_c_protocolo_cfsv2_menciona_uniao_dos_poligonos(self):
+        """Item 7 (tarefa 5ª rodada) — o protocolo de comparação com o
+        CFSv2 passa a considerar a UNIÃO dos polígonos, não um ponto."""
+        grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
+        resultado = aud.montar_achados_espaciais(grupos)
+        self.assertIn('UNIÃO', resultado['interpretacao'])
 
 
 class ExecutarAuditoriaCompletaEndToEndTestCase(unittest.TestCase):
@@ -354,8 +386,11 @@ class ExecutarAuditoriaCompletaEndToEndTestCase(unittest.TestCase):
             self.assertIn('SHA-256', relatorio)
             self.assertIn(aud.calcular_sha256(arquivo), relatorio)
             self.assertIn('DESCONHECIDO', relatorio)
-            self.assertIn('coordenadas individuais', relatorio)
+            self.assertIn('Coordenadas individuais disponíveis', relatorio)
             self.assertIn('SEM COMPROVAÇÃO', relatorio)
+            self.assertIn('CHIRPS', relatorio)
+            self.assertIn('pixel CHIRPS', relatorio)
+            self.assertIn('pluviômetro', relatorio)
 
 
 class ZeroSkillNuncaModificaProducaoTestCase(unittest.TestCase):

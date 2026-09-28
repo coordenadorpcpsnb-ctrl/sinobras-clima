@@ -22,11 +22,17 @@ docs/nmme-fase2c1b-encerramento.md e docs/nmme-fase2c2-especificacao.md):
     envelope (Armadilha 8 do CLAUDE.md: zonal ainda não passou pela
     suíte de falha, promoção é decisão separada, não tomada aqui).
     IMPORTANTE (revisão pontual pré-execução real): essa referência
-    (`data/serie_subst.csv`) NÃO é CHIRPS para o período do piloto — é
-    reanálise MERRA-2 (1981-1995) e leitura das estações da própria
-    Sinobras (1996-presente), README.md — e está a ~198 km do ponto de
-    São Bento do Tocantins usado pelo CFSv2 (centroide das fazendas,
-    não o mesmo ponto — ver `distancia_fazendas_ate_municipio_km` e
+    (`data/serie_subst.csv`) é, segundo o README.md, reanálise MERRA-2
+    (1981-1995, fonte original não comprovada) + leitura das estações
+    da própria Sinobras (1996-presente) — mas essa 2ª descrição foi
+    CORRIGIDA numa revisão posterior (4ª rodada, 2026): o responsável
+    pelos dados informou que o trecho 1996-presente é, na verdade,
+    ESTIMATIVA CHIRPS por fazenda, não leitura direta de pluviômetro
+    (a empresa não tem pluviômetro em todas as fazendas) — ver
+    docs/nmme-fase2c2-auditoria-chirps-sinobras.md. Essa referência
+    está a ~198 km do ponto de São Bento do Tocantins usado pelo CFSv2
+    (centroide das fazendas, não o mesmo ponto — ver
+    `distancia_fazendas_ate_municipio_km` e
     `docs/nmme-fase2c2-piloto-cobertura-observacional.md`). As
     coordenadas usadas pelo POC/CFSv2 em si (São Bento) NÃO são
     alteradas por esta revisão — só a forma como a referência
@@ -112,9 +118,33 @@ FONTES_NAO_CONFIRMADAS = {'CHC-Preliminar', 'OpenMeteo-ERA5'}
 # `fonte` bruta -> descrição; para `fonte` vazia, o ano decide entre os
 # dois trechos do baseline histórico (README.md: "Série histórica
 # (MERRA-2 1981-1995 + Sinobras 1996-hoje)").
+#
+# Revisão pontual (4ª rodada, 2026) — o trecho 1996-presente NÃO é
+# leitura direta de pluviômetro, como este rótulo afirmava até aqui.
+# O responsável pelos dados informou que SINOBRAS.csv (a fonte deste
+# trecho, ver docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md)
+# contém ESTIMATIVAS extraídas do CHIRPS por fazenda — a empresa não
+# tem pluviômetro em todas as fazendas. A versão e a metodologia de
+# extração do CHIRPS usadas para produzir SINOBRAS.csv ainda NÃO foram
+# verificadas documentalmente (ver docs/nmme-fase2c2-auditoria-chirps-
+# sinobras.md) — o rótulo abaixo reflete isso: informação do
+# responsável pelos dados, não um fato comprovado por este módulo.
+#
+# Revisão pontual (5ª rodada, 2026) — precisão adicional confirmada
+# pelo responsável pelos dados: a estimativa por fazenda é ZONAL
+# (média dos pixels CHIRPS dentro do polígono de cada fazenda), não
+# pontual (não é 1 pixel/coordenada única por fazenda). O critério de
+# inclusão de pixel (centro dentro do polígono? qualquer sobreposição?
+# fração de área?) e o tratamento de pixels parcialmente interceptados
+# continuam NÃO verificados documentalmente.
 ANO_FIM_MERRA2 = 1995   # README.md — 1981-1995 MERRA-2, 1996+ Sinobras
 PROCEDENCIA_MERRA2 = 'MERRA-2 (reanálise NASA, README.md: baseline 1981-1995)'
-PROCEDENCIA_ESTACAO_SINOBRAS = 'Estação Sinobras (leitura direta de campo, README.md: baseline 1996-presente)'
+PROCEDENCIA_ESTACAO_SINOBRAS = (
+    'SINOBRAS por fazenda (estimativa CHIRPS ZONAL — média dos pixels dentro do polígono de '
+    'cada fazenda, informada pelo responsável pelos dados — NÃO pluviômetro confirmado; '
+    'versão do CHIRPS, critério de inclusão de pixel e processamento temporal ainda não '
+    'verificados documentalmente; README.md: baseline 1996-presente)'
+)
 PROCEDENCIA_CHIRPS_FINAL = 'CHIRPS Final (fonte=CHIRPS, fetch_monthly_data.py)'
 PROCEDENCIA_CHC_PRELIMINAR = 'CHC Preliminary (fonte=CHC-Preliminar, fetch_monthly_data.py — preliminar/estimado)'
 PROCEDENCIA_ERA5 = 'Open-Meteo ERA5-Land (fonte=OpenMeteo-ERA5, fetch_monthly_data.py — fallback final/estimado)'
@@ -412,7 +442,8 @@ def avaliar_aprovacao_piloto(resultados_piloto, origens_esperadas=PILOTO_ORIGENS
     }
 
 
-def avaliar_aptidao_referencia_observacional(cobertura_df, distancia_km=None, ponto_descricao=None):
+def avaliar_aptidao_referencia_observacional(cobertura_df, distancia_km=None, ponto_descricao=None,
+                                              procedencia_pos_1996_nao_instrumental=False):
     """Seção 3 da tarefa — verdito SEPARADO de `avaliar_aprovacao_
     piloto`: nunca reportado como falha de acesso ao CFSv2, e nunca
     combinado no mesmo `piloto_status`. Responde: "a referência
@@ -434,6 +465,14 @@ def avaliar_aptidao_referencia_observacional(cobertura_df, distancia_km=None, po
     ponto de grade do CFSv2 é MUITO mais próximo — ~23 km, não 198 km),
     o bloqueio estrutural usa a distância/descrição fornecidas em vez
     de recalcular para São Bento — nunca mistura as duas.
+
+    `procedencia_pos_1996_nao_instrumental` (4ª rodada, 2026) —
+    aditivo: default `False` preserva o comportamento original para
+    todo chamador existente. Quando `True` (auditoria observacional
+    principal, ciente de que SINOBRAS.csv 1996-2025 foi informado pelo
+    responsável pelos dados como estimativa CHIRPS, não leitura de
+    pluviômetro), adiciona um bloqueio ESTRUTURAL adicional — nunca
+    substitui os bloqueios de cobertura/qualidade/distância acima.
 
     Bloqueio ESTRUTURAL, sempre presente nesta revisão (Seção 2 da
     tarefa: "consequências para uma futura avaliação científica"): a
@@ -483,6 +522,15 @@ def avaliar_aptidao_referencia_observacional(cobertura_df, distancia_km=None, po
                       f'referência observacional (centroide das fazendas) e o ponto do CFSv2 '
                       f'({ponto_descricao}); decisão explícita pendente '
                       f'(docs/nmme-fase2c2-piloto-cobertura-observacional.md)')
+
+    if procedencia_pos_1996_nao_instrumental:
+        bloqueios.append(
+            'referência pós-1996 é estimativa CHIRPS ZONAL por fazenda (média dos pixels dentro '
+            'do polígono de cada fazenda, informada pelo responsável pelos dados — NÃO leitura '
+            'direta de pluviômetro confirmada; a empresa não tem pluviômetro em todas as '
+            'fazendas; versão do CHIRPS, critério de inclusão de pixel e processamento temporal '
+            'ainda não verificados documentalmente) — decisão explícita pendente '
+            '(docs/nmme-fase2c2-auditoria-chirps-sinobras.md)')
 
     return {
         'apto_para_avaliacao_cientifica': not bloqueios,
@@ -615,14 +663,19 @@ def montar_metadata_piloto(resultados_piloto, cobertura_df, aprovacao, aptidao):
         'representacao': ncat.REPR_NMME_HARMONIZED_MONTHLY, 'politica_membros': 'exatamente 24 por lead',
         'n_origens_com_representacao_diferente_da_validada': n_repr_diferente,
         # Seção 2 da tarefa — coordenadas de cada lado, nunca só a
-        # distância isolada, e nunca chamado de "CHIRPS" (não é).
+        # distância isolada. Revisão pontual (4ª rodada, 2026): este
+        # texto afirmava "NÃO é CHIRPS" para 1996-presente — não mais
+        # sustentado (ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md).
         'previsao_cfsv2_ponto': npoc.MUNICIPIO,
         'previsao_cfsv2_lat': info_municipio['lat'], 'previsao_cfsv2_lon': info_municipio['lon'],
         'serie_observacional_ponto': 'centroide das fazendas',
         'serie_observacional_lat': FAZENDAS_LAT, 'serie_observacional_lon': FAZENDAS_LON,
         'serie_observacional_procedencia_documental': (
-            'MERRA-2 (reanálise, 1981-1995) + Estação Sinobras (leitura direta, 1996-presente) — '
-            'README.md; NÃO é CHIRPS para o período do piloto (1991-2010)'),
+            'MERRA-2 (reanálise, 1981-1995 — fonte original não comprovada) + SINOBRAS por '
+            'fazenda (1996-presente — informado pelo responsável pelos dados como estimativa '
+            'CHIRPS, NÃO leitura direta de pluviômetro confirmada; versão/metodologia de '
+            'extração ainda não verificadas documentalmente) — '
+            'ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md'),
         'distancia_previsao_observacao_km': round(dist_km, 1),
         'consequencias_avaliacao_cientifica_futura': (
             'Distância de ~198 km entre a previsão do CFSv2 (São Bento do Tocantins) e a série '

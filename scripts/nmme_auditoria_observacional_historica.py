@@ -98,18 +98,46 @@ EVIDENCIA_SINOBRAS_POR_FAZENDA = {
     'reconciliacao_com_serie_producao_completa': True,
     'relatorio_completo': 'docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md',
     'script_auditoria': 'scripts/nmme_auditoria_sinobras_por_fazenda.py',
+    # 4ª rodada (2026) — informação recebida do responsável pelos
+    # dados, ainda NÃO verificada documentalmente (versão/metodologia
+    # de extração do CHIRPS pendentes — ver
+    # docs/nmme-fase2c2-auditoria-chirps-sinobras.md).
+    'fonte_informada_pelo_responsavel_pelos_dados': 'estimativa CHIRPS zonal por polígono de fazenda',
+    'fonte_e_leitura_direta_de_pluviometro': False,
+    'fonte_verificada_documentalmente': False,
+    'empresa_possui_pluviometro_em_todas_as_fazendas': False,
+    'relatorio_chirps': 'docs/nmme-fase2c2-auditoria-chirps-sinobras.md',
+    # 5ª rodada (2026) — precisão adicional confirmada pelo
+    # responsável pelos dados: a extração é ZONAL (média dos pixels
+    # CHIRPS dentro do polígono de cada fazenda), não pontual.
+    'extracao_e_zonal_por_poligono': True,
+    'extracao_e_pontual': False,
+    'poligonos_por_fazenda_disponiveis_no_repositorio': False,
+    'criterio_inclusao_pixel_verificado': False,
+    'tratamento_pixel_parcial_verificado': False,
 }
 
 ANO_FIM_MERRA2 = pilo.ANO_FIM_MERRA2   # 1995 — README.md
 ORIGENS_HISTORICAS = ext.ORIGENS_HISTORICAS   # 240 pares (ano, mês), 1991-2010
 
-# Padrão de agregação das leituras de campo Sinobras, tal como escrito
+# Padrão de agregação dos registros SINOBRAS_new.csv, tal como escrito
 # em scripts/update_dashboard.py — verificado por leitura de código
 # (nunca assumido do README): média aritmética simples por (ano, mês)
 # sobre as linhas presentes no arquivo enviado naquele mês, SEM exigir
-# um número mínimo de estações/fazendas reportando e SEM reter a
-# leitura por estação individual em data/serie_subst.csv (só a média
+# um número mínimo de estações/fazendas reportando e SEM reter o
+# registro por estação individual em data/serie_subst.csv (só a média
 # sobrevive).
+#
+# Revisão pontual (4ª rodada, 2026) — "leituras de campo" era a
+# descrição usada aqui até esta rodada. O responsável pelos dados
+# informou que o HISTÓRICO 1996-2025 (SINOBRAS.csv) é estimativa
+# CHIRPS por fazenda, não leitura de pluviômetro — ver
+# docs/nmme-fase2c2-auditoria-chirps-sinobras.md. Não há evidência
+# própria sobre a metodologia de SINOBRAS_new.csv (o arquivo de
+# incorporação CONTÍNUA, distinto do histórico já auditado) — mas dado
+# que a empresa não tem pluviômetro em todas as fazendas, a mesma
+# dúvida se aplica por precaução: nunca mais chamado de "leitura de
+# campo" sem qualificação neste módulo.
 PADRAO_AGREGACAO_SINOBRAS = "df_new.groupby(['ano','mes'])['prec_mm'].mean()"
 
 
@@ -335,9 +363,9 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
     """Item 3 — confirma por LEITURA DE CÓDIGO (nunca por execução —
     scripts/update_dashboard.py roda uma pipeline de produção inteira
     se importado, então este módulo só lê o texto do arquivo) que a
-    incorporação de NOVAS leituras de campo (SINOBRAS_new.csv) usa
-    média aritmética simples, sem mínimo de estações e sem retenção da
-    leitura por estação individual em serie_subst.csv.
+    incorporação de NOVOS registros (SINOBRAS_new.csv) usa média
+    aritmética simples, sem mínimo de estações e sem retenção do
+    registro por estação individual em serie_subst.csv.
 
     Revisão pontual (2ª rodada, item 1) — isto descreve o PROCEDIMENTO
     ATUAL do código, que só se aplica a dados incorporados A PARTIR de
@@ -345,7 +373,13 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
     histórico 1996-2010 foi produzido por este mesmo procedimento — ver
     `verificar_dados_1996_2010_precedem_pipeline_atual` (o backfill já
     estava completo no primeiro commit do repositório, antes deste
-    código)."""
+    código).
+
+    Revisão pontual (4ª rodada, 2026) — nunca mais chamado de "leitura
+    de campo" sem qualificação: o responsável pelos dados informou que
+    o histórico 1996-2025 (SINOBRAS.csv) é estimativa CHIRPS por
+    fazenda, não leitura de pluviômetro confirmada (ver
+    docs/nmme-fase2c2-auditoria-chirps-sinobras.md)."""
     if not UPDATE_DASHBOARD_PATH.exists():
         return {'encontrado': False, 'motivo': f'{UPDATE_DASHBOARD_PATH} não encontrado'}
     codigo = UPDATE_DASHBOARD_PATH.read_text()
@@ -362,7 +396,7 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
             "df_new.groupby(['ano','mes'])['prec_mm'].mean() — média aritmética simples sobre "
             "QUANTAS estações/fazendas estiverem presentes naquele envio, sem exigência de "
             "número mínimo (1 fazenda reportando produziria o mesmo tipo de valor que 34 "
-            "reportando) e sem reter a leitura por estação individual — só a média sobrevive "
+            "reportando) e sem reter o registro por estação individual — só a média sobrevive "
             "em serie_subst.csv (coluna 'prec'), a granularidade por fazenda é descartada. Isso "
             "descreve o procedimento ATUAL do código para dados NOVOS — uma possibilidade "
             "aberta pelo código, não uma contagem observada no histórico. No conjunto histórico "
@@ -372,7 +406,13 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
             f"identificadores em todos os {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_meses']} meses, "
             "sem exceção — a possibilidade de contagem variável é uma propriedade do "
             "procedimento ATUAL de incorporação de dados NOVOS, não do conjunto histórico já "
-            "analisado."
+            "analisado. REGISTRADO (5ª rodada, item 4 da tarefa): `df_new.groupby(...).mean()` "
+            "pondera cada fazenda IGUALMENTE — a série regional atual (data/serie_subst.csv) é "
+            "a média aritmética simples das 34 estimativas zonais por fazenda, com o mesmo "
+            "peso para cada uma, independentemente da área do polígono de cada fazenda. Uma "
+            "fazenda pequena pesa o mesmo que uma grande nesta média — nunca ponderado pela "
+            "área real (ver comparação de alternativas metodológicas em "
+            "docs/nmme-fase2c2-auditoria-chirps-sinobras.md)."
         ) if encontrado else (
             "Padrão de agregação esperado não encontrado no arquivo atual — o método pode ter "
             "mudado desde esta auditoria; revisar scripts/update_dashboard.py manualmente antes "
@@ -454,6 +494,7 @@ def montar_achados_documentacao():
         ),
         'documentos_necessarios_para_comprovar_procedencia': montar_lista_documentos_necessarios(),
         'nova_evidencia_sinobras_por_fazenda': montar_achado_nova_evidencia_sinobras_por_fazenda(),
+        'reinterpretacao_chirps': montar_achado_reinterpretacao_chirps(),
     }
 
 
@@ -464,7 +505,13 @@ def montar_achado_nova_evidencia_sinobras_por_fazenda():
     reimplementada aqui. Resume os achados JÁ VERIFICADOS por aquele
     módulo (EVIDENCIA_SINOBRAS_POR_FAZENDA) e deixa explícito o que
     muda no achado desta auditoria principal e o que CONTINUA sem
-    comprovação."""
+    comprovação.
+
+    Revisão pontual (4ª rodada, 2026) — a interpretação foi CORRIGIDA:
+    esta função chamava o trecho pós-1996 de "medição em campo" e só
+    cogitava pluviômetro compartilhado/replicação administrativa para
+    os grupos idênticos. Ver `montar_achado_reinterpretacao_chirps`
+    para o registro explícito dessa correção."""
     ev = EVIDENCIA_SINOBRAS_POR_FAZENDA
     return {
         **ev,
@@ -485,11 +532,81 @@ def montar_achado_nova_evidencia_sinobras_por_fazenda():
             f"auditoria independente também encontrou só {ev['n_series_mensais_distintas']} "
             f"séries mensais numericamente distintas entre os {ev['n_identificadores']} "
             f"identificadores — 2 grupos compartilham a mesma série completa "
-            f"({ev['grupos_de_series_identicas']}). O que CONTINUA sem comprovação, mesmo com "
-            "esta nova evidência: a metodologia de medição em campo, eventuais preenchimentos "
-            "retrospectivos, e se os identificadores agrupados representam pluviômetro "
-            "compartilhado ou replicação administrativa de fazendas distintas — nenhuma das "
-            f"duas hipóteses deve ser presumida (ver {ev['relatorio_completo']})."
+            f"({ev['grupos_de_series_identicas']}). CORRIGIDO (4ª rodada): esses registros NÃO "
+            "são medição de campo — o responsável pelos dados informou que são estimativa "
+            f"CHIRPS por fazenda (ver 'reinterpretacao_chirps' abaixo). O que CONTINUA sem "
+            "comprovação: a versão/metodologia de extração do CHIRPS, eventuais preenchimentos "
+            "retrospectivos, e se os identificadores agrupados representam pixel CHIRPS "
+            "compartilhado (hipótese mais parcimoniosa dado o novo contexto), pluviômetro físico "
+            "compartilhado, ou replicação administrativa de fazendas distintas — nenhuma dessas "
+            f"hipóteses deve ser presumida (ver {ev['relatorio_completo']} e "
+            f"{ev['relatorio_chirps']})."
+        ),
+    }
+
+
+def montar_achado_reinterpretacao_chirps():
+    """Item 1/2 (4ª rodada, 2026) — CORREÇÃO explícita, nunca um
+    apagamento silencioso: até o commit anterior a esta rodada, este
+    módulo (via `pilo.PROCEDENCIA_ESTACAO_SINOBRAS`) classificava os
+    registros pós-1996 como "Estação Sinobras (leitura direta de
+    campo)". O responsável pelos dados informou que SINOBRAS.csv
+    contém, na verdade, ESTIMATIVAS extraídas do CHIRPS por fazenda —
+    a empresa não tem pluviômetro em todas as fazendas. A versão e a
+    metodologia de extração do CHIRPS usadas ainda NÃO foram
+    verificadas documentalmente (informação recebida verbalmente do
+    responsável pelos dados, não um documento técnico revisado por
+    este módulo) — ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md
+    para a investigação dedicada (comparação com data/chirps_1981_2025.csv,
+    lista de informações ainda necessárias, avaliação de viabilidade).
+
+    Revisão pontual (5ª rodada, 2026) — refinamento, não uma nova
+    correção: o responsável pelos dados confirmou que a extração é
+    ZONAL (média dos pixels CHIRPS dentro do polígono de cada
+    fazenda), não pontual. Isso muda o tipo de geometria buscada
+    (polígono, não coordenada única) e adiciona lacunas específicas
+    (critério de inclusão de pixel, tratamento de pixel parcialmente
+    interceptado) à lista de informações ainda necessárias."""
+    ev = EVIDENCIA_SINOBRAS_POR_FAZENDA
+    return {
+        'classificacao_anterior_ate_3a_rodada': (
+            "'Estação Sinobras (leitura direta de campo, README.md: baseline 1996-presente)' "
+            "— PROCEDENCIA_ESTACAO_SINOBRAS em scripts/nmme_piloto_historico.py, commits "
+            "12cadbe a f731937"
+        ),
+        'classificacao_corrigida_4a_rodada': (
+            "'SINOBRAS por fazenda (estimativa CHIRPS, informada pelo responsável pelos dados "
+            "— NÃO pluviômetro confirmado...)' — commit 94ac463"
+        ),
+        'classificacao_refinada_5a_rodada': pilo.PROCEDENCIA_ESTACAO_SINOBRAS,
+        'extracao_e_zonal_por_poligono': ev['extracao_e_zonal_por_poligono'],
+        'fonte_da_correcao': (
+            'informação recebida do responsável pelos dados — comunicação direta ao operador '
+            'desta auditoria, não um documento técnico revisado por este módulo'
+        ),
+        'fonte_verificada_documentalmente': ev['fonte_verificada_documentalmente'],
+        'empresa_possui_pluviometro_em_todas_as_fazendas': ev['empresa_possui_pluviometro_em_todas_as_fazendas'],
+        'relatorio_chirps': ev['relatorio_chirps'],
+        'interpretacao': (
+            "Esta é uma CORREÇÃO de classificação, registrada explicitamente — a afirmação "
+            "anterior não foi apagada, só substituída e documentada aqui como incorreta. O "
+            "responsável pelos dados informou que SINOBRAS.csv (1996-2025) contém estimativas "
+            "extraídas do CHIRPS por fazenda, não leituras diretas de pluviômetro — a empresa "
+            "não tem pluviômetro em todas as fazendas. REFINADO (5ª rodada): a extração é "
+            "ZONAL — média dos pixels CHIRPS dentro do POLÍGONO de cada fazenda, não um ponto/"
+            "coordenada única. Isso é informação de terceiros, ainda NÃO verificada "
+            "documentalmente por este módulo (nenhum documento técnico de extração foi "
+            "apresentado) — tratada como acionável para efeitos de classificação (o rótulo "
+            "muda), mas não como fato cientificamente comprovado (a aptidão científica "
+            "continua bloqueada por este motivo, ver achado de aptidão abaixo). Ver "
+            f"{ev['relatorio_chirps']} para a investigação dedicada: comparação com "
+            "data/chirps_1981_2025.csv (CHIRPS de metodologia CONHECIDA, ponto único, já "
+            "extraído neste repositório), lista de informações ainda necessárias para "
+            "reproduzir a extração ZONAL de SINOBRAS.csv (versão do CHIRPS, polígonos por "
+            "fazenda, critério de inclusão de pixel, tratamento de pixel parcialmente "
+            "interceptado, processamento temporal), comparação de 3 alternativas "
+            "metodológicas para a referência regional, e avaliação de viabilidade de uma "
+            "referência CHIRPS consistente para 1991-2011."
         ),
     }
 
@@ -501,29 +618,61 @@ def montar_lista_documentos_necessarios():
     procedência histórica, tanto do trecho pré-1996 quanto do pós-1996.
     Item 1 foi PARCIALMENTE endereçado na 3ª rodada por SINOBRAS.csv
     (ver montar_achado_nova_evidencia_sinobras_por_fazenda) — os
-    demais itens continuam integralmente ausentes deste repositório."""
+    demais itens continuam integralmente ausentes deste repositório.
+
+    Itens de reprodução da extração CHIRPS adicionados na 4ª rodada
+    (2026, item 4 da tarefa) — ver docs/nmme-fase2c2-auditoria-chirps-
+    sinobras.md para o detalhamento e a comparação com
+    data/chirps_1981_2025.csv, já extraído com metodologia CONHECIDA."""
     return [
         "Dados originais por estação/fazenda individual para 1996-2025 — PARCIALMENTE obtido "
         "via SINOBRAS.csv (arquivo recebido, não incorporado a este repositório; ver achado "
         "'nova_evidencia_sinobras_por_fazenda' e docs/nmme-fase2c2-auditoria-sinobras-por-"
-        "fazenda.md). Ainda faltam: a metodologia de medição em campo, eventuais preenchimentos "
-        "retrospectivos, e a independência efetiva dos instrumentos — nenhum dos três é "
-        "verificável a partir desse arquivo isoladamente. Para o trecho pré-1996 (MERRA-2/"
-        "3-municípios), este item continua integralmente ausente.",
-        "Coordenadas de cada uma das 34 fazendas/estações pluviométricas Sinobras — hoje só o "
-        "centroide agregado (lat=-7,80/lon=-47,95) é conhecido, nunca a posição individual "
-        "(SINOBRAS.csv também não traz coordenadas) — E o mapeamento de cada um dos 34 "
-        "identificadores (FAZxx) para seu respectivo instrumento físico, confirmando quais "
-        "compartilham um único pluviômetro e quais são instrumentos distintos; as 27 séries "
-        "mensais numericamente distintas encontradas em SINOBRAS.csv não devem ser presumidas "
-        "como 27 locais de medição fisicamente independentes sem esse mapeamento.",
+        "fazenda.md). CORRIGIDO (4ª rodada): o responsável pelos dados informou que esses "
+        "registros são estimativa CHIRPS por fazenda, não medição de campo (ver achado "
+        "'reinterpretacao_chirps'). Ainda faltam: a versão/metodologia de extração do CHIRPS, "
+        "eventuais preenchimentos retrospectivos, e se alguma fazenda tem, além da estimativa, "
+        "um pluviômetro físico real — nenhum dos três é verificável a partir desse arquivo "
+        "isoladamente. Para o trecho pré-1996 (MERRA-2/3-municípios), este item continua "
+        "integralmente ausente.",
+        "Polígono de cada uma das 34 fazendas usado na extração zonal — hoje só o centroide "
+        "agregado (lat=-7,80/lon=-47,95) é conhecido, nunca o polígono individual (SINOBRAS.csv "
+        "também não traz coordenadas nem polígonos) — E o mapeamento de cada um dos 34 "
+        "identificadores (FAZxx) para o respectivo polígono usado na extração (prioridade, "
+        "dado o novo contexto zonal) e, SE alguma fazenda tiver de fato um pluviômetro físico, "
+        "para esse instrumento; as 27 séries mensais numericamente distintas encontradas em "
+        "SINOBRAS.csv não devem ser presumidas como 27 polígonos/conjuntos de pixels "
+        "fisicamente independentes sem esse mapeamento — polígonos DIFERENTES podem cobrir o "
+        "MESMO conjunto de pixels.",
+        "Versão do produto CHIRPS usada para gerar SINOBRAS.csv (ex.: CHIRPS v2.0 final vs. "
+        "preliminar) e a data de extração — ClimateSERV serve a versão CORRENTE do CHIRPS, que "
+        "pode ter sido reprocessada desde a extração original; sem essa informação, uma "
+        "reextração hoje pode não reproduzir os mesmos valores mesmo com a metodologia certa. "
+        "PENDENTE (5ª rodada) — ainda não respondido pelo responsável pelos dados.",
+        "Critério de inclusão de pixel na extração zonal e tratamento de pixels parcialmente "
+        "interceptados pela borda do polígono (RESOLVIDO PARCIALMENTE, 5ª rodada: confirmado "
+        "que a extração é ZONAL — média dos pixels dentro do polígono de cada fazenda, "
+        "CHIRPS nativo 0,05° ~5,5km no equador — mas o critério exato de inclusão de um pixel "
+        "na borda — centro dentro do polígono? qualquer sobreposição? fração de área "
+        "ponderada? — e o tratamento de pixels parcialmente interceptados continuam PENDENTES). "
+        "Determina diretamente se o compartilhamento de valores entre fazendas próximas (Seção "
+        "3/4 de docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md) é esperado por desenho ou "
+        "uma coincidência a explicar.",
+        "Processamento temporal usado (agregação diária→mensal: soma simples? cobertura mínima "
+        "de dias por mês?) e as unidades originais antes de qualquer conversão (CHIRPS nativo é "
+        "mm/dia; SINOBRAS.csv está em mm/mês, inteiros) — necessário para confirmar que a "
+        "conversão não introduziu arredondamento sistemático. PENDENTE (5ª rodada) — ainda não "
+        "respondido pelo responsável pelos dados.",
         "Períodos de operação de cada estação/fazenda (quando cada uma começou/parou de medir, "
         "e quaisquer interrupções de manutenção) — necessário para saber se a amostra por mês é "
-        "estável ao longo do tempo ou varia por entrada/saída de estações.",
+        "estável ao longo do tempo ou varia por entrada/saída de estações. Nota (4ª rodada): "
+        "'operação' aqui deveria ler-se como 'quando a extração CHIRPS por fazenda começou', não "
+        "'quando um pluviômetro foi instalado' — a empresa não tem pluviômetro em todas.",
         "Identificação da fonte ORIGINAL das 3 séries municipais (Araguaína/Colinas do "
         "Tocantins/Tocantinópolis) usadas no período 1981-1995: se são de fato extração MERRA-2 "
         "(e, se sim, em qual ponto de grade/data de extração), ou outra reanálise, ou estações "
-        "de superfície de cada cidade.",
+        "de superfície de cada cidade — permanece NÃO COMPROVADA (item 7 da 4ª rodada), sem "
+        "mudança em relação às rodadas anteriores.",
         "Coordenadas exatas (ou o ponto/célula de grade) usadas para extrair essas 3 séries "
         "municipais, sejam elas de reanálise ou de estação.",
         "O script, planilha ou processo — mesmo que externo a este repositório — que gerou o "
@@ -535,9 +684,13 @@ def montar_lista_documentos_necessarios():
         "distinção.",
         "Explicação para os 2 grupos de identificadores com série mensal completa idêntica "
         "encontrados em SINOBRAS.csv (FAZ02/FAZ03/FAZ04/FAZ05/FAZ08/FAZ09/FAZ19 e FAZ07/FAZ15) "
-        "— se representam pluviômetro compartilhado, replicação administrativa de um registro "
-        "entre fazendas realmente distintas, ou preenchimento de uma fazenda a partir de outra "
-        "(ver docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md, Seção 3/4).",
+        "— REFINADO (5ª rodada): a extração é ZONAL, então a hipótese mais parcimoniosa é "
+        "polígonos DIFERENTES de fazendas vizinhas cobrindo o MESMO conjunto de pixels CHIRPS "
+        "(não mais 'pixel único compartilhado'), ao lado de pluviômetro físico compartilhado "
+        "(se existir), replicação administrativa, ou preenchimento — nenhuma comprovada, e "
+        "nunca afirmar que série idêntica implica polígono idêntico (ver docs/nmme-fase2c2-"
+        "auditoria-sinobras-por-fazenda.md, Seção 3/4, e docs/nmme-fase2c2-auditoria-chirps-"
+        "sinobras.md).",
     ]
 
 
@@ -598,7 +751,16 @@ def avaliar_correspondencia_espacial():
             "do envelope de ~85.020,5 ha (CLAUDE.md armadilha 8), não um ponto único. A "
             "possibilidade de um número VARIÁVEL de fazendas reportando, sem mínimo exigido, é "
             "uma propriedade do procedimento ATUAL de incorporação de dados NOVOS (ver achado "
-            "de documentação) — nunca observada no conjunto histórico já auditado."
+            "de documentação) — nunca observada no conjunto histórico já auditado. CORRIGIDO "
+            "(4ª rodada): esta 'área' não é uma malha de pluviômetros — o responsável pelos "
+            "dados informou que cada fazenda tem uma estimativa CHIRPS, não necessariamente um "
+            "instrumento (ver achado 'reinterpretacao_chirps'). REFINADO (5ª rodada): a "
+            "extração é ZONAL — cada fazenda é representada pela média dos pixels CHIRPS "
+            "dentro do seu PRÓPRIO POLÍGONO, não um ponto/pixel único; a série regional atual "
+            "(data/serie_subst.csv) é a média aritmética simples dessas 34 estimativas zonais, "
+            "com peso IGUAL para cada fazenda, independente da área do seu polígono — ver "
+            "achado 'agregacao_sinobras_no_codigo'. A 'área' real representada é a UNIÃO dos "
+            "34 polígonos, ainda desconhecidos."
         ),
         'descasamento_de_suporte_espacial': (
             'A previsão do CFSv2 é 1 valor por célula de grade (~1° ~ 100km de lado); a '
@@ -606,32 +768,46 @@ def avaliar_correspondencia_espacial():
             'fazendas), nunca um ponto equivalente à célula de grade — mesmo com a distância '
             'melhorada (~23km em vez de 198km), comparar os dois exige decidir explicitamente '
             'se a média de área é um proxy aceitável do valor pontual de grade, o que este '
-            'módulo NÃO decide.'
+            'módulo NÃO decide. REFINADO (5ª rodada, item 7 da tarefa): com a extração ZONAL '
+            'confirmada para 1996-2025, a área pós-1996 tem um significado geométrico mais '
+            'preciso — a UNIÃO dos polígonos das 34 fazendas (contando cada parcela espacial '
+            'uma única vez, não a soma das 34 áreas, que pode superestimar se houver '
+            'sobreposição) — mas essa união ainda não pode ser calculada (polígonos ausentes). '
+            'O protocolo de comparação com o CFSv2 precisa decidir explicitamente se compara a '
+            'célula de grade contra essa união de polígonos (mais correto, ainda não '
+            'calculável) ou contra o centroide agregado (o que é feito hoje, um proxy grosseiro '
+            'da área real) — nenhuma escolha feita aqui.'
         ),
         'necessidade_de_coordenadas_individuais': (
-            f"Item 7 (3ª rodada) — a nova evidência SINOBRAS.csv (achado da Seção 4, "
+            f"Item 7 (3ª/4ª/5ª rodada) — a nova evidência SINOBRAS.csv (achado da Seção 4, "
             f"EVIDENCIA_SINOBRAS_POR_FAZENDA) identifica "
             f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} séries mensais "
             f"distintas entre os {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} "
             "identificadores de fazenda, mas nenhuma coordenada individual — nem no arquivo "
             "recebido, nem em qualquer outro arquivo deste repositório (CLAUDE.md armadilha 8: "
             "data/fazendas.geojson foi deliberadamente substituído por um envelope único sem "
-            "identificação por fazenda). São NECESSÁRIAS duas coisas: (1) as coordenadas de "
-            f"cada um dos {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} pontos de "
-            "medição identificados por FAZxx; e (2) o mapeamento de cada identificador para seu "
-            "respectivo instrumento físico — quais identificadores de fato compartilham um "
-            "único pluviômetro e quais são instrumentos distintos. As "
-            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} séries mensais "
+            "identificação por fazenda). CORRIGIDO/REFINADO: com a extração ZONAL confirmada "
+            "(achado 'reinterpretacao_chirps'), são NECESSÁRIAS três coisas: (1) o POLÍGONO "
+            f"usado para extrair a estimativa CHIRPS zonal de cada um dos "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} identificadores FAZxx — não "
+            "um ponto único; (2) a versão do CHIRPS, o critério de inclusão de pixel e o "
+            "tratamento de pixel parcialmente interceptado (ver docs/nmme-fase2c2-auditoria-"
+            "chirps-sinobras.md); e (3), SE alguma fazenda tiver de fato um pluviômetro físico, "
+            "o mapeamento correspondente — a empresa não tem pluviômetro em todas as fazendas. "
+            f"As {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} séries mensais "
             "numericamente distintas são um FATO sobre os dados, NUNCA uma contagem de locais "
-            "físicos independentes — não presumir que elas correspondem a "
-            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} pontos de medição "
-            "fisicamente independentes; sem o mapeamento identificador→instrumento, o número "
-            "real de locais físicos permanece desconhecido. Sem essas duas informações, o "
-            "suporte espacial da observação — potencialmente múltiplos pontos, não um único "
-            "centroide — não pode ser comparado à célula de grade do CFSv2. A distância de "
-            "22,91km acima continua sendo a distância de UM ponto agregado, nunca das medições "
-            f"individuais (detalhamento completo em "
-            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['relatorio_completo']})."
+            "físicos OU conjuntos de pixels CHIRPS independentes — não presumir que elas "
+            f"correspondem a {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} "
+            "polígonos fisicamente independentes: polígonos DIFERENTES de fazendas vizinhas "
+            "podem cobrir o MESMO conjunto de pixels e produzir a mesma média zonal; sem o "
+            "mapeamento identificador→polígono, o número real de conjuntos de pixels distintos "
+            "permanece desconhecido. Sem essas informações, o suporte espacial da observação — "
+            "a UNIÃO dos polígonos das 34 fazendas, não um único centroide nem um ponto — não "
+            "pode ser comparado à célula de grade do CFSv2 com precisão. A distância de "
+            "22,91km acima continua sendo a distância de UM ponto agregado, nunca da área real "
+            f"coberta pelos polígonos (detalhamento completo em "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['relatorio_completo']} e "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['relatorio_chirps']})."
         ),
     }
 
@@ -770,7 +946,11 @@ def executar_auditoria_completa():
     aptidao = pilo.avaliar_aptidao_referencia_observacional(
         cobertura_df,
         distancia_km=correspondencia_espacial['distancia_grade_cfsv2_ate_centroide_km'],
-        ponto_descricao='centroide das fazendas (grade CFSv2, extração histórica aprovada, run 36238169299)')
+        ponto_descricao='centroide das fazendas (grade CFSv2, extração histórica aprovada, run 36238169299)',
+        # Item 8 (4ª rodada, 2026) — a referência pós-1996 foi informada pelo responsável pelos
+        # dados como estimativa CHIRPS, não leitura de pluviômetro; ver achado
+        # 'nova_evidencia_sinobras_por_fazenda' e docs/nmme-fase2c2-auditoria-chirps-sinobras.md.
+        procedencia_pos_1996_nao_instrumental=True)
 
     metadata = {
         'fase': '2C.2 — validação científica da referência observacional (centroide das fazendas)',
@@ -867,7 +1047,7 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         linhas.append(f"- Não comparável: {idm.get('motivo')}")
     linhas += [
         "",
-        "### Método de agregação das leituras de campo Sinobras (achado por leitura de código)",
+        "### Método de agregação dos registros SINOBRAS_new.csv (achado por leitura de código)",
         "",
         f"- Arquivo: `{doc['agregacao_sinobras_no_codigo'].get('arquivo', UPDATE_DASHBOARD_PATH.name)}`",
         f"- Padrão verificado: `{doc['agregacao_sinobras_no_codigo'].get('padrao_verificado', '')}` — "
@@ -928,6 +1108,22 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         f"- Relatório completo e reprodutível: `{nova_ev['relatorio_completo']}` (gerado por "
         f"`{nova_ev['script_auditoria']}`).",
         f"- {nova_ev['interpretacao']}",
+        "",
+        "### Reinterpretação CHIRPS (correção — 4ª rodada, 2026)",
+        "",
+    ]
+    chirps_ev = doc['reinterpretacao_chirps']
+    linhas += [
+        f"- Classificação anterior (até a 3ª rodada): {chirps_ev['classificacao_anterior_ate_3a_rodada']}",
+        f"- Classificação corrigida (4ª rodada): {chirps_ev['classificacao_corrigida_4a_rodada']}",
+        f"- Classificação refinada (5ª rodada — extração ZONAL confirmada): "
+        f"`{chirps_ev['classificacao_refinada_5a_rodada']}`",
+        f"- Fonte da correção: {chirps_ev['fonte_da_correcao']}.",
+        f"- Verificada documentalmente por este módulo: {chirps_ev['fonte_verificada_documentalmente']}. "
+        f"Empresa possui pluviômetro em todas as fazendas: "
+        f"{chirps_ev['empresa_possui_pluviometro_em_todas_as_fazendas']}.",
+        f"- Investigação dedicada: `{chirps_ev['relatorio_chirps']}`.",
+        f"- {chirps_ev['interpretacao']}",
         "",
         f"### Coordenadas dos 3 municípios do período MERRA-2 (1981-1995)",
         "",
