@@ -195,10 +195,46 @@ class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
         self.assertIn('SINOBRAS.csv', documentos[0])
 
     def test_d_correspondencia_espacial_registra_necessidade_de_coordenadas(self):
+        """3ª rodada (ajuste pontual) — pede coordenadas E o mapeamento
+        identificador→instrumento; nunca presume que as 27 séries
+        distintas equivalem a 27 locais físicos independentes."""
         esp = aud.avaliar_correspondencia_espacial()
         self.assertIn('necessidade_de_coordenadas_individuais', esp)
-        self.assertIn('NECESSÁRIO obter as coordenadas individuais',
-                       esp['necessidade_de_coordenadas_individuais'])
+        texto = esp['necessidade_de_coordenadas_individuais']
+        self.assertIn('coordenadas', texto)
+        self.assertIn('mapeamento', texto)
+        self.assertIn('instrumento', texto)
+        self.assertIn('NUNCA uma contagem de locais físicos independentes', texto)
+
+    def test_f_observacao_pos_1996_registra_34_em_todos_os_360_meses(self):
+        """Ajuste pontual 1 (3ª rodada) — o arquivo histórico auditado
+        tem EXATAMENTE 34 registros em todos os 360 meses; a
+        possibilidade de contagem variável é do procedimento ATUAL de
+        incorporação, não do histórico já analisado."""
+        esp = aud.avaliar_correspondencia_espacial()
+        texto = esp['observacao_pos_1996_e_area_ou_ponto']
+        self.assertIn('EXATAMENTE 34', texto)
+        self.assertIn('360 meses', texto)
+        self.assertIn('VARIÁVEL', texto)
+        self.assertIn('procedimento ATUAL', texto)
+
+    def test_g_agregacao_sinobras_no_codigo_distingue_atual_de_historico(self):
+        """Ajuste pontual 1 (3ª rodada) — mesma distinção no achado de
+        leitura de código."""
+        achado = aud.verificar_padrao_agregacao_sinobras_no_codigo()
+        self.assertIn('NUNCA variou', achado['interpretacao'])
+        self.assertIn('34', achado['interpretacao'])
+        self.assertIn('360', achado['interpretacao'])
+
+    def test_h_lista_de_documentos_pede_mapeamento_instrumento(self):
+        """Ajuste pontual 3 (3ª rodada) — o item de coordenadas também
+        pede o mapeamento identificador→instrumento, nunca presumindo
+        27 séries distintas como 27 locais físicos independentes."""
+        documentos = aud.montar_lista_documentos_necessarios()
+        texto_coordenadas = documentos[1]
+        self.assertIn('mapeamento', texto_coordenadas)
+        self.assertIn('instrumento', texto_coordenadas)
+        self.assertIn('não devem ser presumidas', texto_coordenadas)
 
     def test_e_nunca_le_o_arquivo_original_nesta_funcao(self):
         """A função só cita a constante EVIDENCIA_SINOBRAS_POR_FAZENDA

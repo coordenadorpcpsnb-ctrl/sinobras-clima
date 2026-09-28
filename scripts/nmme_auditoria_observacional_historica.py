@@ -87,7 +87,8 @@ EVIDENCIA_SINOBRAS_POR_FAZENDA = {
     'arquivo': 'SINOBRAS.csv',
     'sha256': 'ad44fa16d9bdba16fb6550ab1ff3eabaefdbc6dfffee0a6afc19e6c5a931ca1a',
     'periodo_coberto_inicio': '1996-01', 'periodo_coberto_fim': '2025-12',
-    'n_registros': 12240, 'n_identificadores': 34,
+    'n_registros': 12240, 'n_identificadores': 34, 'n_meses': 360,
+    'n_identificadores_por_mes_min': 34, 'n_identificadores_por_mes_max': 34,
     'n_series_mensais_distintas': 27,
     'grupos_de_series_identicas': [
         ['FAZ02', 'FAZ03', 'FAZ04', 'FAZ05', 'FAZ08', 'FAZ09', 'FAZ19'],
@@ -360,10 +361,18 @@ def verificar_padrao_agregacao_sinobras_no_codigo():
             "Confirmado: a incorporação de SINOBRAS_new.csv usa "
             "df_new.groupby(['ano','mes'])['prec_mm'].mean() — média aritmética simples sobre "
             "QUANTAS estações/fazendas estiverem presentes naquele envio, sem exigência de "
-            "número mínimo (1 fazenda reportando produz o mesmo tipo de valor que 34 "
+            "número mínimo (1 fazenda reportando produziria o mesmo tipo de valor que 34 "
             "reportando) e sem reter a leitura por estação individual — só a média sobrevive "
             "em serie_subst.csv (coluna 'prec'), a granularidade por fazenda é descartada. Isso "
-            "descreve o procedimento ATUAL para dados NOVOS — não o backfill histórico."
+            "descreve o procedimento ATUAL do código para dados NOVOS — uma possibilidade "
+            "aberta pelo código, não uma contagem observada no histórico. No conjunto histórico "
+            "efetivamente auditado (SINOBRAS.csv, 1996-2025 — ver achado "
+            "'nova_evidencia_sinobras_por_fazenda'), o número de fazendas reportando NUNCA "
+            f"variou: exatamente {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} "
+            f"identificadores em todos os {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_meses']} meses, "
+            "sem exceção — a possibilidade de contagem variável é uma propriedade do "
+            "procedimento ATUAL de incorporação de dados NOVOS, não do conjunto histórico já "
+            "analisado."
         ) if encontrado else (
             "Padrão de agregação esperado não encontrado no arquivo atual — o método pode ter "
             "mudado desde esta auditoria; revisar scripts/update_dashboard.py manualmente antes "
@@ -464,8 +473,13 @@ def montar_achado_nova_evidencia_sinobras_por_fazenda():
             f"{ev['periodo_coberto_fim']} foi REPRODUZIDA de forma independente a partir de "
             f"{ev['n_registros']} registros por fazenda ({ev['n_identificadores']} "
             f"identificadores, SHA-256 `{ev['sha256']}`) — reconciliação 100% completa com "
-            f"data/serie_subst.csv (detalhamento completo em {ev['relatorio_completo']}). Isso "
-            "muda o item 1 da lista de documentos necessários abaixo: dados originais por "
+            f"data/serie_subst.csv (detalhamento completo em {ev['relatorio_completo']}). "
+            f"Confirmado (3ª rodada): o arquivo tem EXATAMENTE {ev['n_identificadores']} "
+            f"registros em TODOS os {ev['n_meses']} meses, sem exceção — a possibilidade de "
+            "número variável de fazendas reportando é uma propriedade do procedimento ATUAL de "
+            "incorporação de dados NOVOS (achado 'agregacao_sinobras_no_codigo' acima), nunca "
+            "observada neste conjunto histórico. Isso muda o item 1 da lista de documentos "
+            "necessários abaixo: dados originais por "
             "estação/fazenda individual foram PARCIALMENTE obtidos para 1996-2025 — o trecho "
             "pré-1996 (MERRA-2/3-municípios) continua integralmente sem essa evidência. A mesma "
             f"auditoria independente também encontrou só {ev['n_series_mensais_distintas']} "
@@ -498,7 +512,11 @@ def montar_lista_documentos_necessarios():
         "3-municípios), este item continua integralmente ausente.",
         "Coordenadas de cada uma das 34 fazendas/estações pluviométricas Sinobras — hoje só o "
         "centroide agregado (lat=-7,80/lon=-47,95) é conhecido, nunca a posição individual "
-        "(SINOBRAS.csv também não traz coordenadas).",
+        "(SINOBRAS.csv também não traz coordenadas) — E o mapeamento de cada um dos 34 "
+        "identificadores (FAZxx) para seu respectivo instrumento físico, confirmando quais "
+        "compartilham um único pluviômetro e quais são instrumentos distintos; as 27 séries "
+        "mensais numericamente distintas encontradas em SINOBRAS.csv não devem ser presumidas "
+        "como 27 locais de medição fisicamente independentes sem esse mapeamento.",
         "Períodos de operação de cada estação/fazenda (quando cada uma começou/parou de medir, "
         "e quaisquer interrupções de manutenção) — necessário para saber se a amostra por mês é "
         "estável ao longo do tempo ou varia por entrada/saída de estações.",
@@ -574,9 +592,13 @@ def avaliar_correspondencia_espacial():
             'Tocantins/Tocantinópolis), coordenadas não verificáveis a partir do repositório.'
         ),
         'observacao_pos_1996_e_area_ou_ponto': (
-            'ÁREA — média de até 34 fazendas dentro do envelope de ~85.020,5 ha '
-            '(CLAUDE.md armadilha 8), não um ponto único; número de fazendas reportando '
-            'varia mês a mês sem mínimo exigido (ver achados de documentação).'
+            f"ÁREA — média de EXATAMENTE {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} "
+            f"fazendas em todos os {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_meses']} meses de "
+            "1996-2025 (achado verificado, ver 'nova_evidencia_sinobras_por_fazenda'), dentro "
+            "do envelope de ~85.020,5 ha (CLAUDE.md armadilha 8), não um ponto único. A "
+            "possibilidade de um número VARIÁVEL de fazendas reportando, sem mínimo exigido, é "
+            "uma propriedade do procedimento ATUAL de incorporação de dados NOVOS (ver achado "
+            "de documentação) — nunca observada no conjunto histórico já auditado."
         ),
         'descasamento_de_suporte_espacial': (
             'A previsão do CFSv2 é 1 valor por célula de grade (~1° ~ 100km de lado); a '
@@ -594,12 +616,21 @@ def avaliar_correspondencia_espacial():
             "identificadores de fazenda, mas nenhuma coordenada individual — nem no arquivo "
             "recebido, nem em qualquer outro arquivo deste repositório (CLAUDE.md armadilha 8: "
             "data/fazendas.geojson foi deliberadamente substituído por um envelope único sem "
-            "identificação por fazenda). É NECESSÁRIO obter as coordenadas individuais de cada "
-            "ponto de medição (no mínimo, de cada série mensal numericamente distinta) para "
-            "decidir se o suporte espacial da observação — potencialmente múltiplos pontos, não "
-            "um único centroide — é comparável à célula de grade do CFSv2. Sem essas "
-            "coordenadas, a distância de 22,91km acima continua sendo a distância de UM ponto "
-            f"agregado, nunca das medições individuais (detalhamento completo em "
+            "identificação por fazenda). São NECESSÁRIAS duas coisas: (1) as coordenadas de "
+            f"cada um dos {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} pontos de "
+            "medição identificados por FAZxx; e (2) o mapeamento de cada identificador para seu "
+            "respectivo instrumento físico — quais identificadores de fato compartilham um "
+            "único pluviômetro e quais são instrumentos distintos. As "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} séries mensais "
+            "numericamente distintas são um FATO sobre os dados, NUNCA uma contagem de locais "
+            "físicos independentes — não presumir que elas correspondem a "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} pontos de medição "
+            "fisicamente independentes; sem o mapeamento identificador→instrumento, o número "
+            "real de locais físicos permanece desconhecido. Sem essas duas informações, o "
+            "suporte espacial da observação — potencialmente múltiplos pontos, não um único "
+            "centroide — não pode ser comparado à célula de grade do CFSv2. A distância de "
+            "22,91km acima continua sendo a distância de UM ponto agregado, nunca das medições "
+            f"individuais (detalhamento completo em "
             f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['relatorio_completo']})."
         ),
     }
@@ -1034,12 +1065,19 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         "sustentada pelo repositório.",
         "- O descasamento de suporte espacial (célula de grade vs. média de área difusa e "
         "variável, Seção 5) — não resolvido só por a distância ter melhorado.",
-        "- A agregação Sinobras sem mínimo de estações (Seção 4) — um mês com 1 fazenda "
-        "reportando é tratado, na série, exatamente como um mês com 34 — e isso descreve só o "
-        "procedimento ATUAL do código, não o backfill histórico 1996-2010 (Seção 4), cujo "
-        "método real é desconhecido.",
+        "- A agregação Sinobras sem mínimo de estações (Seção 4) é uma propriedade do "
+        "PROCEDIMENTO ATUAL do código para incorporar dados NOVOS — um mês com 1 fazenda "
+        "reportando seria tratado exatamente como um mês com 34, SE isso viesse a ocorrer. Não "
+        "ocorreu no conjunto histórico já auditado: SINOBRAS.csv (1996-2025) confirma "
+        f"exatamente {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} identificadores em "
+        f"todos os {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_meses']} meses, sem exceção (Seção 4). O "
+        "método real do backfill 1996-2010 anterior ao primeiro commit deste repositório "
+        "continua desconhecido (Seção 4).",
         "- A dependência temporal entre combinações origem×lead (Seção 3) — 1.440 combinações "
         "não são 1.440 observações independentes.",
+        "- O mapeamento entre os 34 identificadores de fazenda e seus respectivos instrumentos "
+        "físicos (Seção 5) — as 27 séries mensais numericamente distintas encontradas não devem "
+        "ser presumidas como 27 locais de medição fisicamente independentes.",
         "",
         "## Restrições respeitadas nesta tarefa",
         "",

@@ -90,7 +90,14 @@ def verificar_integridade_estrutural(df):
     recebidos, e só registra como achado o que for de fato computado.
     Cobertura mensal é verificada dentro do período efetivamente
     presente no arquivo (do primeiro ao último ano-mês), não contra um
-    período fixo hardcoded."""
+    período fixo hardcoded.
+
+    Regressão corrigida (3ª rodada): um `df` VAZIO (0 registros) tinha
+    todas as checagens vazias (nenhum mês ausente, nenhuma duplicata,
+    nenhum identificador com contagem diferente — tudo vacuamente
+    verdadeiro) e por isso era classificado `integro=True`. Arquivo
+    vazio nunca é íntegro — `n_registros > 0` é exigido explicitamente
+    antes de qualquer outra condição."""
     n_registros = len(df)
     identificadores = sorted(df['estacao'].unique().tolist())
     n_identificadores = len(identificadores)
@@ -142,6 +149,7 @@ def verificar_integridade_estrutural(df):
         'implausiveis_detalhe': (implausiveis[['ano', 'mes', 'estacao', 'prec_mm']].to_dict(orient='records')
                                   if len(implausiveis) else []),
         'integro': bool(
+            n_registros > 0 and
             len(meses_ausentes) == 0 and not identificadores_com_contagem_diferente and
             not meses_com_contagem_atipica and len(duplicatas) == 0 and
             valores_ausentes == 0 and len(implausiveis) == 0),
@@ -317,29 +325,48 @@ def analisar_sensibilidade_deduplicacao(df, grupos):
 # ══════════════════════════════════════════════════════════════════════════
 
 def montar_achados_espaciais(grupos):
-    """Item 7 — registra a NECESSIDADE de coordenadas individuais,
-    nunca as inventa nem as presume. CLAUDE.md (armadilha 8) documenta
-    que data/fazendas.geojson foi deliberadamente substituído por um
+    """Item 7 — registra a NECESSIDADE de coordenadas individuais E do
+    mapeamento identificador→instrumento, nunca as inventa nem as
+    presume. CLAUDE.md (armadilha 8) documenta que
+    data/fazendas.geojson foi deliberadamente substituído por um
     envelope único sem identificação por fazenda — este arquivo
     (SINOBRAS.csv) não traz coordenadas, e nenhum outro arquivo deste
-    repositório associa FAZxx a uma coordenada individual."""
+    repositório associa FAZxx a uma coordenada individual.
+
+    Revisão pontual (3ª rodada) — as N séries mensais numericamente
+    distintas (Seção 3/4) são um FATO sobre os DADOS recebidos, nunca
+    uma contagem de locais físicos independentes: nunca presumir que
+    séries distintas equivalem a pontos de medição fisicamente
+    independentes, nem que identificadores com série idêntica
+    equivalem a 1 único instrumento — as duas equivalências exigem o
+    mapeamento operacional que este arquivo não contém."""
     return {
         'coordenadas_individuais_disponiveis_no_arquivo': False,
         'coordenadas_individuais_disponiveis_no_repositorio': False,
+        'mapeamento_identificador_para_instrumento_disponivel': False,
         'interpretacao': (
             "SINOBRAS.csv identifica cada registro por `estacao` (FAZxx), mas não traz "
             "coordenada nenhuma — e nenhum outro arquivo deste repositório associa um FAZxx a "
             "uma coordenada individual (CLAUDE.md, armadilha 8: data/fazendas.geojson foi "
             "deliberadamente substituído por um envelope único de 85.020,5 ha sem identificação "
-            "por fazenda; decisão preservada aqui, não revertida). É necessário obter as "
-            f"coordenadas individuais de cada ponto de medição (no mínimo, de cada uma das "
+            "por fazenda; decisão preservada aqui, não revertida). São necessárias DUAS coisas, "
+            f"nunca supridas por este arquivo: (1) as coordenadas de cada um dos "
+            f"{grupos['n_identificadores_comparados']} pontos de medição identificados por "
+            "FAZxx; e (2) o mapeamento de cada um desses identificadores para seu respectivo "
+            "instrumento físico — isto é, confirmar quais identificadores de fato compartilham "
+            "um único pluviômetro e quais são instrumentos fisicamente distintos. As "
             f"{grupos['n_series_mensais_distintas']} séries mensais numericamente distintas "
-            "identificadas nesta auditoria) para decidir se o suporte espacial da observação — "
-            "potencialmente múltiplos pontos, não um único centroide — é comparável à célula de "
-            "grade do CFSv2 (~1°, ordem de 100km de lado). Sem essas coordenadas, a distância "
-            "de 22,91km do centroide agregado até a grade do CFSv2 (docs/nmme-fase2c2-"
-            "auditoria-observacional-historica.md, Seção 5) continua sendo a distância de UM "
-            "ponto agregado — nunca das medições individuais por fazenda."
+            "encontradas (Seção 3/4) são um FATO sobre os DADOS, não uma contagem de locais "
+            "físicos — NÃO presumir que elas correspondem a "
+            f"{grupos['n_series_mensais_distintas']} locais de medição fisicamente "
+            "independentes; sem o mapeamento identificador→instrumento, o número real de locais "
+            "físicos permanece desconhecido (pode ser 27, 34, ou outro valor). Sem essas duas "
+            "informações, o suporte espacial da observação — potencialmente múltiplos pontos, "
+            "não um único centroide — não pode ser comparado à célula de grade do CFSv2 (~1°, "
+            "ordem de 100km de lado). Sem elas, a distância de 22,91km do centroide agregado até "
+            "a grade do CFSv2 (docs/nmme-fase2c2-auditoria-observacional-historica.md, Seção 5) "
+            "continua sendo a distância de UM ponto agregado — nunca das medições individuais "
+            "por fazenda."
         ),
     }
 
@@ -472,12 +499,15 @@ def gerar_relatorio_markdown(reconciliacao_tabela, metadata):
         f"{sens['mes_da_diferenca_maxima']}.",
         f"- {sens['interpretacao']}",
         "",
-        "## 5. Análise espacial — necessidade de coordenadas individuais",
+        "## 5. Análise espacial — necessidade de coordenadas individuais e do mapeamento "
+        "identificador→instrumento",
         "",
         f"- Coordenadas individuais disponíveis neste arquivo: "
         f"{esp['coordenadas_individuais_disponiveis_no_arquivo']}.",
         f"- Coordenadas individuais disponíveis em qualquer arquivo deste repositório: "
         f"{esp['coordenadas_individuais_disponiveis_no_repositorio']}.",
+        f"- Mapeamento identificador→instrumento físico disponível: "
+        f"{esp['mapeamento_identificador_para_instrumento_disponivel']}.",
         f"- {esp['interpretacao']}",
         "",
         "## Conclusões desta auditoria (item 6 da tarefa)",

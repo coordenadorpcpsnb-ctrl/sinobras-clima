@@ -143,6 +143,16 @@ class VerificarIntegridadeEstruturalTestCase(unittest.TestCase):
         self.assertIn('2000-03', resultado['meses_com_numero_de_registros_atipico'])
         self.assertFalse(resultado['integro'])
 
+    def test_f_arquivo_vazio_nunca_e_integro(self):
+        """Regressão (3ª rodada) — um df vazio tinha TODAS as checagens
+        vacuamente satisfeitas (nenhum mês ausente, nenhuma duplicata,
+        nenhum identificador com contagem diferente) e por isso era
+        classificado `integro=True` antes desta correção."""
+        df_vazio = pd.DataFrame(columns=['ano', 'mes', 'prec_mm', 'estacao'])
+        resultado = aud.verificar_integridade_estrutural(df_vazio)
+        self.assertEqual(resultado['n_registros'], 0)
+        self.assertFalse(resultado['integro'])
+
 
 class ReproduzirMediaMensalTestCase(unittest.TestCase):
     """Item 3 — mesma fórmula de agregação já verificada por leitura de
@@ -265,15 +275,25 @@ class AnalisarSensibilidadeDeduplicacaoTestCase(unittest.TestCase):
 
 
 class MontarAchadosEspaciaisTestCase(unittest.TestCase):
-    """Item 7 — registra a NECESSIDADE de coordenadas individuais,
-    nunca as inventa."""
+    """Item 7 — registra a NECESSIDADE de coordenadas individuais E do
+    mapeamento identificador→instrumento, nunca as inventa nem presume
+    que séries distintas equivalem a locais físicos independentes."""
 
-    def test_a_coordenadas_registradas_como_ausentes(self):
-        grupos = {'n_series_mensais_distintas': 27}
+    def test_a_coordenadas_e_mapeamento_registrados_como_ausentes(self):
+        grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
         resultado = aud.montar_achados_espaciais(grupos)
         self.assertFalse(resultado['coordenadas_individuais_disponiveis_no_arquivo'])
         self.assertFalse(resultado['coordenadas_individuais_disponiveis_no_repositorio'])
-        self.assertIn('coordenadas individuais', resultado['interpretacao'])
+        self.assertFalse(resultado['mapeamento_identificador_para_instrumento_disponivel'])
+        self.assertIn('coordenadas', resultado['interpretacao'])
+        self.assertIn('mapeamento', resultado['interpretacao'])
+
+    def test_b_nunca_presume_series_distintas_como_locais_independentes(self):
+        grupos = {'n_identificadores_comparados': 34, 'n_series_mensais_distintas': 27}
+        resultado = aud.montar_achados_espaciais(grupos)
+        self.assertIn('NÃO presumir', resultado['interpretacao'])
+        self.assertIn('34', resultado['interpretacao'])
+        self.assertIn('27', resultado['interpretacao'])
 
 
 class ExecutarAuditoriaCompletaEndToEndTestCase(unittest.TestCase):
