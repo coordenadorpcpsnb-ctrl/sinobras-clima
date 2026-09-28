@@ -73,6 +73,32 @@ EVIDENCIA_EXTRACAO_HISTORICA_FAZENDAS = {
     'extracao_completa_e_aprovada': True,
 }
 
+# Nova evidência recebida (3ª rodada) — SINOBRAS.csv, registros
+# mensais individualizados por fazenda, 1996-2025. Auditada de forma
+# INDEPENDENTE por scripts/nmme_auditoria_sinobras_por_fazenda.py
+# (rotina separada, nunca reimplementada aqui) — estes são os achados
+# JÁ VERIFICADOS por aquele módulo nesta sessão (mesmo padrão de
+# EVIDENCIA_EXTRACAO_HISTORICA_FAZENDAS acima: um fato formal citado,
+# não recalculado dentro deste módulo). O arquivo original NÃO foi
+# incorporado a este repositório — o relatório completo e reprodutível
+# (com a tabela de reconciliação mês a mês) fica em
+# docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md.
+EVIDENCIA_SINOBRAS_POR_FAZENDA = {
+    'arquivo': 'SINOBRAS.csv',
+    'sha256': 'ad44fa16d9bdba16fb6550ab1ff3eabaefdbc6dfffee0a6afc19e6c5a931ca1a',
+    'periodo_coberto_inicio': '1996-01', 'periodo_coberto_fim': '2025-12',
+    'n_registros': 12240, 'n_identificadores': 34,
+    'n_series_mensais_distintas': 27,
+    'grupos_de_series_identicas': [
+        ['FAZ02', 'FAZ03', 'FAZ04', 'FAZ05', 'FAZ08', 'FAZ09', 'FAZ19'],
+        ['FAZ07', 'FAZ15'],
+    ],
+    'integridade_estrutural_completa': True,
+    'reconciliacao_com_serie_producao_completa': True,
+    'relatorio_completo': 'docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md',
+    'script_auditoria': 'scripts/nmme_auditoria_sinobras_por_fazenda.py',
+}
+
 ANO_FIM_MERRA2 = pilo.ANO_FIM_MERRA2   # 1995 — README.md
 ORIGENS_HISTORICAS = ext.ORIGENS_HISTORICAS   # 240 pares (ano, mês), 1991-2010
 
@@ -418,6 +444,39 @@ def montar_achados_documentacao():
             'nunca a série de precipitação pré-2011 usada nesta auditoria.'
         ),
         'documentos_necessarios_para_comprovar_procedencia': montar_lista_documentos_necessarios(),
+        'nova_evidencia_sinobras_por_fazenda': montar_achado_nova_evidencia_sinobras_por_fazenda(),
+    }
+
+
+def montar_achado_nova_evidencia_sinobras_por_fazenda():
+    """Item 6/7 (3ª rodada) — a nova evidência SINOBRAS.csv (registros
+    por fazenda, 1996-2025) foi auditada de forma INDEPENDENTE por
+    scripts/nmme_auditoria_sinobras_por_fazenda.py — nunca
+    reimplementada aqui. Resume os achados JÁ VERIFICADOS por aquele
+    módulo (EVIDENCIA_SINOBRAS_POR_FAZENDA) e deixa explícito o que
+    muda no achado desta auditoria principal e o que CONTINUA sem
+    comprovação."""
+    ev = EVIDENCIA_SINOBRAS_POR_FAZENDA
+    return {
+        **ev,
+        'interpretacao': (
+            f"A agregação numérica histórica de {ev['periodo_coberto_inicio']} a "
+            f"{ev['periodo_coberto_fim']} foi REPRODUZIDA de forma independente a partir de "
+            f"{ev['n_registros']} registros por fazenda ({ev['n_identificadores']} "
+            f"identificadores, SHA-256 `{ev['sha256']}`) — reconciliação 100% completa com "
+            f"data/serie_subst.csv (detalhamento completo em {ev['relatorio_completo']}). Isso "
+            "muda o item 1 da lista de documentos necessários abaixo: dados originais por "
+            "estação/fazenda individual foram PARCIALMENTE obtidos para 1996-2025 — o trecho "
+            "pré-1996 (MERRA-2/3-municípios) continua integralmente sem essa evidência. A mesma "
+            f"auditoria independente também encontrou só {ev['n_series_mensais_distintas']} "
+            f"séries mensais numericamente distintas entre os {ev['n_identificadores']} "
+            f"identificadores — 2 grupos compartilham a mesma série completa "
+            f"({ev['grupos_de_series_identicas']}). O que CONTINUA sem comprovação, mesmo com "
+            "esta nova evidência: a metodologia de medição em campo, eventuais preenchimentos "
+            "retrospectivos, e se os identificadores agrupados representam pluviômetro "
+            "compartilhado ou replicação administrativa de fazendas distintas — nenhuma das "
+            f"duas hipóteses deve ser presumida (ver {ev['relatorio_completo']})."
+        ),
     }
 
 
@@ -426,14 +485,20 @@ def montar_lista_documentos_necessarios():
     verificar programaticamente a ausência de documentos fora deste
     repositório) do que seria necessário para comprovar de verdade a
     procedência histórica, tanto do trecho pré-1996 quanto do pós-1996.
-    Nenhum destes itens está disponível neste repositório hoje (ver os
-    achados acima)."""
+    Item 1 foi PARCIALMENTE endereçado na 3ª rodada por SINOBRAS.csv
+    (ver montar_achado_nova_evidencia_sinobras_por_fazenda) — os
+    demais itens continuam integralmente ausentes deste repositório."""
     return [
-        "Dados originais por estação/fazenda individual (não só a média mensal já publicada em "
-        "serie_subst.csv) para todo o período 1996-2011 — permitiria reconstruir quantas "
-        "fazendas reportaram em cada mês e recalcular a agregação com um critério explícito.",
+        "Dados originais por estação/fazenda individual para 1996-2025 — PARCIALMENTE obtido "
+        "via SINOBRAS.csv (arquivo recebido, não incorporado a este repositório; ver achado "
+        "'nova_evidencia_sinobras_por_fazenda' e docs/nmme-fase2c2-auditoria-sinobras-por-"
+        "fazenda.md). Ainda faltam: a metodologia de medição em campo, eventuais preenchimentos "
+        "retrospectivos, e a independência efetiva dos instrumentos — nenhum dos três é "
+        "verificável a partir desse arquivo isoladamente. Para o trecho pré-1996 (MERRA-2/"
+        "3-municípios), este item continua integralmente ausente.",
         "Coordenadas de cada uma das 34 fazendas/estações pluviométricas Sinobras — hoje só o "
-        "centroide agregado (lat=-7,80/lon=-47,95) é conhecido, nunca a posição individual.",
+        "centroide agregado (lat=-7,80/lon=-47,95) é conhecido, nunca a posição individual "
+        "(SINOBRAS.csv também não traz coordenadas).",
         "Períodos de operação de cada estação/fazenda (quando cada uma começou/parou de medir, "
         "e quaisquer interrupções de manutenção) — necessário para saber se a amostra por mês é "
         "estável ao longo do tempo ou varia por entrada/saída de estações.",
@@ -450,6 +515,11 @@ def montar_lista_documentos_necessarios():
         "Documentação do número mínimo de estações/fazendas (se algum) considerado necessário "
         "para publicar um valor mensal válido — hoje o código aceita qualquer contagem >=1 sem "
         "distinção.",
+        "Explicação para os 2 grupos de identificadores com série mensal completa idêntica "
+        "encontrados em SINOBRAS.csv (FAZ02/FAZ03/FAZ04/FAZ05/FAZ08/FAZ09/FAZ19 e FAZ07/FAZ15) "
+        "— se representam pluviômetro compartilhado, replicação administrativa de um registro "
+        "entre fazendas realmente distintas, ou preenchimento de uma fazenda a partir de outra "
+        "(ver docs/nmme-fase2c2-auditoria-sinobras-por-fazenda.md, Seção 3/4).",
     ]
 
 
@@ -515,6 +585,22 @@ def avaliar_correspondencia_espacial():
             'melhorada (~23km em vez de 198km), comparar os dois exige decidir explicitamente '
             'se a média de área é um proxy aceitável do valor pontual de grade, o que este '
             'módulo NÃO decide.'
+        ),
+        'necessidade_de_coordenadas_individuais': (
+            f"Item 7 (3ª rodada) — a nova evidência SINOBRAS.csv (achado da Seção 4, "
+            f"EVIDENCIA_SINOBRAS_POR_FAZENDA) identifica "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['n_series_mensais_distintas']} séries mensais "
+            f"distintas entre os {EVIDENCIA_SINOBRAS_POR_FAZENDA['n_identificadores']} "
+            "identificadores de fazenda, mas nenhuma coordenada individual — nem no arquivo "
+            "recebido, nem em qualquer outro arquivo deste repositório (CLAUDE.md armadilha 8: "
+            "data/fazendas.geojson foi deliberadamente substituído por um envelope único sem "
+            "identificação por fazenda). É NECESSÁRIO obter as coordenadas individuais de cada "
+            "ponto de medição (no mínimo, de cada série mensal numericamente distinta) para "
+            "decidir se o suporte espacial da observação — potencialmente múltiplos pontos, não "
+            "um único centroide — é comparável à célula de grade do CFSv2. Sem essas "
+            "coordenadas, a distância de 22,91km acima continua sendo a distância de UM ponto "
+            f"agregado, nunca das medições individuais (detalhamento completo em "
+            f"{EVIDENCIA_SINOBRAS_POR_FAZENDA['relatorio_completo']})."
         ),
     }
 
@@ -792,6 +878,26 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         linhas.append(f"- {item}")
     linhas += [
         "",
+        "### Nova evidência: SINOBRAS.csv (registros por fazenda, 1996-2025)",
+        "",
+    ]
+    nova_ev = doc['nova_evidencia_sinobras_por_fazenda']
+    linhas += [
+        f"- Arquivo: `{nova_ev['arquivo']}` — SHA-256 `{nova_ev['sha256']}` — não incorporado a "
+        "este repositório.",
+        f"- Período coberto: {nova_ev['periodo_coberto_inicio']} → "
+        f"{nova_ev['periodo_coberto_fim']} ({nova_ev['n_registros']} registros, "
+        f"{nova_ev['n_identificadores']} identificadores).",
+        f"- Integridade estrutural completa: {nova_ev['integridade_estrutural_completa']}. "
+        f"Reconciliação com data/serie_subst.csv completa: "
+        f"{nova_ev['reconciliacao_com_serie_producao_completa']}.",
+        f"- Séries mensais numericamente distintas: {nova_ev['n_series_mensais_distintas']} "
+        f"(de {nova_ev['n_identificadores']} identificadores) — grupos idênticos: "
+        f"{nova_ev['grupos_de_series_identicas']}.",
+        f"- Relatório completo e reprodutível: `{nova_ev['relatorio_completo']}` (gerado por "
+        f"`{nova_ev['script_auditoria']}`).",
+        f"- {nova_ev['interpretacao']}",
+        "",
         f"### Coordenadas dos 3 municípios do período MERRA-2 (1981-1995)",
         "",
         f"- {doc['coordenadas_dos_3_municipios_pre_1996']}",
@@ -810,6 +916,7 @@ def gerar_relatorio_markdown(cobertura_df, metadata):
         f"- Observação pré-1996: {esp['observacao_pre_1996_e_area_ou_ponto']}",
         f"- Observação pós-1996: {esp['observacao_pos_1996_e_area_ou_ponto']}",
         f"- **Descasamento de suporte espacial**: {esp['descasamento_de_suporte_espacial']}",
+        f"- **Necessidade de coordenadas individuais**: {esp['necessidade_de_coordenadas_individuais']}",
         "",
         "## 6. Alinhamento temporal H1-H6",
         "",

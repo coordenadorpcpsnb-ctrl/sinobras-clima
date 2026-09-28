@@ -168,6 +168,48 @@ class BackfillPrecedePipelineAtualTestCase(unittest.TestCase):
         self.assertIn('motivo', resultado)
 
 
+class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
+    """Item 6/7 (3ª rodada) — a nova evidência SINOBRAS.csv é citada
+    aqui como um FATO formal já verificado por
+    scripts/nmme_auditoria_sinobras_por_fazenda.py (rotina
+    independente), nunca recalculada dentro deste módulo."""
+
+    def test_a_achado_reflete_a_constante_evidencia(self):
+        achado = aud.montar_achado_nova_evidencia_sinobras_por_fazenda()
+        self.assertEqual(achado['sha256'], aud.EVIDENCIA_SINOBRAS_POR_FAZENDA['sha256'])
+        self.assertEqual(achado['n_identificadores'], 34)
+        self.assertEqual(achado['n_series_mensais_distintas'], 27)
+        self.assertTrue(achado['integridade_estrutural_completa'])
+        self.assertTrue(achado['reconciliacao_com_serie_producao_completa'])
+        self.assertIn('REPRODUZIDA', achado['interpretacao'])
+        self.assertIn('PARCIALMENTE', achado['interpretacao'])
+
+    def test_b_wired_em_montar_achados_documentacao(self):
+        doc = aud.montar_achados_documentacao()
+        self.assertIn('nova_evidencia_sinobras_por_fazenda', doc)
+        self.assertEqual(doc['nova_evidencia_sinobras_por_fazenda']['n_identificadores'], 34)
+
+    def test_c_lista_de_documentos_reflete_evidencia_parcial(self):
+        documentos = aud.montar_lista_documentos_necessarios()
+        self.assertIn('PARCIALMENTE obtido', documentos[0])
+        self.assertIn('SINOBRAS.csv', documentos[0])
+
+    def test_d_correspondencia_espacial_registra_necessidade_de_coordenadas(self):
+        esp = aud.avaliar_correspondencia_espacial()
+        self.assertIn('necessidade_de_coordenadas_individuais', esp)
+        self.assertIn('NECESSÁRIO obter as coordenadas individuais',
+                       esp['necessidade_de_coordenadas_individuais'])
+
+    def test_e_nunca_le_o_arquivo_original_nesta_funcao(self):
+        """A função só cita a constante EVIDENCIA_SINOBRAS_POR_FAZENDA
+        (já verificada por scripts/nmme_auditoria_sinobras_por_fazenda.py)
+        — nunca abre nem lê o arquivo original."""
+        import inspect
+        src = inspect.getsource(aud.montar_achado_nova_evidencia_sinobras_por_fazenda)
+        self.assertNotIn('read_csv', src)
+        self.assertNotIn('open(', src)
+
+
 class MontarListaDocumentosNecessariosTestCase(unittest.TestCase):
     """Item 4 (2ª rodada) — lista objetiva, não computada, do que falta
     para comprovar procedência histórica."""
