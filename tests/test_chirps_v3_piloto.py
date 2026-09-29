@@ -273,6 +273,99 @@ class ReprocessarAusentesOuNodataTestCase(unittest.TestCase):
         esgotados = piloto.meses_esgotados_reprocessamento()
         self.assertEqual(esgotados, [(1991, 1)])
 
+    def test_h_falha_de_rede_nao_apaga_a_classificacao_anterior(self):
+        """CORREÇÃO (auditoria independente) — uma falha de rede/extração
+        durante o reprocessamento NÃO pode sobrescrever a classificação
+        original (mes_ausente/nodata_sentinela) no CSV."""
+        self._semear(status='mes_ausente', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='erro_inesperado',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'mes_ausente',
+                          "a falha de rede não deveria sobrescrever a classificação anterior")
+
+    def test_i_falha_de_rede_conta_como_tentativa_real(self):
+        """O contador que define o teto tem que corresponder a
+        tentativas REAIS feitas — uma falha de rede é uma tentativa
+        real, mesmo não confirmando ausente/nodata."""
+        self._semear(status='mes_ausente', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='grade_inesperada',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+
+    def test_j_teto_e_atingido_mesmo_com_falhas_de_rede_intercaladas(self):
+        """Antes da correção, uma sequência de falhas de rede nunca
+        incrementava o contador — o teto nunca era atingido, tentativas
+        efetivamente indefinidas. Intercala falha/confirmação/falha e
+        confirma que o teto (3) é atingido e respeitado."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['erro_inesperado', 'mes_ausente', 'arquivo_corrompido_ou_incompleto'])
+        chamadas = {'n': 0}
+
+        def _fake(ano, mes):
+            chamadas['n'] += 1
+            return _resultado_falso(ano, mes, status=next(desfechos), valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(5):   # bem mais que o teto
+                resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(chamadas['n'], 3, "só 3 tentativas reais, nunca indefinidas")
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 2)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 1)
+        # a classificação nunca foi apagada pelas duas falhas de rede
+        self.assertEqual(linha['status'], 'mes_ausente')
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [(1991, 1)])
+
+    def test_k_historico_de_falhas_e_preservado_e_concatenado(self):
+        """Preservar o histórico necessário para diagnosticar falhas —
+        cada falha deve aparecer no log, nunca substituir a anterior."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        desfechos = iter(['erro_verificacao_disponibilidade', 'leitura_de_pixel_falhou'])
+
+        def _fake(ano, mes):
+            return _resultado_falso(ano, mes, status=next(desfechos), valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.reprocessar_ausentes_ou_nodata()
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        historico = linha[piloto.COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO]
+        self.assertIn('erro_verificacao_disponibilidade', historico)
+        self.assertIn('leitura_de_pixel_falhou', historico)
+
+    def test_l_falha_depois_resolvida_sai_do_pool_normalmente(self):
+        """Uma falha de rede não impede que uma tentativa POSTERIOR
+        resolva o mês normalmente."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['erro_inesperado', 'ok'])
+
+        def _fake(ano, mes):
+            status = next(desfechos)
+            valor = 42.0 if status == 'ok' else None
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.reprocessar_ausentes_ou_nodata()
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'ok')
+        self.assertEqual(linha['valor_mm'], 42.0)
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [])
+
 
 class AvaliarQualidadePilotoTestCase(unittest.TestCase):
     """Item 5 — reprova o piloto se algo comprometer a integridade."""

@@ -151,12 +151,30 @@ def carregar_resultados_brutos(caminho_csv=DATA_SENSIBILIDADE_CSV):
 
 def montar_estatisticas_sensibilidade(df_bruto):
     """Compara cada vizinho contra o 'centro' (o pixel de referência)
-    do MESMO mês — só estatística DESCRITIVA (diferença absoluta,
-    relativa) — nunca decide qual pixel é 'melhor', nunca substitui a
-    referência. Destaca separadamente os vizinhos L/S/SL (os
-    candidatos mais próximos de uma escolha alternativa, dado o
-    achado confirmado de proximidade de borda nesses dois eixos) dos
-    outros 5 (sem relação especial com a borda observada)."""
+    do MESMO mês — só estatística DESCRITIVA — nunca decide qual pixel
+    é 'melhor', nunca substitui a referência. Destaca separadamente os
+    vizinhos L/S/SL (os candidatos mais próximos de uma escolha
+    alternativa, dado o achado confirmado de proximidade de borda
+    nesses dois eixos) dos outros 5 (sem relação especial com a borda
+    observada).
+
+    CORREÇÃO (auditoria independente, revisão) — a versão anterior
+    guardava em 'diff_abs_media_mm' a média das diferenças COM SINAL
+    (valor_vizinho - valor_centro), apesar do nome indicar "absoluta".
+    Isso conflitava mediana positiva e negativa (ex.: NO e O têm
+    diferenças com sinal negativo que, na média com sinal, se cancelam
+    parcialmente com os vizinhos de sinal positivo — mascarando a
+    magnitude real da dispersão). Agora três métricas SEPARADAS, nunca
+    confundidas: diferença média COM SINAL (`diff_media_mm`), diferença
+    ABSOLUTA média (`diff_abs_media_mm`, |vizinho - centro| médio) e
+    diferença ABSOLUTA máxima (`diff_abs_maxima_mm`, já estava correta
+    antes — só o nome da média estava errado). A interpretação também
+    foi revisada: a versão anterior concluía automaticamente
+    "influência prática irrelevante" só porque a média absoluta dos 3
+    vizinhos relevantes era menor que a dos outros 5 — isso NÃO é
+    suficiente isoladamente (médias escondem casos individuais grandes,
+    e a importância de uma diferença depende da aplicação e da época do
+    ano); a conclusão binária automática foi removida."""
     if df_bruto.empty:
         return {'n_meses_comparaveis': 0, 'por_vizinho': {}, 'interpretacao':
                 'Nenhum resultado disponível para análise de sensibilidade.'}
@@ -179,63 +197,90 @@ def montar_estatisticas_sensibilidade(df_bruto):
             if row.get('status_pixel') not in ('ok', 'zero_real'):
                 continue
             valor_vizinho = float(row['valor_mm'])
-            diff_abs = valor_vizinho - valor_centro
-            diff_rel_pct = (diff_abs / valor_centro * 100) if valor_centro else None
+            diff_mm = valor_vizinho - valor_centro   # COM SINAL: vizinho menos centro
+            diff_rel_pct = (diff_mm / valor_centro * 100) if valor_centro else None
             linhas_por_vizinho.append({
                 'ano': ano, 'mes': mes, 'vizinho': row['vizinho'],
                 'valor_centro_mm': valor_centro, 'valor_vizinho_mm': valor_vizinho,
-                'diff_abs_mm': diff_abs, 'diff_rel_pct': diff_rel_pct,
+                'diff_mm': diff_mm, 'diff_rel_pct': diff_rel_pct,
             })
 
     comp_df = pd.DataFrame(linhas_por_vizinho)
+    if not comp_df.empty:
+        comp_df['diff_abs_mm'] = comp_df['diff_mm'].abs()
+
+    def _resumo(df_grupo):
+        """Diferença média COM SINAL, diferença ABSOLUTA média e
+        ABSOLUTA máxima (com o mês/vizinho em que ocorreu) — nunca
+        confundidas entre si."""
+        if df_grupo.empty:
+            return {'diff_media_mm': None, 'diff_abs_media_mm': None,
+                    'diff_abs_maxima_mm': None, 'diff_abs_maxima_mes': None,
+                    'diff_abs_maxima_vizinho': None}
+        idx_max = df_grupo['diff_abs_mm'].idxmax()
+        linha_max = df_grupo.loc[idx_max]
+        return {
+            'diff_media_mm': round(float(df_grupo['diff_mm'].mean()), 2),
+            'diff_abs_media_mm': round(float(df_grupo['diff_abs_mm'].mean()), 2),
+            'diff_abs_maxima_mm': round(float(df_grupo['diff_abs_mm'].max()), 2),
+            'diff_abs_maxima_mes': f"{int(linha_max['ano'])}-{int(linha_max['mes']):02d}",
+            'diff_abs_maxima_vizinho': str(linha_max['vizinho']),
+        }
+
     por_vizinho = {}
     if not comp_df.empty:
         for rotulo, grupo in comp_df.groupby('vizinho'):
-            por_vizinho[rotulo] = {
-                'n_meses': int(len(grupo)),
-                'diff_abs_media_mm': round(float(grupo['diff_abs_mm'].mean()), 3),
-                'diff_abs_maxima_mm': round(float(grupo['diff_abs_mm'].abs().max()), 3),
-                'diff_rel_media_pct': round(float(grupo['diff_rel_pct'].dropna().mean()), 2)
-                    if grupo['diff_rel_pct'].notna().any() else None,
-            }
+            resumo_vizinho = _resumo(grupo)
+            resumo_vizinho['n_meses'] = int(len(grupo))
+            resumo_vizinho['diff_rel_media_pct'] = (
+                round(float(grupo['diff_rel_pct'].dropna().mean()), 2)
+                if grupo['diff_rel_pct'].notna().any() else None)
+            por_vizinho[rotulo] = resumo_vizinho
 
     diffs_relevantes = comp_df[comp_df['vizinho'].isin(VIZINHOS_RELEVANTES_PARA_BORDA_CONHECIDA)] \
         if not comp_df.empty else comp_df
     diffs_demais = comp_df[~comp_df['vizinho'].isin(VIZINHOS_RELEVANTES_PARA_BORDA_CONHECIDA)] \
         if not comp_df.empty else comp_df
 
-    diff_abs_media_relevantes = round(float(diffs_relevantes['diff_abs_mm'].abs().mean()), 3) \
-        if not diffs_relevantes.empty else None
-    diff_abs_media_demais = round(float(diffs_demais['diff_abs_mm'].abs().mean()), 3) \
-        if not diffs_demais.empty else None
+    resumo_relevantes = _resumo(diffs_relevantes)
+    resumo_demais = _resumo(diffs_demais)
+    diff_abs_media_relevantes = resumo_relevantes['diff_abs_media_mm']
+    diff_abs_media_demais = resumo_demais['diff_abs_media_mm']
+
+    interpretacao = (
+        f"{len(meses_validos)} meses comparáveis (dos {len(piloto.MESES_PILOTO)} do piloto). "
+        f"Diferença ABSOLUTA média entre o pixel de referência e os vizinhos L/S/SL (os "
+        f"candidatos mais próximos de uma seleção alternativa, dada a proximidade de borda "
+        f"confirmada nesses dois eixos): {diff_abs_media_relevantes} mm — máxima observada "
+        f"{resumo_relevantes['diff_abs_maxima_mm']} mm (vizinho {resumo_relevantes['diff_abs_maxima_vizinho']}, "
+        f"{resumo_relevantes['diff_abs_maxima_mes']}). Diferença absoluta média para os outros 5 "
+        f"vizinhos (sem relação especial com a borda observada): {diff_abs_media_demais} mm — "
+        f"máxima observada {resumo_demais['diff_abs_maxima_mm']} mm (vizinho "
+        f"{resumo_demais['diff_abs_maxima_vizinho']}, {resumo_demais['diff_abs_maxima_mes']}). "
+        "A média absoluta mais baixa nos três vizinhos selecionados, isoladamente, NÃO é "
+        "suficiente para concluir que a proximidade à borda tem influência prática irrelevante "
+        "— uma média apaga a variação mês a mês, e as diferenças MÁXIMAS mostram que casos "
+        "individuais chegam a dezenas de mm em ambos os grupos (ver tabela por vizinho). A "
+        "importância prática de uma diferença desse tamanho depende da aplicação (o balanço "
+        "hídrico é mais sensível perto do mês crítico, quando o ARM já está baixo, do que num "
+        "mês de solo saturado) e da época do ano (a mesma diferença em mm pode ser desprezível "
+        "num mês chuvoso e representar grande fração da chuva total num mês seco — CLAUDE.md "
+        "armadilha 7 documenta como o viés de fonte já varia fortemente por mês nesta região). "
+        "Esta análise NÃO conclui, isoladamente, se a proximidade à borda importa ou não na "
+        "prática — essa avaliação cabe a quem decide sobre a reconstrução, considerando o uso "
+        f"pretendido dos dados. Esta é uma leitura DESCRITIVA da amostra de {len(meses_validos)} "
+        "meses — nenhuma alternativa de pixel foi adotada, nenhuma referência foi substituída."
+    )
 
     return {
         'n_meses_comparaveis': len(meses_validos),
         'por_vizinho': por_vizinho,
         'vizinhos_relevantes_para_borda_conhecida': list(VIZINHOS_RELEVANTES_PARA_BORDA_CONHECIDA),
         'diff_abs_media_vizinhos_relevantes_mm': diff_abs_media_relevantes,
+        'diff_abs_maxima_vizinhos_relevantes_mm': resumo_relevantes['diff_abs_maxima_mm'],
         'diff_abs_media_demais_vizinhos_mm': diff_abs_media_demais,
-        'interpretacao': (
-            f"{len(meses_validos)} meses comparáveis (dos 17 do piloto). Diferença absoluta "
-            f"média entre o pixel de referência e os vizinhos L/S/SL (os candidatos mais "
-            f"próximos de uma seleção alternativa, dada a proximidade de borda confirmada "
-            f"nesses dois eixos): {diff_abs_media_relevantes} mm. Diferença absoluta média "
-            f"para os outros 5 vizinhos (sem relação especial com a borda observada): "
-            f"{diff_abs_media_demais} mm. "
-            + (
-                "A proximidade à borda NÃO parece ter influência prática relevante nos "
-                "valores — a diferença para os vizinhos mais próximos da borda observada não é "
-                "sistematicamente maior que para os demais."
-                if (diff_abs_media_relevantes is not None and diff_abs_media_demais is not None
-                    and diff_abs_media_relevantes <= diff_abs_media_demais * 1.5)
-                else
-                "A proximidade à borda PODE ter influência prática relevante — a diferença "
-                "para os vizinhos mais próximos da borda observada é maior que para os "
-                "demais, o que sustenta considerar essa sensibilidade explicitamente na "
-                "reconstrução completa (Fase 2C.3B)."
-            ) + " Esta é uma leitura DESCRITIVA da amostra de 17 meses — nenhuma alternativa "
-            "de pixel foi adotada, nenhuma referência foi substituída."
-        ),
+        'diff_abs_maxima_demais_vizinhos_mm': resumo_demais['diff_abs_maxima_mm'],
+        'interpretacao': interpretacao,
     }
 
 
@@ -281,24 +326,46 @@ def gerar_relatorio_sensibilidade_markdown(metadata):
         "",
         "### Estatísticas por vizinho",
         "",
-        "| Vizinho | Relevante p/ borda conhecida | N meses | Diff. abs. média (mm) | Diff. "
-        "abs. máxima (mm) | Diff. relativa média (%) |",
-        "|---|---|---|---|---|---|",
+        "Três métricas SEPARADAS, nunca confundidas: diferença média COM SINAL (pode ser "
+        "positiva ou negativa — indica se o vizinho tende a ficar acima ou abaixo do "
+        "centro), diferença ABSOLUTA média (magnitude típica, ignora o sinal) e diferença "
+        "ABSOLUTA máxima observada na amostra (com o mês em que ocorreu).",
+        "",
+        "| Vizinho | Relevante p/ borda conhecida | N meses | Diff. média COM SINAL (mm) | "
+        "Diff. ABSOLUTA média (mm) | Diff. ABSOLUTA máxima (mm) | Mês da máxima | Diff. "
+        "relativa média (%) |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for rotulo, stats in sorted(e.get('por_vizinho', {}).items()):
         relevante = "SIM" if rotulo in e.get('vizinhos_relevantes_para_borda_conhecida', []) \
             else "não"
         linhas.append(
-            f"| {rotulo} | {relevante} | {stats['n_meses']} | {stats['diff_abs_media_mm']} | "
-            f"{stats['diff_abs_maxima_mm']} | {stats['diff_rel_media_pct']} |")
+            f"| {rotulo} | {relevante} | {stats['n_meses']} | {stats['diff_media_mm']} | "
+            f"{stats['diff_abs_media_mm']} | {stats['diff_abs_maxima_mm']} | "
+            f"{stats['diff_abs_maxima_mes']} | {stats['diff_rel_media_pct']} |")
     linhas += [
+        "",
+        "### Diferenças máximas — resumo por grupo",
+        "",
+        "As diferenças ABSOLUTAS máximas mostram que casos individuais chegam a dezenas de "
+        "mm em ambos os grupos, mesmo quando a média absoluta de um grupo é menor que a do "
+        "outro — a importância prática dessas máximas depende da aplicação (mês crítico do "
+        "balanço hídrico vs. mês de solo saturado) e da época do ano (a mesma diferença em "
+        "mm pode ser desprezível num mês chuvoso e representar grande fração da chuva total "
+        "num mês seco).",
+        "",
+        f"- Vizinhos relevantes p/ borda (L/S/SL): diferença absoluta máxima "
+        f"{e.get('diff_abs_maxima_vizinhos_relevantes_mm')} mm.",
+        f"- Demais vizinhos: diferença absoluta máxima "
+        f"{e.get('diff_abs_maxima_demais_vizinhos_mm')} mm.",
         "",
         "## Restrições respeitadas",
         "",
         "- Nenhuma alternativa de pixel foi adotada — `CHIRPS_v3_ponto_centroide` continua "
         "sendo definido por `scripts/_chirps_v3.py::localizar_pixel()`.",
         "- Nenhum indicador de habilidade preditiva foi calculado.",
-        "- Resultados brutos (por mês/vizinho) em `data/chirps_v3_sensibilidade_piloto.csv`.",
+        "- Resultados brutos (por mês/vizinho) em `data/chirps_v3_sensibilidade_piloto.csv` — "
+        "preservados intactos desta correção (nenhuma extração real foi refeita).",
     ]
     return '\n'.join(linhas) + '\n'
 

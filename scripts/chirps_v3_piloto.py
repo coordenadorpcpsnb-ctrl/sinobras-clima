@@ -61,8 +61,48 @@ MAX_REQUISICOES_POR_EXECUCAO = 30   # limite de segurança — piloto tem 17, nu
 # ausência é real). reprocessar_ausentes_ou_nodata() é o mecanismo
 # EXPLÍCITO e CONTROLADO para dar a esses meses uma nova chance —
 # nunca automático, sempre com este teto rígido de tentativas.
+#
+# CORREÇÃO (auditoria independente, revisão) — a versão anterior só
+# incrementava COLUNA_TENTATIVAS_REPROCESSAMENTO quando o resultado
+# CONFIRMAVA ausente/nodata de novo; uma falha de rede/extração
+# (status diferente de ok/zero_real/mes_ausente/nodata_sentinela)
+# caía no `else` e (a) não incrementava o contador — então uma
+# sequência de falhas de rede nunca atingia o teto, tentativas
+# efetivamente indefinidas apesar do nome da variável — E (b)
+# sobrescrevia a linha persistida inteira com o resultado da falha,
+# apagando a classificação anterior (mes_ausente/nodata_sentinela)
+# do CSV. Agora três contadores distintos, nunca confundidos:
+#   COLUNA_TENTATIVAS_REPROCESSAMENTO    — toda chamada REAL feita a
+#       extrair_pixel_mensal por este mecanismo conta 1, não importa o
+#       desfecho (confirmação, resolução ou falha) — é este que define
+#       o teto (`max_tentativas`), então "tentativas" agora corresponde
+#       de fato a tentativas.
+#   COLUNA_CONFIRMACOES_REPROCESSAMENTO  — subconjunto das tentativas
+#       em que o resultado confirmou o MESMO tipo (ausente/nodata) de
+#       novo.
+#   COLUNA_FALHAS_REPROCESSAMENTO        — subconjunto das tentativas
+#       em que houve falha de rede/extração (nem confirmação, nem
+#       resolução) — nessas, a linha persistida NUNCA é sobrescrita: a
+#       classificação anterior (status/valor_mm/etc.) é preservada
+#       intacta, só os contadores e o histórico de diagnóstico mudam.
+# COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO guarda um log compacto
+# (status + timestamp de cada falha, concatenados) para diagnosticar
+# sem precisar reprocessar de novo.
 MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA = 3
 COLUNA_TENTATIVAS_REPROCESSAMENTO = 'tentativas_reprocessamento_ausente_ou_nodata'
+COLUNA_CONFIRMACOES_REPROCESSAMENTO = 'confirmacoes_reprocessamento_ausente_ou_nodata'
+COLUNA_FALHAS_REPROCESSAMENTO = 'falhas_reprocessamento_ausente_ou_nodata'
+COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO = 'historico_falhas_reprocessamento_ausente_ou_nodata'
+
+# Desfechos de extrair_pixel_mensal() que NÃO são confirmação de
+# ausente/nodata nem resolução (ok/zero_real) — falha de rede/extração
+# durante a TENTATIVA de reprocessamento (scripts/_chirps_v3.py::
+# extrair_pixel_mensal nunca levanta exceção, sempre devolve um destes
+# status em vez de propagar o erro).
+STATUS_FALHA_REPROCESSAMENTO = {
+    'erro_verificacao_disponibilidade', 'grade_inesperada', 'leitura_de_pixel_falhou',
+    'arquivo_corrompido_ou_incompleto', 'erro_inesperado',
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -158,14 +198,39 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
     NoData pontual foi transitório do lado do servidor.
 
     Nunca tentativas indefinidas: cada mês carrega um contador
-    persistido (COLUNA_TENTATIVAS_REPROCESSAMENTO) que só é
-    incrementado quando o reprocessamento CONFIRMA o mesmo status
-    (ausente/nodata de novo) — ao atingir `max_tentativas`, o mês para
-    de ser candidato, permanentemente, até intervenção manual (não
-    há reset automático). Se o reprocessamento resolver o mês (status
-    vira ok/zero_real), o contador para de importar — o mês sai da
-    lista de candidatos porque o status mudou, não porque o contador
-    zerou.
+    persistido (COLUNA_TENTATIVAS_REPROCESSAMENTO) que conta toda
+    TENTATIVA REAL (toda chamada a extrair_pixel_mensal feita por este
+    mecanismo para aquele mês) — não importa se o desfecho foi
+    confirmação do mesmo status, resolução, ou falha de rede/extração.
+    Ao atingir `max_tentativas`, o mês para de ser candidato,
+    permanentemente, até intervenção manual (não há reset automático).
+
+    CORREÇÃO (auditoria independente) — a versão anterior só contava
+    como "tentativa" um resultado que CONFIRMASSE ausente/nodata de
+    novo; uma falha de rede/extração nem incrementava o contador (o
+    teto de 3 nunca era atingido por uma sequência de falhas — tentativa
+    indefinida de fato) nem preservava a classificação anterior (a
+    linha era sobrescrita pelo resultado da falha, apagando
+    mes_ausente/nodata_sentinela do CSV). Agora:
+    - COLUNA_TENTATIVAS_REPROCESSAMENTO sobe em toda chamada real — é
+      o contador que define o teto, e por isso corresponde de fato a
+      tentativas (nunca mais preso a "só quando confirma").
+    - COLUNA_CONFIRMACOES_REPROCESSAMENTO sobe só quando o resultado
+      confirma o mesmo tipo (ausente/nodata) de novo — diagnóstico
+      separado, nunca usado para o teto.
+    - COLUNA_FALHAS_REPROCESSAMENTO sobe quando a tentativa falha por
+      rede/extração (`STATUS_FALHA_REPROCESSAMENTO`); nesse caso a
+      linha persistida NUNCA é sobrescrita — a classificação anterior
+      (status/valor_mm/proveniência) é preservada intacta, só os três
+      contadores e COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO (log
+      compacto status@timestamp, concatenado, nunca substituído) mudam.
+      Isso cobre "preservar o histórico necessário para diagnosticar
+      falhas e evitar que um erro de rede apague indevidamente a
+      classificação anterior".
+
+    Se o reprocessamento resolver o mês (status vira ok/zero_real), o
+    mês sai da lista de candidatos porque o status mudou — os
+    contadores continuam persistidos, só para diagnóstico.
 
     `meses`, se fornecido, restringe ainda mais os candidatos a um
     subconjunto explícito (ex.: só os meses de um lote específico) —
@@ -177,10 +242,15 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
     if persistidos.empty:
         return persistidos
 
-    if COLUNA_TENTATIVAS_REPROCESSAMENTO not in persistidos.columns:
-        persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] = 0
-    persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] = (
-        persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO].fillna(0).astype(int))
+    for coluna in (COLUNA_TENTATIVAS_REPROCESSAMENTO, COLUNA_CONFIRMACOES_REPROCESSAMENTO,
+                   COLUNA_FALHAS_REPROCESSAMENTO):
+        if coluna not in persistidos.columns:
+            persistidos[coluna] = 0
+        persistidos[coluna] = persistidos[coluna].fillna(0).astype(int)
+    if COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO not in persistidos.columns:
+        persistidos[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = ''
+    persistidos[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = (
+        persistidos[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO].fillna(''))
 
     elegivel = (persistidos['status'].isin({'mes_ausente', 'nodata_sentinela'})
                 & (persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] < max_tentativas))
@@ -197,17 +267,44 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
     for i, (_, row) in enumerate(candidatos.iterrows()):
         ano, mes = int(row['ano']), int(row['mes'])
         tentativas_ja_feitas = int(row[COLUNA_TENTATIVAS_REPROCESSAMENTO])
+        confirmacoes_ja_feitas = int(row[COLUNA_CONFIRMACOES_REPROCESSAMENTO])
+        falhas_ja_feitas = int(row[COLUNA_FALHAS_REPROCESSAMENTO])
+        historico_ja_feito = row[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] or ''
         if i > 0:
             time.sleep(rate_limit_segundos)
-        resultado = v3.extrair_pixel_mensal(ano, mes)
-        if resultado['status'] in {'mes_ausente', 'nodata_sentinela'}:
-            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_ja_feitas + 1
+        resultado_bruto = v3.extrair_pixel_mensal(ano, mes)
+        status_novo = resultado_bruto['status']
+        tentativas_novas = tentativas_ja_feitas + 1   # toda chamada real conta 1 tentativa
+
+        if status_novo in STATUS_FALHA_REPROCESSAMENTO:
+            # Falha de rede/extração — NUNCA sobrescreve a classificação
+            # anterior. Preserva a linha persistida inteira, só atualiza
+            # os contadores de diagnóstico e o log de falhas.
+            resultado = row.to_dict()
+            entrada_log = f"{status_novo}@{resultado_bruto.get('data_extracao_utc', '')}"
+            resultado[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = (
+                f"{historico_ja_feito};{entrada_log}" if historico_ja_feito else entrada_log)
+            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_novas
+            resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO] = confirmacoes_ja_feitas
+            resultado[COLUNA_FALHAS_REPROCESSAMENTO] = falhas_ja_feitas + 1
         else:
-            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_ja_feitas
+            # Confirmação (ausente/nodata de novo) ou resolução
+            # (ok/zero_real) — usa o resultado novo integralmente.
+            resultado = resultado_bruto
+            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_novas
+            resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO] = (
+                confirmacoes_ja_feitas + 1 if status_novo in {'mes_ausente', 'nodata_sentinela'}
+                else confirmacoes_ja_feitas)
+            resultado[COLUNA_FALHAS_REPROCESSAMENTO] = falhas_ja_feitas
+            resultado[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = historico_ja_feito
+
         novos.append(resultado)
-        print(f"  [reprocessamento {i+1}/{len(candidatos)}] {ano}-{mes:02d}: "
-              f"status={resultado['status']} "
-              f"tentativas={resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO]}/{max_tentativas}")
+        rotulo_tentativa = (f"FALHA({status_novo}) — status anterior preservado: {resultado['status']}"
+                             if status_novo in STATUS_FALHA_REPROCESSAMENTO else f"status={status_novo}")
+        print(f"  [reprocessamento {i+1}/{len(candidatos)}] {ano}-{mes:02d}: {rotulo_tentativa} "
+              f"tentativas={resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO]}/{max_tentativas} "
+              f"confirmacoes={resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO]} "
+              f"falhas={resultado[COLUNA_FALHAS_REPROCESSAMENTO]}")
 
     novos_df = pd.json_normalize(novos, sep='__')
     combinado = pd.concat([persistidos, novos_df], ignore_index=True)
@@ -222,8 +319,11 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
 def meses_esgotados_reprocessamento(caminho_csv=None,
                                      max_tentativas=MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA):
     """Diagnóstico — lista os meses ausentes/NoData que já atingiram o
-    teto de tentativas (não candidatos a reprocessar automaticamente
-    nunca mais, sem intervenção manual)."""
+    teto de TENTATIVAS REAIS (não candidatos a reprocessar
+    automaticamente nunca mais, sem intervenção manual). Usa
+    COLUNA_TENTATIVAS_REPROCESSAMENTO (tentativas reais, confirmação ou
+    falha) — não COLUNA_CONFIRMACOES_REPROCESSAMENTO, que sozinho
+    poderia nunca atingir o teto numa sequência de falhas de rede."""
     if caminho_csv is None:
         caminho_csv = DATA_PILOTO_CSV
     persistidos = _carregar_resultados_persistidos(caminho_csv)

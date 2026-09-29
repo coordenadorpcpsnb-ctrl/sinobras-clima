@@ -137,15 +137,69 @@ class EstatisticasSensibilidadeTestCase(unittest.TestCase):
         df = self._df_bruto_sintetico()
         resultado = sens.montar_estatisticas_sensibilidade(df)
         self.assertEqual(resultado['n_meses_comparaveis'], 2)
+        # diff_media_mm é COM SINAL — L acima do centro (+10), S abaixo (-10)
+        self.assertAlmostEqual(resultado['por_vizinho']['L']['diff_media_mm'], 10.0)
+        self.assertAlmostEqual(resultado['por_vizinho']['S']['diff_media_mm'], -10.0)
+        # diff_abs_media_mm é a magnitude — 10.0 para os dois, nunca negativa
         self.assertAlmostEqual(resultado['por_vizinho']['L']['diff_abs_media_mm'], 10.0)
-        self.assertAlmostEqual(resultado['por_vizinho']['S']['diff_abs_media_mm'], -10.0)
+        self.assertAlmostEqual(resultado['por_vizinho']['S']['diff_abs_media_mm'], 10.0)
         self.assertAlmostEqual(resultado['por_vizinho']['L']['diff_rel_media_pct'], 10.0)
+
+    def test_b2_diferenca_com_sinal_nunca_e_confundida_com_absoluta_em_amostra_mista(self):
+        """CORREÇÃO (auditoria independente) — com diferenças de sinais
+        opostos na amostra, a média COM SINAL se cancela parcialmente
+        (mascarando a dispersão real), enquanto a média ABSOLUTA não.
+        As duas precisam ser numericamente DIFERENTES aqui, provando
+        que não são mais a mesma conta com nome trocado."""
+        linhas = [
+            {'ano': 1991, 'mes': 1, 'vizinho': 'centro', 'status_entrada': 'ok',
+             'dentro_do_raster': True, 'status_pixel': 'ok', 'valor_mm': 100.0},
+            {'ano': 1991, 'mes': 1, 'vizinho': 'L', 'status_entrada': 'ok',
+             'dentro_do_raster': True, 'status_pixel': 'ok', 'valor_mm': 120.0},  # +20
+            {'ano': 1991, 'mes': 4, 'vizinho': 'centro', 'status_entrada': 'ok',
+             'dentro_do_raster': True, 'status_pixel': 'ok', 'valor_mm': 100.0},
+            {'ano': 1991, 'mes': 4, 'vizinho': 'L', 'status_entrada': 'ok',
+             'dentro_do_raster': True, 'status_pixel': 'ok', 'valor_mm': 90.0},   # -10
+        ]
+        df = pd.DataFrame(linhas)
+        resultado = sens.montar_estatisticas_sensibilidade(df)
+        stats_l = resultado['por_vizinho']['L']
+        self.assertAlmostEqual(stats_l['diff_media_mm'], 5.0)        # (20 + -10) / 2
+        self.assertAlmostEqual(stats_l['diff_abs_media_mm'], 15.0)   # (20 + 10) / 2
+        self.assertNotEqual(stats_l['diff_media_mm'], stats_l['diff_abs_media_mm'])
+        self.assertAlmostEqual(stats_l['diff_abs_maxima_mm'], 20.0)
+        self.assertEqual(stats_l['diff_abs_maxima_mes'], '1991-01')
+        self.assertEqual(stats_l['diff_abs_maxima_vizinho'], 'L')
 
     def test_c_distingue_vizinhos_relevantes_dos_demais(self):
         df = self._df_bruto_sintetico(diff_leste=50.0, diff_sul=50.0, diff_norte=1.0)
         resultado = sens.montar_estatisticas_sensibilidade(df)
         self.assertGreater(resultado['diff_abs_media_vizinhos_relevantes_mm'],
                             resultado['diff_abs_media_demais_vizinhos_mm'])
+
+    def test_c2_nao_conclui_automaticamente_irrelevancia_pratica(self):
+        """CORREÇÃO (auditoria independente) — mesmo quando a média
+        absoluta dos vizinhos relevantes é MENOR que a dos demais (o
+        cenário que antes disparava a conclusão automática de
+        'influência prática irrelevante'), a interpretação não pode
+        mais afirmar isso automaticamente."""
+        df = self._df_bruto_sintetico(diff_leste=1.0, diff_sul=1.0, diff_norte=50.0)
+        resultado = sens.montar_estatisticas_sensibilidade(df)
+        self.assertLess(resultado['diff_abs_media_vizinhos_relevantes_mm'],
+                         resultado['diff_abs_media_demais_vizinhos_mm'])
+        interpretacao = resultado['interpretacao'].lower()
+        self.assertNotIn('não parece ter influência prática relevante', interpretacao)
+        self.assertIn('não é suficiente', interpretacao)
+        self.assertIn('depende da aplicação', interpretacao)
+        self.assertIn('época do ano', interpretacao)
+
+    def test_c3_apresenta_diferencas_maximas_no_resultado(self):
+        df = self._df_bruto_sintetico(diff_leste=50.0, diff_sul=-30.0, diff_norte=1.0)
+        resultado = sens.montar_estatisticas_sensibilidade(df)
+        self.assertIn('diff_abs_maxima_vizinhos_relevantes_mm', resultado)
+        self.assertIn('diff_abs_maxima_demais_vizinhos_mm', resultado)
+        self.assertIsNotNone(resultado['diff_abs_maxima_vizinhos_relevantes_mm'])
+        self.assertGreaterEqual(resultado['diff_abs_maxima_vizinhos_relevantes_mm'], 50.0)
 
     def test_d_ignora_vizinhos_fora_do_raster_ou_com_nodata(self):
         linhas = [
