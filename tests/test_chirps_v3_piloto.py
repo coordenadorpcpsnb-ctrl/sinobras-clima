@@ -182,25 +182,70 @@ class AvaliarQualidadePilotoTestCase(unittest.TestCase):
         resultado = piloto.avaliar_qualidade_piloto(df)
         self.assertFalse(resultado['aprovado'])
 
-    def test_e_mes_ausente_no_servidor_nao_reprova(self):
-        """404 real é uma resposta válida do CHC, não uma falha da
-        nossa extração."""
+    def test_e_mes_ausente_no_servidor_reprova_periodo_obrigatorio(self):
+        """CORREÇÃO (item 3, auditoria independente) — a versão
+        anterior isentava 'mes_ausente' (404) da reprovação, mesmo
+        para um período OBRIGATÓRIO e fixo como o piloto (todos os
+        meses já deveriam estar publicados). Um período obrigatório
+        com QUALQUER mês ausente não tem cobertura temporal completa —
+        reprovado, mesmo sendo uma resposta 'válida' do servidor."""
         linhas = [_resultado_falso(a, m) for a, m in piloto.MESES_PILOTO]
         linhas[0]['status'] = 'mes_ausente'
         linhas[0]['valor_mm'] = None
         df = pd.DataFrame(linhas)
         resultado = piloto.avaliar_qualidade_piloto(df)
-        self.assertTrue(resultado['aprovado'])
+        self.assertFalse(resultado['aprovado'])
+        self.assertFalse(resultado['cobertura_temporal_completa'])
         self.assertEqual(resultado['n_meses_ausentes_no_servidor'], 1)
 
-    def test_f_zero_real_conta_como_ok(self):
+    def test_f_nodata_reprova_periodo_obrigatorio(self):
+        """CORREÇÃO (item 3) — NoData também não é mais isento para um
+        período obrigatório: não é um valor de precipitação válido."""
+        linhas = [_resultado_falso(a, m) for a, m in piloto.MESES_PILOTO]
+        linhas[0]['status'] = 'nodata_sentinela'
+        linhas[0]['valor_mm'] = None
+        df = pd.DataFrame(linhas)
+        resultado = piloto.avaliar_qualidade_piloto(df)
+        self.assertFalse(resultado['aprovado'])
+        self.assertEqual(resultado['n_meses_com_nodata'], 1)
+
+    def test_g_zero_real_conta_como_valor_valido(self):
         linhas = [_resultado_falso(a, m) for a, m in piloto.MESES_PILOTO]
         linhas[0]['status'] = 'zero_real'
         linhas[0]['valor_mm'] = 0.0
         df = pd.DataFrame(linhas)
         resultado = piloto.avaliar_qualidade_piloto(df)
         self.assertTrue(resultado['aprovado'])
-        self.assertEqual(resultado['n_meses_ok_ou_zero_real'], len(piloto.MESES_PILOTO))
+        self.assertEqual(resultado['n_meses_com_valor_valido'], len(piloto.MESES_PILOTO))
+
+    def test_h_quatro_dimensoes_distintas_no_retorno(self):
+        """Item 3 — 'distinguir claramente' as quatro dimensões, nunca
+        um único booleano cru."""
+        df = pd.DataFrame([_resultado_falso(a, m) for a, m in piloto.MESES_PILOTO])
+        resultado = piloto.avaliar_qualidade_piloto(df)
+        for chave in ('n_meses_disponiveis_no_servidor', 'n_meses_com_extracao_bem_sucedida',
+                      'n_meses_com_valor_valido', 'cobertura_temporal_completa'):
+            self.assertIn(chave, resultado)
+
+    def test_i_sucesso_de_extracao_nao_e_o_mesmo_que_valor_valido(self):
+        """NoData conta para 'sucesso da extração' (o raster foi
+        aberto, a grade bateu, um valor foi lido e classificado) mas
+        NÃO para 'valor válido' — as duas dimensões devem divergir
+        neste cenário, não serem sinônimos."""
+        linhas = [_resultado_falso(a, m) for a, m in piloto.MESES_PILOTO]
+        linhas[0]['status'] = 'nodata_sentinela'
+        linhas[0]['valor_mm'] = None
+        df = pd.DataFrame(linhas)
+        resultado = piloto.avaliar_qualidade_piloto(df)
+        self.assertEqual(resultado['n_meses_com_extracao_bem_sucedida'], len(piloto.MESES_PILOTO))
+        self.assertEqual(resultado['n_meses_com_valor_valido'], len(piloto.MESES_PILOTO) - 1)
+
+    def test_j_disponibilidade_no_servidor_usa_coluna_persistida(self):
+        linhas = [_resultado_falso(a, m) for a, m in piloto.MESES_PILOTO]
+        df = pd.DataFrame(linhas)
+        df['identificacao_arquivo__disponivel'] = True
+        resultado = piloto.avaliar_qualidade_piloto(df)
+        self.assertEqual(resultado['n_meses_disponiveis_no_servidor'], len(piloto.MESES_PILOTO))
 
 
 class CompararComDadosExistentesTestCase(unittest.TestCase):
@@ -219,8 +264,40 @@ class CompararComDadosExistentesTestCase(unittest.TestCase):
         resultado = piloto.comparar_com_dados_existentes(df)
         self.assertEqual(resultado['n_meses_comparaveis'], 1)
         c = resultado['comparacoes'][0]
-        self.assertIn('prec_v2_ponto_existente', c)
+        self.assertIn('prec_chirps_existente_versao_nao_confirmada', c)
         self.assertIn('prec_serie_producao', c)
+
+    def test_f_recalcula_estatisticas_da_amostra_de_17_meses_do_piloto_real(self):
+        """Sanidade contra os 17 registros REAIS do piloto — reproduz
+        exatamente o achado da auditoria independente: 8 meses
+        superiores, 9 inferiores, diferença média assinada de
+        aproximadamente -2,66 mm (não '+' — não confirma
+        'sistematicamente mais úmido' nesta amostra regional)."""
+        df = pd.read_csv(piloto.DATA_PILOTO_CSV)
+        resultado = piloto.comparar_com_dados_existentes(df)
+        self.assertEqual(resultado['n_meses_comparaveis'], 17)
+        self.assertEqual(resultado['n_meses_v3_superior_ao_existente'], 8)
+        self.assertEqual(resultado['n_meses_v3_inferior_ao_existente'], 9)
+        self.assertAlmostEqual(resultado['diff_media_assinada_vs_chirps_existente_mm'],
+                                -2.66, places=1)
+
+    def test_g_interpretacao_nao_afirma_v3_sistematicamente_mais_umido_na_amostra(self):
+        """CORREÇÃO (item 1, auditoria independente) — não afirmar que
+        o piloto observou 'v3 mais úmido' quando a amostra mostra o
+        oposto em média."""
+        df = pd.read_csv(piloto.DATA_PILOTO_CSV)
+        resultado = piloto.comparar_com_dados_existentes(df)
+        texto = resultado['interpretacao']
+        self.assertNotIn('v3 tende a ser mais úmido', texto)
+        self.assertIn('8', texto)
+        self.assertIn('9', texto)
+
+    def test_h_nao_identifica_existente_como_v2_confirmado(self):
+        df = pd.read_csv(piloto.DATA_PILOTO_CSV)
+        resultado = piloto.comparar_com_dados_existentes(df)
+        texto = resultado['interpretacao']
+        self.assertIn('NÃO é identificada', texto)
+        self.assertNotIn('CHIRPS v2.0/ClimateSERV', texto)
 
     def test_c_nunca_calcula_skill(self):
         import inspect
@@ -254,6 +331,33 @@ class MontarEspecificacaoProtocoloTestCase(unittest.TestCase):
         self.assertIn('IGUAL ao mês da própria inicialização', texto)
         self.assertIn('lead1_igual_mes_inicializacao', texto)
 
+    def test_f_corrige_corte_de_climatologia_para_data_de_inicializacao(self):
+        """Item 5 da revisão — climatologia expansível 'por ano-alvo'
+        pode vazar informação posterior à emissão de uma previsão
+        específica; o corte correto é por init_date."""
+        e = piloto.montar_especificacao_protocolo_cfsv2()
+        clim = e['climatologia_de_referencia']
+        self.assertIn('correcao_do_corte_temporal', clim)
+        texto = clim['correcao_do_corte_temporal']
+        self.assertIn('DATA DE INICIALIZAÇÃO', texto)
+        self.assertIn('look-ahead', texto)
+        # a alternativa (a) reescrita precisa refletir o corte por
+        # inicialização, não mais "para cada ano-alvo Y"
+        self.assertIn('CADA INICIALIZAÇÃO', clim['alternativa_a_janela_expansivel'])
+
+    def test_g_distingue_simulacao_de_operacao_real(self):
+        e = piloto.montar_especificacao_protocolo_cfsv2()
+        clim = e['climatologia_de_referencia']
+        self.assertIn('distincao_de_simulacao_operacional_real', clim)
+        self.assertIn('SIMULAÇÃO RETROSPECTIVA', clim['distincao_de_simulacao_operacional_real'])
+        self.assertIn('não existia', clim['distincao_de_simulacao_operacional_real'])
+
+    def test_h_h1_permanece_separado_mesmo_apos_correcao(self):
+        e = piloto.montar_especificacao_protocolo_cfsv2()
+        clim = e['climatologia_de_referencia']
+        self.assertIn('h1_permanece_separado', clim)
+        self.assertIn('separadamente', clim['h1_permanece_separado'])
+
     def test_d_ressalva_retrospectiva_presente(self):
         e = piloto.montar_especificacao_protocolo_cfsv2()
         self.assertIn('NÃO equivale', e['ressalva_retrospectiva_chirps_v3'])
@@ -263,6 +367,54 @@ class MontarEspecificacaoProtocoloTestCase(unittest.TestCase):
         src = inspect.getsource(piloto.montar_especificacao_protocolo_cfsv2)
         self.assertNotIn('pd.read_csv', src)
         self.assertNotIn('import requests', src)
+
+
+class RecalcularClassificacaoPixelPersistidaTestCase(unittest.TestCase):
+    """Item 2 — 'confrontar os resultados com os limites espaciais
+    persistidos' — recalcula, sem reabrir raster nem usar rede, a
+    partir dos limites já gravados em data/chirps_v3_piloto.csv."""
+
+    def test_a_vazio_sem_colunas_de_pixel_retorna_lista_vazia(self):
+        df = pd.DataFrame([_resultado_falso(1991, 1)])
+        resultado = piloto.recalcular_classificacao_pixel_persistida(df)
+        self.assertEqual(resultado, [])
+
+    def test_b_reproduz_o_achado_real_do_piloto(self):
+        """Sanidade contra os 17 registros REAIS — todos os meses
+        devem recalcular 'proximo_de_borda' nos dois eixos (mesmo
+        ponto, mesma grade, em todos os meses)."""
+        df = pd.read_csv(piloto.DATA_PILOTO_CSV)
+        resultado = piloto.recalcular_classificacao_pixel_persistida(df)
+        self.assertEqual(len(resultado), 17)
+        for c in resultado:
+            self.assertEqual(c['classificacao_proximidade_lon'], 'proximo_de_borda')
+            self.assertEqual(c['classificacao_proximidade_lat'], 'proximo_de_borda')
+            self.assertNotEqual(c['classificacao_proximidade_lon'], 'sobre_borda_exata')
+
+    def test_c_ponto_interior_sintetico_classifica_como_interior(self):
+        linha = _resultado_falso(1991, 1)
+        linha.update({
+            'pixel__pixel_bounds_lon_min': -48.5, 'pixel__pixel_bounds_lon_max': -48.45,
+            'pixel__pixel_bounds_lat_min': -7.05, 'pixel__pixel_bounds_lat_max': -7.0,
+            'pixel__ponto_consultado_lon': -48.475, 'pixel__ponto_consultado_lat': -7.025,
+        })
+        df = pd.DataFrame([linha])
+        resultado = piloto.recalcular_classificacao_pixel_persistida(df)
+        self.assertEqual(resultado[0]['classificacao_proximidade_lon'], 'interior_do_pixel')
+        self.assertEqual(resultado[0]['classificacao_proximidade_lat'], 'interior_do_pixel')
+
+    def test_d_nunca_escreve_no_dataframe_nem_no_csv(self):
+        df = pd.read_csv(piloto.DATA_PILOTO_CSV)
+        df_copia = df.copy(deep=True)
+        piloto.recalcular_classificacao_pixel_persistida(df)
+        pd.testing.assert_frame_equal(df, df_copia)
+
+    def test_e_wired_em_montar_metadata_piloto(self):
+        df = pd.read_csv(piloto.DATA_PILOTO_CSV)
+        metadata = piloto.montar_metadata_piloto(df)
+        self.assertIn('classificacao_pixel_recalculada_dos_limites_persistidos', metadata)
+        self.assertEqual(
+            len(metadata['classificacao_pixel_recalculada_dos_limites_persistidos']), 17)
 
 
 class RelatoriosTestCase(unittest.TestCase):

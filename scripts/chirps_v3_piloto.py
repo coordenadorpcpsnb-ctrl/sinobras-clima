@@ -60,19 +60,30 @@ MAX_REQUISICOES_POR_EXECUCAO = 30   # limite de segurança — piloto tem 17, nu
 # Item 4 — extração-piloto, com retomada e limitação de downloads
 # ══════════════════════════════════════════════════════════════════════════
 
-def _carregar_resultados_persistidos():
-    if not DATA_PILOTO_CSV.exists():
+def _carregar_resultados_persistidos(caminho_csv=None):
+    """`caminho_csv` é parametrizável (item 4 da revisão, Fase 2C.3B) —
+    permite reaproveitar esta mesma lógica de retomada/persistência
+    para a reconstrução histórica (scripts/chirps_v3_reconstrucao_
+    historica.py), gravando num arquivo SEPARADO, nunca
+    data/chirps_v3_piloto.csv nem os arquivos de produção. `None`
+    (padrão) usa o módulo-global DATA_PILOTO_CSV NO MOMENTO DA
+    CHAMADA — nunca um valor padrão fixado em tempo de definição da
+    função, que ficaria surdo a monkeypatch de teste
+    (patch.object(piloto, 'DATA_PILOTO_CSV', ...))."""
+    if caminho_csv is None:
+        caminho_csv = DATA_PILOTO_CSV
+    if not caminho_csv.exists():
         return pd.DataFrame(columns=['ano', 'mes', 'status'])
-    return pd.read_csv(DATA_PILOTO_CSV)
+    return pd.read_csv(caminho_csv)
 
 
-def meses_pendentes(meses=MESES_PILOTO):
+def meses_pendentes(meses=MESES_PILOTO, caminho_csv=None):
     """Retomada (item 4) — só reprocessa meses que NUNCA tiveram um
     resultado resolvido persistido (STATUS_RESOLVIDOS). Um mês com
     falha de rede/arquivo corrompido é retentado na próxima execução;
     um mês já 'ok'/'zero_real'/'nodata_sentinela'/'mes_ausente' não é
     reprocessado — evita repetir requisições desnecessárias."""
-    persistidos = _carregar_resultados_persistidos()
+    persistidos = _carregar_resultados_persistidos(caminho_csv)
     ja_resolvidos = set()
     if not persistidos.empty:
         resolvidos_df = persistidos[persistidos['status'].isin(STATUS_RESOLVIDOS)]
@@ -81,14 +92,23 @@ def meses_pendentes(meses=MESES_PILOTO):
 
 
 def executar_piloto(meses=MESES_PILOTO, max_requisicoes=MAX_REQUISICOES_POR_EXECUCAO,
-                     rate_limit_segundos=RATE_LIMIT_SEGUNDOS):
-    """Executa a extração-piloto REAL (rede) — só os meses PENDENTES
+                     rate_limit_segundos=RATE_LIMIT_SEGUNDOS, caminho_csv=None):
+    """Executa a extração REAL (rede) — só os meses PENDENTES
     (retomada), até max_requisicoes por execução (limitação de
     downloads, item 4), com um intervalo mínimo entre requisições
     (gentileza com o servidor do CHC). NUNCA baixa a série completa —
-    `meses` é sempre um subconjunto explícito, nunca 1981-presente."""
-    pendentes = meses_pendentes(meses)[:max_requisicoes]
-    persistidos = _carregar_resultados_persistidos()
+    `meses` é sempre um subconjunto explícito, nunca 1981-presente.
+
+    `caminho_csv=None` (item 4 da revisão) usa DATA_PILOTO_CSV no
+    momento da chamada (mesmo motivo documentado em
+    _carregar_resultados_persistidos) — permite reaproveitar esta
+    função para a reconstrução histórica (Fase 2C.3B), gravando num
+    arquivo separado do piloto — ver scripts/chirps_v3_reconstrucao_
+    historica.py."""
+    if caminho_csv is None:
+        caminho_csv = DATA_PILOTO_CSV
+    pendentes = meses_pendentes(meses, caminho_csv=caminho_csv)[:max_requisicoes]
+    persistidos = _carregar_resultados_persistidos(caminho_csv)
     novos = []
     for i, (ano, mes) in enumerate(pendentes):
         if i > 0:
@@ -109,8 +129,8 @@ def executar_piloto(meses=MESES_PILOTO, max_requisicoes=MAX_REQUISICOES_POR_EXEC
     combinado = combinado.drop_duplicates(subset=['ano', 'mes'], keep='last')
     combinado = combinado.sort_values(['ano', 'mes']).reset_index(drop=True)
 
-    DATA_PILOTO_CSV.parent.mkdir(parents=True, exist_ok=True)
-    combinado.to_csv(DATA_PILOTO_CSV, index=False)
+    caminho_csv.parent.mkdir(parents=True, exist_ok=True)
+    combinado.to_csv(caminho_csv, index=False)
     return combinado
 
 
@@ -119,52 +139,102 @@ def executar_piloto(meses=MESES_PILOTO, max_requisicoes=MAX_REQUISICOES_POR_EXEC
 # a integridade da referência
 # ══════════════════════════════════════════════════════════════════════════
 
+STATUS_VALOR_VALIDO = {'ok', 'zero_real'}
+# "Extração bem-sucedida" = conseguimos abrir o raster, confirmar a
+# grade e ler/classificar UM valor de pixel — mesmo que esse valor,
+# depois de classificado, não seja utilizável (ex.: implausível). Não
+# inclui mes_ausente/erro_verificacao_disponibilidade (nunca chegou a
+# tentar abrir o raster) nem grade_inesperada (abriu, mas a grade não
+# bateu — deliberadamente não confiamos na localização do pixel nesse
+# caso, então não conta como extração bem-sucedida para nossos fins).
+STATUS_EXTRACAO_BEM_SUCEDIDA = STATUS_VALOR_VALIDO | {
+    'nodata_sentinela', 'nodata_nan', 'valor_negativo_nao_e_sentinela_conhecida',
+    'valor_implausivel_alto'}
+
+
 def avaliar_qualidade_piloto(resultados_df, meses_esperados=MESES_PILOTO):
-    """O piloto é REPROVADO (aprovado=False) se: (1) algum mês
-    ESPERADO não tiver linha nenhuma (nem tentativa registrada); (2)
-    algum mês tiver status de falha real (erro de rede esgotado,
-    arquivo corrompido, grade inesperada, leitura falhou, valor
-    implausível, sentinela desconhecida); (3) a contagem de meses
-    'ok'/'zero_real' for menor que um mínimo aceitável. 'mes_ausente'
-    (404 real do servidor) NÃO reprova o piloto — é uma resposta válida
-    do CHC, não uma falha da nossa extração; fica registrado à parte."""
-    esperados = set(meses_esperados)
-    presentes = set(zip(resultados_df['ano'], resultados_df['mes'])) if not resultados_df.empty \
-        else set()
-    faltando = sorted(esperados - presentes)
+    """Correção (auditoria independente, item 3) — a versão anterior
+    tratava 'mes_ausente' (404) como não-reprovante para um período
+    OBRIGATÓRIO e fixo (os 17 meses do piloto são todos anteriores a
+    hoje, o CHIRPS Final já deveria estar publicado para todos) — isso
+    estava ERRADO: um período obrigatório não pode ser considerado
+    integralmente aprovado quando QUALQUER mês está ausente, tem
+    NoData, ou teve falha de extração. Agora distingue EXPLICITAMENTE
+    quatro dimensões diferentes, nunca um único booleano cru:
 
-    status_falha = {'erro_verificacao_disponibilidade', 'grade_inesperada',
-                     'leitura_de_pixel_falhou', 'arquivo_corrompido_ou_incompleto',
-                     'erro_inesperado', 'valor_negativo_nao_e_sentinela_conhecida',
-                     'valor_implausivel_alto', 'nodata_nan'}
-    linhas_falha = resultados_df[resultados_df['status'].isin(status_falha)] \
-        if not resultados_df.empty else resultados_df
-    meses_com_falha = list(zip(linhas_falha['ano'], linhas_falha['mes'])) \
-        if not linhas_falha.empty else []
+    1. disponibilidade_no_servidor — o arquivo respondeu à checagem
+       HEAD (identificacao_arquivo.disponivel).
+    2. sucesso_da_extracao — conseguimos abrir o raster, a grade bateu,
+       e um valor de pixel foi lido e classificado (mesmo que a
+       classificação seja 'não utilizável', ex.: NoData) — ver
+       STATUS_EXTRACAO_BEM_SUCEDIDA.
+    3. valor_valido_disponivel — o valor classificado é uma
+       precipitação REAL utilizável (status ok/zero_real) — ver
+       STATUS_VALOR_VALIDO. NoData e valor implausível NÃO contam
+       aqui, mesmo que a extração (dimensão 2) tenha "funcionado".
+    4. cobertura_temporal_completa — TODOS os meses esperados têm
+       valor_valido_disponivel=True. Esta é a condição de
+       'aprovado' — um período obrigatório com qualquer lacuna (mês
+       sem tentativa, ausente no servidor, NoData, ou falha de
+       extração) NUNCA é aprovado como integralmente coberto."""
+    esperados = sorted(set(meses_esperados))
+    n_esperados = len(esperados)
+    if resultados_df.empty:
+        presentes_map = {}
+    else:
+        presentes_map = {(int(r['ano']), int(r['mes'])): r['status']
+                          for _, r in resultados_df.iterrows()}
 
-    n_ok = int((resultados_df['status'].isin({'ok', 'zero_real'})).sum()) \
-        if not resultados_df.empty else 0
-    n_mes_ausente = int((resultados_df['status'] == 'mes_ausente').sum()) \
-        if not resultados_df.empty else 0
+    faltando = [(a, m) for a, m in esperados if (a, m) not in presentes_map]
 
-    aprovado = (len(faltando) == 0) and (len(meses_com_falha) == 0)
+    def _contar(predicado):
+        return sum(1 for (a, m) in esperados if (a, m) in presentes_map
+                   and predicado(presentes_map[(a, m)]))
+
+    n_disponivel_no_servidor = 0
+    if not resultados_df.empty and 'identificacao_arquivo__disponivel' in resultados_df.columns:
+        n_disponivel_no_servidor = int(resultados_df['identificacao_arquivo__disponivel']
+                                        .fillna(False).astype(bool).sum())
+    n_extracao_sucesso = _contar(lambda s: s in STATUS_EXTRACAO_BEM_SUCEDIDA)
+    n_valor_valido = _contar(lambda s: s in STATUS_VALOR_VALIDO)
+    n_mes_ausente = _contar(lambda s: s == 'mes_ausente')
+    n_nodata = _contar(lambda s: s in {'nodata_sentinela', 'nodata_nan'})
+
+    status_falha_extracao = {'erro_verificacao_disponibilidade', 'grade_inesperada',
+                              'leitura_de_pixel_falhou', 'arquivo_corrompido_ou_incompleto',
+                              'erro_inesperado', 'valor_negativo_nao_e_sentinela_conhecida',
+                              'valor_implausivel_alto'}
+    meses_com_falha = [(a, m) for (a, m), s in presentes_map.items() if s in status_falha_extracao]
+
+    cobertura_temporal_completa = (len(faltando) == 0) and (n_valor_valido == n_esperados)
+    aprovado = cobertura_temporal_completa   # única condição — ver docstring
 
     return {
         'aprovado': aprovado,
-        'n_meses_esperados': len(esperados),
-        'n_meses_com_resultado': len(presentes),
-        'n_meses_ok_ou_zero_real': n_ok,
+        'cobertura_temporal_completa': cobertura_temporal_completa,
+        'n_meses_esperados': n_esperados,
+        'n_meses_disponiveis_no_servidor': n_disponivel_no_servidor,
+        'n_meses_com_extracao_bem_sucedida': n_extracao_sucesso,
+        'n_meses_com_valor_valido': n_valor_valido,
         'n_meses_ausentes_no_servidor': n_mes_ausente,
+        'n_meses_com_nodata': n_nodata,
         'meses_faltando_sem_nenhuma_tentativa': [f'{a}-{m:02d}' for a, m in faltando],
-        'meses_com_falha': [f'{a}-{m:02d}' for a, m in meses_com_falha],
+        'meses_com_falha': [f'{a}-{m:02d}' for a, m in sorted(meses_com_falha)],
         'interpretacao': (
-            f"{'APROVADO' if aprovado else 'REPROVADO'}: {n_ok}/{len(esperados)} meses "
-            f"extraídos com sucesso (ok/zero_real), {n_mes_ausente} ausentes no servidor "
-            "(resposta 404 válida, não conta como falha), "
-            f"{len(meses_com_falha)} com falha real, {len(faltando)} sem nenhuma tentativa "
-            "registrada. Piloto reprovado bloqueia a Fase 2C.3B (reconstrução histórica) até "
-            "a causa raiz ser corrigida — nunca prosseguir com dado incompleto/corrompido "
-            "tratado como se fosse íntegro."
+            f"{'APROVADO — cobertura temporal completa' if aprovado else 'REPROVADO — cobertura temporal INCOMPLETA'}: "
+            f"de {n_esperados} meses obrigatórios, {n_disponivel_no_servidor} estavam "
+            f"disponíveis no servidor, {n_extracao_sucesso} tiveram extração bem-sucedida "
+            f"(raster aberto, grade validada, pixel lido e classificado), mas só "
+            f"{n_valor_valido} têm um VALOR VÁLIDO utilizável (ok/zero_real) — "
+            f"{n_mes_ausente} ausentes no servidor e {n_nodata} com NoData NÃO contam como "
+            "valor válido, mesmo sendo respostas 'esperadas' do servidor/produto. Um período "
+            "obrigatório e fixo (como este piloto, todos os meses já deveriam estar "
+            "publicados) só é considerado com cobertura temporal completa quando TODOS os "
+            "meses têm valor válido — mes_ausente/NoData/falha de extração em QUALQUER mês "
+            "impede a aprovação plena, mesmo que sejam respostas 'legítimas' do servidor. "
+            "Piloto reprovado bloqueia a Fase 2C.3B (reconstrução histórica) até a causa raiz "
+            "ser corrigida — nunca prosseguir com dado incompleto/corrompido/ausente tratado "
+            "como se fosse íntegro."
         ),
     }
 
@@ -176,20 +246,35 @@ def avaliar_qualidade_piloto(resultados_df, meses_esperados=MESES_PILOTO):
 
 def comparar_com_dados_existentes(resultados_df):
     """Compara os meses do piloto (status ok/zero_real) com os mesmos
-    meses de data/chirps_1981_2025.csv (CHIRPS v2.0/ClimateSERV, ponto
-    único, versão NÃO registrada) e data/serie_subst.csv (série
+    meses de data/chirps_1981_2025.csv (extraído pelo ClimateSERV —
+    a versão do CHIRPS usada NUNCA foi registrada por aquele pipeline,
+    então NÃO é identificada aqui como "CHIRPS v2 confirmado"; ver
+    achado em docs/nmme-fase2c2-auditoria-chirps-sinobras.md,
+    METODOLOGIA_CHIRPS_PONTO_CONHECIDA) e data/serie_subst.csv (série
     consolidada de produção — combina procedência pré-1996 não
     comprovada com estimativas CHIRPS zonais por fazenda pós-1996).
-    Só estatísticas DESCRITIVAS (diferença absoluta, razão) — nenhum
-    indicador de habilidade preditiva do CFSv2 é calculado aqui (item
-    6 da tarefa, explícito)."""
+
+    Só estatísticas DESCRITIVAS (diferença assinada, contagem de meses
+    acima/abaixo/iguais, razão) — nenhum indicador de habilidade
+    preditiva do CFSv2 é calculado aqui (item 6 da tarefa, explícito).
+
+    Correção (auditoria independente) — a versão anterior afirmava
+    "v3 tende a ser mais úmido" como se fosse o comportamento
+    observado NESTA amostra. Isso confundia duas coisas diferentes:
+    (a) o comportamento GERAL do produto, descrito na documentação
+    oficial (README: "CHIRPS v3.0 is overall wetter compared to
+    CHIRPS v2.0" — uma afirmação sobre o produto agregado/global); (b)
+    o comportamento efetivamente observado nesta amostra REGIONAL de
+    17 meses, que esta função agora calcula e reporta explicitamente —
+    as duas NÃO precisam coincidir numa amostra pequena e regional, e
+    de fato não coincidem aqui (ver interpretacao)."""
     validos = resultados_df[resultados_df['status'].isin({'ok', 'zero_real'})].copy()
     if validos.empty:
         return {'n_meses_comparaveis': 0, 'comparacoes': [],
                 'interpretacao': 'Nenhum mês válido para comparar — piloto sem dado utilizável.'}
 
     validos['prec_v3'] = validos['valor_mm'].astype(float)
-    chirps_v2 = pd.read_csv(CHIRPS_V2_PONTO_PATH) if CHIRPS_V2_PONTO_PATH.exists() else \
+    chirps_existente = pd.read_csv(CHIRPS_V2_PONTO_PATH) if CHIRPS_V2_PONTO_PATH.exists() else \
         pd.DataFrame(columns=['ano', 'mes', 'prec'])
     serie_prod = pd.read_csv(SERIE_PRODUCAO_PATH) if SERIE_PRODUCAO_PATH.exists() else \
         pd.DataFrame(columns=['ano', 'mes', 'prec'])
@@ -197,45 +282,66 @@ def comparar_com_dados_existentes(resultados_df):
     comparacoes = []
     for _, row in validos.iterrows():
         ano, mes, prec_v3 = int(row['ano']), int(row['mes']), row['prec_v3']
-        linha_v2 = chirps_v2[(chirps_v2['ano'] == ano) & (chirps_v2['mes'] == mes)]
+        linha_existente = chirps_existente[(chirps_existente['ano'] == ano)
+                                            & (chirps_existente['mes'] == mes)]
         linha_prod = serie_prod[(serie_prod['ano'] == ano) & (serie_prod['mes'] == mes)]
         entrada = {'ano': ano, 'mes': mes, 'prec_v3_ponto_novo': round(prec_v3, 2)}
-        if not linha_v2.empty:
-            prec_v2 = float(linha_v2.iloc[0]['prec'])
-            entrada['prec_v2_ponto_existente'] = prec_v2
-            entrada['diff_abs_v3_menos_v2_mm'] = round(prec_v3 - prec_v2, 2)
-            entrada['razao_v3_sobre_v2'] = round(prec_v3 / prec_v2, 3) if prec_v2 else None
+        if not linha_existente.empty:
+            prec_existente = float(linha_existente.iloc[0]['prec'])
+            entrada['prec_chirps_existente_versao_nao_confirmada'] = prec_existente
+            entrada['diff_v3_menos_existente_mm'] = round(prec_v3 - prec_existente, 2)
+            entrada['razao_v3_sobre_existente'] = round(prec_v3 / prec_existente, 3) \
+                if prec_existente else None
         if not linha_prod.empty:
             prec_prod = float(linha_prod.iloc[0]['prec'])
             entrada['prec_serie_producao'] = prec_prod
-            entrada['diff_abs_v3_menos_producao_mm'] = round(prec_v3 - prec_prod, 2)
+            entrada['diff_v3_menos_producao_mm'] = round(prec_v3 - prec_prod, 2)
             entrada['razao_v3_sobre_producao'] = round(prec_v3 / prec_prod, 3) if prec_prod \
                 else None
         comparacoes.append(entrada)
 
-    diffs_v2 = [c['diff_abs_v3_menos_v2_mm'] for c in comparacoes if 'diff_abs_v3_menos_v2_mm' in c]
-    diffs_prod = [c['diff_abs_v3_menos_producao_mm'] for c in comparacoes
-                  if 'diff_abs_v3_menos_producao_mm' in c]
+    diffs_existente = [c['diff_v3_menos_existente_mm'] for c in comparacoes
+                        if 'diff_v3_menos_existente_mm' in c]
+    diffs_prod = [c['diff_v3_menos_producao_mm'] for c in comparacoes
+                  if 'diff_v3_menos_producao_mm' in c]
+    n_superior = sum(1 for d in diffs_existente if d > 0)
+    n_inferior = sum(1 for d in diffs_existente if d < 0)
+    n_igual = sum(1 for d in diffs_existente if d == 0)
+    diff_media_assinada = round(sum(diffs_existente) / len(diffs_existente), 2) \
+        if diffs_existente else None
+    diff_abs_media = round(sum(abs(d) for d in diffs_existente) / len(diffs_existente), 2) \
+        if diffs_existente else None
 
     resumo = {
         'n_meses_comparaveis': len(comparacoes),
         'comparacoes': comparacoes,
-        'diff_abs_media_vs_chirps_v2_ponto_mm': round(sum(abs(d) for d in diffs_v2) / len(diffs_v2), 2)
-            if diffs_v2 else None,
+        'n_meses_v3_superior_ao_existente': n_superior,
+        'n_meses_v3_inferior_ao_existente': n_inferior,
+        'n_meses_v3_igual_ao_existente': n_igual,
+        'diff_media_assinada_vs_chirps_existente_mm': diff_media_assinada,
+        'diff_abs_media_vs_chirps_existente_mm': diff_abs_media,
         'diff_abs_media_vs_serie_producao_mm': round(sum(abs(d) for d in diffs_prod) / len(diffs_prod), 2)
             if diffs_prod else None,
         'interpretacao': (
-            f"{len(comparacoes)} meses do piloto comparados às três referências: (1) CHIRPS "
+            f"{len(comparacoes)} meses do piloto comparados a três referências: (1) CHIRPS "
             "v3.0 Final, novo, ponto único no centroide, versão e metodologia CONTROLADAS "
             "(este piloto); (2) CHIRPS histórico existente (data/chirps_1981_2025.csv), "
-            "extraído pelo ClimateSERV, versão NÃO registrada (ver docs/nmme-fase2c3a-piloto-"
-            "chirps-v3.md, Seção 1); (3) série consolidada de produção "
-            "(data/serie_subst.csv), que combina procedência pré-1996 não comprovada com "
-            "estimativas CHIRPS ZONAIS por fazenda pós-1996 (metodologia diferente por "
-            "desenho — zonal vs. ponto — ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md). "
-            "Diferenças esperadas e não-triviais entre as três: v3 tende a ser mais úmido que "
-            "v2 (correção de sub-captação por vento, ver README oficial). Nenhum indicador de "
-            "habilidade preditiva do CFSv2 foi calculado — só estatística descritiva de "
+            "extraído pelo ClimateSERV — a versão do CHIRPS usada NUNCA foi registrada por "
+            "aquele pipeline, então NÃO é identificada aqui como 'CHIRPS v2 confirmado'; (3) "
+            "série consolidada de produção (data/serie_subst.csv), que combina procedência "
+            "pré-1996 não comprovada com estimativas CHIRPS ZONAIS por fazenda pós-1996 "
+            "(metodologia diferente por desenho — zonal vs. ponto). "
+            f"NESTA amostra de {len(comparacoes)} meses: {n_superior} meses com CHIRPS v3 "
+            f"superior ao existente, {n_inferior} inferior, {n_igual} iguais — diferença média "
+            f"assinada de {diff_media_assinada} mm (diferença absoluta média "
+            f"{diff_abs_media} mm). Isto NÃO confirma nem contradiz, isoladamente, a afirmação "
+            "geral do README oficial de que \"CHIRPS v3.0 is overall wetter compared to CHIRPS "
+            "v2.0\" — aquela é uma caracterização do produto AGREGADO/GLOBAL; esta amostra é "
+            "REGIONAL (1 ponto, 17 meses, região historicamente com viés conhecido em "
+            "jun-ago e out-dez, CLAUDE.md armadilha 7) e pequena demais para generalizar. As "
+            "duas coisas são distintas e não devem ser confundidas: comportamento documentado "
+            "do produto vs. comportamento observado nesta amostra específica. Nenhum indicador "
+            "de habilidade preditiva do CFSv2 foi calculado — só estatística descritiva de "
             "comparação entre referências (item 6 da tarefa)."
         ),
     }
@@ -281,19 +387,40 @@ def montar_especificacao_protocolo_cfsv2():
             'restricao': 'NUNCA calculada usando os valores do período avaliado (contaminação '
                           'look-ahead/data leakage) — separação temporal estrita entre a '
                           'climatologia de referência e o período de teste.',
+            'correcao_do_corte_temporal': (
+                'CORREÇÃO (item 5, auditoria independente) — "climatologia expansível usando só '
+                'anos ANTERIORES ao ano-alvo" ainda pode vazar informação POSTERIOR à data de '
+                'emissão de uma previsão específica. Exemplo concreto: para o ano-alvo 2000, a '
+                'regra "anos < 2000" inclui o ano de 1999 inteiro (jan-dez/1999) na '
+                'climatologia — mas uma previsão inicializada em ago/1999 com H6 (mês-alvo '
+                'jan/2000) foi EMITIDA antes de set-dez/1999 acontecerem; incluir esses 4 meses '
+                'de 1999 na climatologia usada para avaliar essa previsão específica é '
+                'look-ahead, mesmo que 1999 inteiro seja "um ano anterior ao ano-alvo". O corte '
+                'correto NÃO é por ANO-ALVO — é pela DATA DE INICIALIZAÇÃO (init_date) de CADA '
+                'previsão avaliada: o conjunto de treinamento da climatologia usada para avaliar '
+                'uma previsão inicializada em init_date deve conter só observações CHIRPS com '
+                'data <= o mês anterior a init_date, nunca observações posteriores — '
+                'independentemente de em que ano-alvo a previsão caia.'
+            ),
             'alternativa_a_janela_expansivel': (
-                'Climatologia EXPANSÍVEL: para cada ano-alvo Y avaliado, a climatologia usa '
-                'todos os anos de 1981 até Y-1 (disponibilidade real do CHIRPS desde 1981, já '
-                'confirmada — data/chirps_1981_2025.csv cobre 1981-2025). Cresce ao longo do '
-                'período avaliado — a climatologia usada para 1991 tem 10 anos de base (1981-'
-                '1990), a usada para 2010 tem 29 anos (1981-2009). PROPOSTA INICIAL da tarefa '
+                'Climatologia EXPANSÍVEL, corrigida: para CADA INICIALIZAÇÃO (init_date) '
+                'avaliada — não para cada ano-alvo — a climatologia usa todas as observações '
+                'CHIRPS disponíveis com data estritamente anterior a init_date (disponibilidade '
+                'real do CHIRPS desde 1981, já confirmada — data/chirps_1981_2025.csv cobre '
+                '1981-2025). Cresce ao longo do período avaliado, mas o corte acompanha o '
+                'CALENDÁRIO REAL de cada inicialização, não um ano-alvo agregado — duas '
+                'inicializações no mesmo ano-alvo mas em meses diferentes podem (e devem) usar '
+                'climatologias de tamanho ligeiramente diferente. PROPOSTA INICIAL da tarefa '
                 '(item 7), não a única.'
             ),
             'alternativa_b_leave_one_year_out': (
                 'Climatologia LEAVE-ONE-YEAR-OUT retrospectiva: para o ano-alvo Y, a '
                 'climatologia usa TODOS os anos do período de referência EXCETO Y (base fixa '
                 'maior e simétrica em volta de Y, não só os anos anteriores). Metodologicamente '
-                'DIFERENTE da expansível — não é uma variação menor dela.'
+                'DIFERENTE da expansível — não é uma variação menor dela. Por construção NÃO '
+                'evita o mesmo tipo de look-ahead residual descrito acima dentro do próprio ano '
+                'Y-1/Y+1 adjacente a Y — a mesma correção de corte por init_date, quando '
+                'aplicável, deve ser considerada também aqui.'
             ),
             'regra_de_nao_mistura': (
                 'As duas metodologias (a) e (b) NÃO DEVEM ser misturadas nos resultados de uma '
@@ -301,6 +428,25 @@ def montar_especificacao_protocolo_cfsv2():
                 'SEPARADAMENTE, cada um com sua própria climatologia consistente ponta a ponta, '
                 'nunca um indicador único que combine anos avaliados sob climatologias '
                 'diferentes.'
+            ),
+            'distincao_de_simulacao_operacional_real': (
+                'Esta é uma SIMULAÇÃO RETROSPECTIVA do que uma climatologia "sem look-ahead" '
+                'teria sido, usando dados de HOJE — NÃO é uma reprodução estrita das condições '
+                'operacionais históricas: o CHIRPS v3.0 não existia nos anos 1990 (lançado em '
+                '2025-01-01, ver ressalva_retrospectiva_chirps_v3), então nenhuma climatologia '
+                'baseada nele jamais esteve de fato disponível para um previsor operando naquela '
+                'época, por mais rigoroso que seja o corte temporal aplicado aqui. O corte por '
+                'init_date evita UM tipo de contaminação (look-ahead dentro desta simulação), '
+                'não reconstrói a informação real disponível operacionalmente.'
+            ),
+            'h1_permanece_separado': (
+                'A separação de H1 dos horizontes genuinamente futuros (ver semantica_de_h1) '
+                'vale INDEPENDENTEMENTE do corte de climatologia escolhido: por construção, o '
+                'mês-alvo de H1 é o mesmo mês de init_date, então nenhuma climatologia com corte '
+                'em "antes de init_date" jamais incluiria a própria observação de H1 — mas H1 '
+                'ainda deve ser reportado e avaliado separadamente dos demais horizontes (ver '
+                'separacao_de_resultados), nunca agregado a eles como se fosse igualmente '
+                '"futuro".'
             ),
         },
         'avaliacao_deterministica_e_probabilistica': {
@@ -363,6 +509,60 @@ def montar_especificacao_protocolo_cfsv2():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Item 2 da revisão — recalcula a classificação de proximidade de
+# borda a partir dos limites JÁ PERSISTIDOS (sem reabrir raster, sem
+# rede) — usa a mesma lógica corrigida de _chirps_v3.py
+# ══════════════════════════════════════════════════════════════════════════
+
+_CAMPOS_PIXEL_NECESSARIOS = ('pixel__pixel_bounds_lon_min', 'pixel__pixel_bounds_lon_max',
+                             'pixel__pixel_bounds_lat_min', 'pixel__pixel_bounds_lat_max',
+                             'pixel__ponto_consultado_lon', 'pixel__ponto_consultado_lat')
+
+
+def recalcular_classificacao_pixel_persistida(resultados_df):
+    """Item 2 — 'confrontar os resultados com os limites espaciais
+    persistidos em data/chirps_v3_piloto.csv'. Recalcula a
+    classificação de proximidade de borda de CADA mês a partir dos
+    limites do pixel JÁ GRAVADOS na extração original (pixel__pixel_
+    bounds_*, pixel__ponto_consultado_*) — nenhum raster é reaberto,
+    nenhuma rede é usada, os 17 registros originais do piloto NÃO são
+    alterados (esta função só LÊ o DataFrame, nunca escreve nele).
+
+    Reaproveita _chirps_v3._classificar_proximidade (a mesma função
+    que localizar_pixel() usa, já corrigida) — o resultado aqui é
+    idêntico ao que uma nova extração produziria para o mesmo ponto/
+    mesma grade, sem precisar reextrair."""
+    linhas = []
+    if resultados_df.empty:
+        return linhas
+    colunas_presentes = set(resultados_df.columns)
+    if not set(_CAMPOS_PIXEL_NECESSARIOS).issubset(colunas_presentes):
+        return linhas
+    for _, row in resultados_df.iterrows():
+        if any(pd.isna(row.get(c)) for c in _CAMPOS_PIXEL_NECESSARIOS):
+            continue
+        lon_min = row['pixel__pixel_bounds_lon_min']
+        lon_max = row['pixel__pixel_bounds_lon_max']
+        lat_min = row['pixel__pixel_bounds_lat_min']
+        lat_max = row['pixel__pixel_bounds_lat_max']
+        ponto_lon = row['pixel__ponto_consultado_lon']
+        ponto_lat = row['pixel__ponto_consultado_lat']
+        res_lon, res_lat = lon_max - lon_min, lat_max - lat_min
+        if res_lon <= 0 or res_lat <= 0:
+            continue
+        frac_lon = (ponto_lon - lon_min) / res_lon
+        frac_lat = (lat_max - ponto_lat) / res_lat
+        linhas.append({
+            'ano': int(row['ano']), 'mes': int(row['mes']),
+            'classificacao_proximidade_lon': v3._classificar_proximidade(frac_lon),
+            'classificacao_proximidade_lat': v3._classificar_proximidade(frac_lat),
+            'distancia_borda_mais_proxima_lon_graus': min(frac_lon, 1 - frac_lon) * res_lon,
+            'distancia_borda_mais_proxima_lat_graus': min(frac_lat, 1 - frac_lat) * res_lat,
+        })
+    return linhas
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Consolidação + relatórios
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -392,6 +592,8 @@ def montar_metadata_piloto(resultados_df):
         'n_meses_do_piloto': len(MESES_PILOTO),
         'qualidade': qualidade,
         'comparacao_com_dados_existentes': comparacao,
+        'classificacao_pixel_recalculada_dos_limites_persistidos':
+            recalcular_classificacao_pixel_persistida(resultados_df),
         'nenhuma_skill_calculada': True,
         'nenhum_indicador_de_habilidade_preditiva_calculado': True,
         'nenhuma_serie_historica_completa_baixada': True,
@@ -455,18 +657,47 @@ def gerar_relatorio_piloto_markdown(resultados_df, metadata):
         "- O pixel é localizado DIRETAMENTE pela transformação espacial do raster "
         "(`rasterio.DatasetReader.index`), nunca reutilizando a caixa pequena da extração "
         "ClimateSERV atual (`scripts/_chirps.py::_geometria_ponto`).",
-        "- **Achado empírico confirmado nesta tarefa**: como lat/lon são múltiplos EXATOS da "
-        "resolução do CHIRPS (0,05° — já registrado em `scripts/nmme_auditoria_chirps_"
-        "sinobras.py` na rodada anterior, como risco teórico), o ponto cai exatamente sobre "
-        "uma QUINA compartilhada por até 4 pixels da grade real do CHIRPS v3.0 — não é mais "
-        "uma possibilidade teórica, é um fato verificado ao vivo. O pixel efetivamente "
-        "selecionado usa a convenção padrão do GDAL/rasterio (`numpy.floor` na fração de "
-        "pixel) — ver `data/chirps_v3_piloto_metadata.json`, campo `pixel` de cada mês, para "
-        "as coordenadas centrais e a extensão espacial exatas do pixel selecionado.",
+        "- **Achado empírico CORRIGIDO nesta revisão** (auditoria independente encontrou o "
+        "erro): lat/lon são múltiplos EXATOS da resolução NOMINAL do CHIRPS (0,05°), mas os "
+        "coeficientes REAIS da transformação do raster não são exatamente 0,05 "
+        "(0,05000000074505806 — resíduo de precisão float32→float64, ver "
+        "`scripts/_chirps_v3.py::RESOLUCAO_GRAUS_REAL_CONFIRMADA`). Usando os coeficientes "
+        "reais (correção aplicada em `localizar_pixel()`), o ponto fica classificado como "
+        "**`proximo_de_borda`** nos dois eixos — a cerca de 1-2 milionésimos de grau "
+        "(~0,1-0,2m) de duas bordas do pixel selecionado — e não `sobre_borda_exata`. A "
+        "versão anterior deste relatório usava a resolução NOMINAL (não os coeficientes "
+        "reais) para essa checagem, o que produzia um falso positivo de \"exatamente sobre "
+        "uma quina compartilhada por 4 pixels\". O pixel efetivamente selecionado usa a "
+        "convenção padrão do GDAL/rasterio (`numpy.floor` na fração de pixel, calculada com "
+        "os coeficientes reais do transform) — ver `data/chirps_v3_piloto.csv`, colunas "
+        "`pixel__*`, para as coordenadas centrais e a extensão espacial exata do pixel "
+        "selecionado, e a tabela abaixo (recalculada desses mesmos limites) para a "
+        "classificação de proximidade de borda. Um teste de sensibilidade comparando o pixel "
+        "selecionado com seus 8 vizinhos está disponível em `scripts/_chirps_v3.py::"
+        "comparar_pixel_com_vizinhos()` — informativo, nunca troca automaticamente a "
+        "referência do projeto.",
         "- Esta referência (`CHIRPS_v3_ponto_centroide`) é um PONTO ÚNICO — não é apresentada "
         "como equivalente à média zonal das 34 fazendas (SINOBRAS.csv/data/serie_subst.csv "
         "pós-1996) nem à média zonal do envelope único (`scripts/_chirps.py::"
         "buscar_prec_chirps_zonal`).",
+        "",
+        "### Classificação de proximidade de borda, recalculada dos limites persistidos",
+        "",
+        "Recalculada diretamente de `data/chirps_v3_piloto.csv` (pixel_bounds_*/ponto_"
+        "consultado_*, já gravados na extração original) — nenhum raster reaberto, nenhuma "
+        "rede usada, os 17 registros originais preservados.",
+        "",
+        "| Ano-mês | Classe (lon) | Classe (lat) | Dist. borda mais próxima (lon, °) | Dist. "
+        "borda mais próxima (lat, °) |",
+        "|---|---|---|---|---|",
+    ]
+    for c in metadata['classificacao_pixel_recalculada_dos_limites_persistidos']:
+        linhas.append(
+            f"| {c['ano']}-{c['mes']:02d} | {c['classificacao_proximidade_lon']} | "
+            f"{c['classificacao_proximidade_lat']} | "
+            f"{c['distancia_borda_mais_proxima_lon_graus']:.2e} | "
+            f"{c['distancia_borda_mais_proxima_lat_graus']:.2e} |")
+    linhas += [
         "",
         "## 3. Extração-piloto",
         "",
@@ -484,6 +715,17 @@ def gerar_relatorio_piloto_markdown(resultados_df, metadata):
         "",
         f"- Veredito: **{'APROVADO' if qual['aprovado'] else 'REPROVADO'}**.",
         f"- {qual['interpretacao']}",
+        "",
+        "### Quatro dimensões distintas (nunca um único booleano)",
+        "",
+        f"1. Disponibilidade no servidor: {qual['n_meses_disponiveis_no_servidor']}/"
+        f"{qual['n_meses_esperados']}.",
+        f"2. Sucesso da extração (raster aberto, grade validada, pixel lido/classificado): "
+        f"{qual['n_meses_com_extracao_bem_sucedida']}/{qual['n_meses_esperados']}.",
+        f"3. Valor de precipitação VÁLIDO disponível (ok/zero_real — NoData e ausência NÃO "
+        f"contam): {qual['n_meses_com_valor_valido']}/{qual['n_meses_esperados']}.",
+        f"4. Cobertura temporal completa do período (TODOS os meses com valor válido): "
+        f"{'SIM' if qual['cobertura_temporal_completa'] else 'NÃO'}.",
     ]
     if qual['meses_faltando_sem_nenhuma_tentativa']:
         linhas.append(f"- Meses sem nenhuma tentativa registrada: "
@@ -509,17 +751,25 @@ def gerar_relatorio_piloto_markdown(resultados_df, metadata):
         "",
         f"- {comp['interpretacao']}",
         "",
-        "| Ano-mês | CHIRPS v3 (novo) | CHIRPS v2 ponto (existente) | Série produção "
-        "(consolidada) |",
+        f"- Meses com CHIRPS v3 superior ao existente: "
+        f"{comp.get('n_meses_v3_superior_ao_existente', '—')}. Inferior: "
+        f"{comp.get('n_meses_v3_inferior_ao_existente', '—')}. Iguais: "
+        f"{comp.get('n_meses_v3_igual_ao_existente', '—')}.",
+        f"- Diferença média ASSINADA (v3 menos existente): "
+        f"{comp.get('diff_media_assinada_vs_chirps_existente_mm', '—')} mm. Diferença absoluta "
+        f"média: {comp.get('diff_abs_media_vs_chirps_existente_mm', '—')} mm.",
+        "",
+        "| Ano-mês | CHIRPS v3 (novo) | CHIRPS existente (versão não confirmada) | Série "
+        "produção (consolidada) |",
         "|---|---|---|---|",
     ]
     for c in comp.get('comparacoes', []):
         linhas.append(
             f"| {c['ano']}-{c['mes']:02d} | {c.get('prec_v3_ponto_novo', '—')} | "
-            f"{c.get('prec_v2_ponto_existente', '—')} (diff "
-            f"{c.get('diff_abs_v3_menos_v2_mm', '—')}) | "
+            f"{c.get('prec_chirps_existente_versao_nao_confirmada', '—')} (diff "
+            f"{c.get('diff_v3_menos_existente_mm', '—')}) | "
             f"{c.get('prec_serie_producao', '—')} (diff "
-            f"{c.get('diff_abs_v3_menos_producao_mm', '—')}) |")
+            f"{c.get('diff_v3_menos_producao_mm', '—')}) |")
     linhas += [
         "",
         "## Restrições respeitadas nesta tarefa",
@@ -562,11 +812,17 @@ def gerar_relatorio_protocolo_markdown(especificacao):
         "## 4. Climatologia de referência",
         "",
         f"- Restrição: {e['climatologia_de_referencia']['restricao']}",
+        f"- Correção do corte temporal (item 5): "
+        f"{e['climatologia_de_referencia']['correcao_do_corte_temporal']}",
         f"- Alternativa (a) — janela expansível: "
         f"{e['climatologia_de_referencia']['alternativa_a_janela_expansivel']}",
         f"- Alternativa (b) — leave-one-year-out: "
         f"{e['climatologia_de_referencia']['alternativa_b_leave_one_year_out']}",
         f"- Regra: {e['climatologia_de_referencia']['regra_de_nao_mistura']}",
+        f"- Distinção de simulação vs. operação real: "
+        f"{e['climatologia_de_referencia']['distincao_de_simulacao_operacional_real']}",
+        f"- H1 permanece separado: "
+        f"{e['climatologia_de_referencia']['h1_permanece_separado']}",
         "",
         "## 5. Avaliação determinística e probabilística",
         "",

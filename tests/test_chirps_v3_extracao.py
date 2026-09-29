@@ -197,28 +197,86 @@ class VerificarGradeTestCase(unittest.TestCase):
         self.assertFalse(resultado['grade_ok'])
         self.assertTrue(any('CRS' in p for p in resultado['problemas']))
 
+    def test_f_origem_deslocada_reprova(self):
+        """Item 2 da revisão — 'garantir que alterações inesperadas na
+        origem ou no alinhamento da grade entre arquivos sejam
+        detectadas'. Uma origem deslocada (ex.: meio pixel, um erro de
+        georreferenciamento comum) precisa ser pega, mesmo com
+        resolução/dimensões/CRS/dtype corretos."""
+        transform = Affine(v3.RESOLUCAO_GRAUS, 0, -180.0 + v3.RESOLUCAO_GRAUS / 2,
+                            0, -v3.RESOLUCAO_GRAUS, 60.0 + v3.RESOLUCAO_GRAUS / 2)
+        profile = dict(driver='GTiff', height=v3.HEIGHT_ESPERADO, width=v3.WIDTH_ESPERADO,
+                        count=1, dtype='float32', crs='EPSG:4326', transform=transform)
+        with MemoryFile() as mem:
+            with mem.open(**profile):
+                pass
+            with mem.open() as ds:
+                resultado = v3.verificar_grade(ds)
+        self.assertFalse(resultado['grade_ok'])
+        self.assertTrue(any('origem' in p for p in resultado['problemas']))
+
+    def test_g_resolucao_com_deriva_pequena_mas_alem_do_confirmado_reprova(self):
+        """Uma resolução perto da nominal (passaria no teste antigo,
+        tolerância 1e-6) mas longe do valor REAL confirmado ao vivo
+        (tolerância apertada, 1e-9) deve ser reportada como possível
+        deriva de grade entre arquivos — achado novo desta revisão."""
+        res_com_deriva = 0.0500001   # bem mais que 1e-9 de distância do valor real confirmado
+        transform = Affine(res_com_deriva, 0, -180.0, 0, -res_com_deriva, 60.0)
+        profile = dict(driver='GTiff', height=v3.HEIGHT_ESPERADO, width=v3.WIDTH_ESPERADO,
+                        count=1, dtype='float32', crs='EPSG:4326', transform=transform)
+        with MemoryFile() as mem:
+            with mem.open(**profile):
+                pass
+            with mem.open() as ds:
+                resultado = v3.verificar_grade(ds)
+        self.assertFalse(resultado['grade_ok'])
+        self.assertTrue(any('REAL confirmado' in p for p in resultado['problemas']))
+
+    def test_h_grade_com_a_resolucao_real_confirmada_aprova(self):
+        """A grade REAL do CHIRPS v3.0 (resolução
+        RESOLUCAO_GRAUS_REAL_CONFIRMADA, não a nominal limpa) deve
+        aprovar — é exatamente o dado real, não uma anomalia."""
+        transform = Affine(v3.RESOLUCAO_GRAUS_REAL_CONFIRMADA, 0, -180.0,
+                            0, -v3.RESOLUCAO_GRAUS_REAL_CONFIRMADA, 60.0)
+        profile = dict(driver='GTiff', height=v3.HEIGHT_ESPERADO, width=v3.WIDTH_ESPERADO,
+                        count=1, dtype='float32', crs='EPSG:4326', transform=transform)
+        with MemoryFile() as mem:
+            with mem.open(**profile):
+                pass
+            with mem.open() as ds:
+                resultado = v3.verificar_grade(ds)
+        self.assertTrue(resultado['grade_ok'])
+
 
 class LocalizarPixelTestCase(unittest.TestCase):
-    """Seção 3 — localização direta pela transformação espacial, nunca
-    a caixa pequena do ClimateSERV."""
+    """Seção 3 — localização direta pela transformação espacial EFETIVA
+    do raster aberto, nunca a caixa pequena do ClimateSERV nem a
+    constante nominal RESOLUCAO_GRAUS para aritmética de fração de
+    pixel (correção da auditoria independente)."""
 
-    def test_a_ponto_no_interior_de_um_pixel_nao_fica_sobre_borda(self):
+    def test_a_ponto_no_interior_de_um_pixel_fica_interior(self):
         with _dataset_sintetico(origem_lon=-48.5, origem_lat=-7.0) as ds:
             # -48.475 está a meio caminho do pixel [-48.50,-48.45) — bem
-            # longe de qualquer borda (tolerância é 1e-6 da fração)
+            # longe de qualquer borda
             pixel = v3.localizar_pixel(ds, lat=-7.025, lon=-48.475)
-        self.assertFalse(pixel['ponto_sobre_borda_ou_quina_de_pixel'])
-        self.assertFalse(pixel['ponto_sobre_quina_compartilhada_por_4_pixels'])
+        self.assertEqual(pixel['classificacao_proximidade_lon'], 'interior_do_pixel')
+        self.assertEqual(pixel['classificacao_proximidade_lat'], 'interior_do_pixel')
+        self.assertFalse(pixel['ponto_sobre_ou_proximo_de_borda'])
+        self.assertFalse(pixel['ponto_proximo_de_quina_compartilhada_por_4_pixels'])
 
-    def test_b_ponto_exatamente_sobre_multiplo_da_resolucao_fica_na_quina(self):
-        """Reprodução sintética do achado empírico real (ver
-        docs/nmme-fase2c3a-piloto-chirps-v3.md): um ponto cujas duas
-        coordenadas são múltiplos exatos da resolução cai numa quina
-        compartilhada por até 4 pixels."""
-        with _dataset_sintetico(origem_lon=-48.5, origem_lat=-7.0) as ds:
+    def test_b_ponto_exatamente_sobre_multiplo_da_resolucao_fica_sobre_borda_exata(self):
+        """Numa grade SINTÉTICA construída com resolução limpa (0.05
+        exato em Python/float64, sem o resíduo de precisão float32 da
+        grade real do CHIRPS), um ponto cujas duas coordenadas são
+        múltiplos exatos da resolução cai EXATAMENTE sobre a quina —
+        cenário controlado, distinto do achado real com a grade
+        verdadeira (ver test_f abaixo)."""
+        with _dataset_sintetico(origem_lon=-48.5, origem_lat=-7.0, res=0.05) as ds:
             pixel = v3.localizar_pixel(ds, lat=-7.10, lon=-48.35)
-        self.assertTrue(pixel['ponto_sobre_borda_ou_quina_de_pixel'])
-        self.assertTrue(pixel['ponto_sobre_quina_compartilhada_por_4_pixels'])
+        self.assertEqual(pixel['classificacao_proximidade_lon'], 'sobre_borda_exata')
+        self.assertEqual(pixel['classificacao_proximidade_lat'], 'sobre_borda_exata')
+        self.assertTrue(pixel['ponto_sobre_ou_proximo_de_borda'])
+        self.assertTrue(pixel['ponto_proximo_de_quina_compartilhada_por_4_pixels'])
 
     def test_c_documenta_convencao_de_indexacao(self):
         with _dataset_sintetico() as ds:
@@ -245,6 +303,72 @@ class LocalizarPixelTestCase(unittest.TestCase):
         src = inspect.getsource(v3.localizar_pixel)
         self.assertNotIn('_geometria_ponto(', src)
         self.assertNotIn('import _chirps', src)
+
+    def test_f_regressao_grade_real_ponto_fica_proximo_nao_exatamente_sobre_borda(self):
+        """REGRESSÃO do bug real encontrado pela auditoria independente
+        (item 2): usando a resolução REAL confirmada da grade do
+        CHIRPS v3.0 (não a nominal 0.05) e a mesma origem da grade
+        real (-180,60), FAZENDAS_LAT/FAZENDAS_LON ficam classificados
+        como 'proximo_de_borda' nos dois eixos — NÃO 'sobre_borda_exata'
+        — reproduzindo exatamente o que data/chirps_v3_piloto.csv
+        registra (pixel_bounds_* mostram o ponto a ~1-2 milionésimos
+        de grau de duas bordas, não em cima delas). A versão anterior
+        de localizar_pixel() usava a constante nominal RESOLUCAO_GRAUS
+        como divisor e classificava isso, erradamente, como
+        'sobre_borda_exata'/quina."""
+        with _dataset_sintetico(width=7200, height=2400, origem_lon=-180.0, origem_lat=60.0,
+                                 res=v3.RESOLUCAO_GRAUS_REAL_CONFIRMADA) as ds:
+            pixel = v3.localizar_pixel(ds, lat=v3.FAZENDAS_LAT, lon=v3.FAZENDAS_LON)
+        self.assertEqual(pixel['classificacao_proximidade_lon'], 'proximo_de_borda')
+        self.assertEqual(pixel['classificacao_proximidade_lat'], 'proximo_de_borda')
+        self.assertNotEqual(pixel['classificacao_proximidade_lon'], 'sobre_borda_exata')
+        self.assertNotEqual(pixel['classificacao_proximidade_lat'], 'sobre_borda_exata')
+
+    def test_g_usa_coeficientes_reais_do_transform_nao_a_constante_nominal(self):
+        """A função lê dataset.transform.a/e (os coeficientes REAIS do
+        arquivo aberto) — nunca a constante de módulo RESOLUCAO_GRAUS —
+        para a aritmética de fração de pixel."""
+        import inspect
+        src = inspect.getsource(v3.localizar_pixel)
+        self.assertIn('dataset.transform.a', src)
+        self.assertIn('dataset.transform.e', src)
+        # RESOLUCAO_GRAUS (nominal) não deve aparecer como divisor da
+        # fração — só dataset.transform.a/e (via res_lon_real/res_lat_real)
+        self.assertNotIn('/ RESOLUCAO_GRAUS', src)
+
+
+class CompararPixelComVizinhosTestCase(unittest.TestCase):
+    """Seção 2 da revisão — teste de sensibilidade: compara o pixel
+    selecionado com seus vizinhos, sem nunca trocar automaticamente a
+    referência oficial do projeto."""
+
+    def test_a_retorna_pixel_referencia_e_vizinhos(self):
+        dados = np.full((20, 20), 5.0, dtype='float32')
+        dados[10, 10] = 42.0   # pixel "central" — resultado depende de onde o índice cai
+        with _dataset_sintetico(origem_lon=-48.5, origem_lat=-7.0, dados=dados) as ds:
+            resultado = v3.comparar_pixel_com_vizinhos(ds, lat=-7.525, lon=-47.995)
+        self.assertIn('pixel_referencia', resultado)
+        self.assertIn('vizinhos', resultado)
+        self.assertEqual(len(resultado['vizinhos']), 9)   # 3x3, incluindo o centro
+
+    def test_b_nunca_altera_a_referencia_automaticamente(self):
+        """Função é só leitura/relato — não escreve em nenhum arquivo
+        nem retorna uma instrução para substituir a referência."""
+        import inspect
+        src = inspect.getsource(v3.comparar_pixel_com_vizinhos)
+        self.assertNotIn('.write(', src)
+        self.assertIn('NUNCA', src.upper())
+
+    def test_c_vizinho_fora_do_raster_e_sinalizado(self):
+        dados = np.full((3, 3), 1.0, dtype='float32')
+        with _dataset_sintetico(width=3, height=3, origem_lon=-48.5, origem_lat=-7.0,
+                                 dados=dados) as ds:
+            # canto (row=0,col=0) do raster — vizinhos N/O/NO ficam fora
+            resultado = v3.comparar_pixel_com_vizinhos(ds, lat=-7.025, lon=-48.475)
+        self.assertEqual(resultado['pixel_referencia']['row'], 0)
+        self.assertEqual(resultado['pixel_referencia']['col'], 0)
+        fora = [v for v in resultado['vizinhos'].values() if not v['dentro_do_raster']]
+        self.assertGreater(len(fora), 0)
 
 
 class VerificarDisponibilidadeHttpTestCase(unittest.TestCase):

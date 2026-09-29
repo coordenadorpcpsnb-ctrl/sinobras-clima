@@ -70,13 +70,39 @@ URL_TEMPLATE = {
     'tif': FONTE_DIRETORIO_BASE + 'tifs/chirps-v3.0.{ano}.{mes:02d}.tif',
 }
 
-RESOLUCAO_GRAUS = 0.05
+RESOLUCAO_GRAUS = 0.05   # NOMINAL — o valor documentado pelo README (spec)
+# Ajuste (auditoria independente) — os COEFICIENTES REAIS da transformação
+# do raster (dataset.transform.a / -dataset.transform.e) NÃO são
+# exatamente 0.05: são 0.05000000074505806 (verificado ao vivo, é o
+# valor exato de numpy.float32(0.05) promovido a float64 — resíduo de
+# como o GeoTIFF grava a resolução em precisão simples). A diferença é
+# minúscula (~7,45e-10°/pixel) mas ACUMULA ao longo de 7200/2400
+# pixels — por isso dataset.bounds não bate exatamente com
+# BOUNDS_ESPERADO (ver tolerância abaixo). localizar_pixel() usa os
+# coeficientes REAIS do dataset (dataset.transform.a/e), nunca esta
+# constante nominal, para qualquer aritmética sensível a fração de
+# pixel — usar a nominal ali foi o bug que a auditoria independente
+# encontrou (frac_lon/frac_lat calculados com o divisor errado
+# produziam um falso positivo de "sobre a quina").
+RESOLUCAO_GRAUS_REAL_CONFIRMADA = 0.05000000074505806
 CRS_ESPERADO = 'EPSG:4326'
 WIDTH_ESPERADO = 7200
 HEIGHT_ESPERADO = 2400
 BOUNDS_ESPERADO = (-180.0, -60.0, 180.0, 60.0)   # left, bottom, right, top
 DTYPE_ESPERADO = 'float32'
 UNIDADE = 'mm/mês (campo mensal Final já consolidado — não soma de registros diários)'
+
+# Classificação de proximidade de borda (Seção 2 da revisão) — dois
+# limiares distintos, nunca um só booleano "sobre borda":
+#   - EXATA: dentro de erro de ponto flutuante puro (arredondamento de
+#     representação binária) — o ponto É a borda, matematicamente.
+#   - PRÓXIMA: dentro de 1% da largura do pixel (~0,0005°, ~55m no
+#     equador) — não é a borda exata, mas perto o bastante para que o
+#     pixel vizinho seja uma alternativa defensável (ex.: erro de
+#     georreferenciamento entre produtos, deriva de reprojeção).
+# Fora dessas duas faixas: ponto seguramente no interior do pixel.
+TOLERANCIA_BORDA_EXATA_FRACAO = 1e-6
+TOLERANCIA_PROXIMO_DE_BORDA_FRACAO = 0.01
 
 # Confirmado empiricamente (não documentado no README nem na tag GDAL
 # NODATA de nenhum dos dois formatos — ver docstring do módulo).
@@ -145,8 +171,24 @@ def verificar_disponibilidade_http(url, timeout=TIMEOUT_SEGUNDOS, tentativas=MAX
 def verificar_grade(dataset):
     """Confirma que a grade do raster aberto bate com a grade
     verificada ao vivo (CRS, resolução, dimensões, domínio espacial,
-    dtype) — reprova mudanças inesperadas (Seção 5 da tarefa). Nunca
-    presume que a grade é sempre a mesma entre arquivos/meses."""
+    dtype, ORIGEM da transformação) — reprova mudanças inesperadas
+    (Seção 5 da tarefa). Nunca presume que a grade é sempre a mesma
+    entre arquivos/meses — cada mês é verificado independentemente.
+
+    Ajuste (auditoria independente): a checagem de resolução usa dois
+    níveis — (1) contra a nominal (RESOLUCAO_GRAUS=0.05, tolerância
+    larga, 1e-6) para aceitar a variação de precisão float32→float64
+    já confirmada como normal deste produto; (2) contra o valor REAL
+    confirmado (RESOLUCAO_GRAUS_REAL_CONFIRMADA) com tolerância
+    APERTADA (1e-9) — uma mudança de resolução entre arquivos, mesmo
+    pequena, muda esse segundo teste e é reportada como 'problema',
+    mesmo passando no primeiro. A ORIGEM da transformação
+    (transform.c/f) é checada exatamente (tolerância 1e-9) — os dois
+    valores confirmados ao vivo são exatos (-180.0, 60.0); qualquer
+    deriva ali indicaria desalinhamento de grade entre arquivos, o
+    tipo de mudança que localizar_pixel() não consegue detectar
+    sozinho (ele usa os coeficientes do arquivo ABERTO, não tem como
+    saber se esse arquivo desalinhou em relação aos outros meses)."""
     problemas = []
 
     crs_str = str(dataset.crs) if dataset.crs else None
@@ -155,8 +197,22 @@ def verificar_grade(dataset):
 
     res_x, res_y = dataset.res
     if abs(res_x - RESOLUCAO_GRAUS) > 1e-6 or abs(res_y - RESOLUCAO_GRAUS) > 1e-6:
-        problemas.append(f"resolução inesperada: {dataset.res} (esperado "
+        problemas.append(f"resolução inesperada (vs. nominal): {dataset.res} (esperado "
                           f"{RESOLUCAO_GRAUS} nos dois eixos)")
+    if (abs(res_x - RESOLUCAO_GRAUS_REAL_CONFIRMADA) > 1e-9
+            or abs(res_y - RESOLUCAO_GRAUS_REAL_CONFIRMADA) > 1e-9):
+        problemas.append(
+            f"resolução divergente do valor REAL confirmado ao vivo: {dataset.res} "
+            f"(esperado {RESOLUCAO_GRAUS_REAL_CONFIRMADA} nos dois eixos, tolerância 1e-9) — "
+            "possível deriva de grade entre arquivos/meses")
+
+    origem_esperada = (BOUNDS_ESPERADO[0], BOUNDS_ESPERADO[3])   # (left, top) = (c, f)
+    if (abs(dataset.transform.c - origem_esperada[0]) > 1e-9
+            or abs(dataset.transform.f - origem_esperada[1]) > 1e-9):
+        problemas.append(
+            f"origem da transformação inesperada: (c={dataset.transform.c}, "
+            f"f={dataset.transform.f}) (esperado {origem_esperada}, tolerância 1e-9) — "
+            "possível desalinhamento de grade entre arquivos")
 
     if dataset.width != WIDTH_ESPERADO or dataset.height != HEIGHT_ESPERADO:
         problemas.append(f"dimensões inesperadas: {dataset.width}x{dataset.height} "
@@ -180,32 +236,62 @@ def verificar_grade(dataset):
 # Localização do pixel — direto pela transformação espacial (Seção 3)
 # ══════════════════════════════════════════════════════════════════════════
 
+def _classificar_proximidade(frac):
+    """frac é a posição fracionária do ponto dentro da célula de
+    grade (0 e 1 = bordas). Três classes, nunca um só booleano — ver
+    TOLERANCIA_BORDA_EXATA_FRACAO/TOLERANCIA_PROXIMO_DE_BORDA_FRACAO."""
+    dist_borda_mais_proxima = min(frac, 1 - frac)
+    if dist_borda_mais_proxima < TOLERANCIA_BORDA_EXATA_FRACAO:
+        return 'sobre_borda_exata'
+    if dist_borda_mais_proxima < TOLERANCIA_PROXIMO_DE_BORDA_FRACAO:
+        return 'proximo_de_borda'
+    return 'interior_do_pixel'
+
+
 def localizar_pixel(dataset, lat=FAZENDAS_LAT, lon=FAZENDAS_LON):
     """Localiza o pixel correspondente a (lat,lon) DIRETAMENTE pela
-    transformação espacial do raster (`dataset.index`), nunca a caixa
-    pequena da extração ClimateSERV atual (scripts/_chirps.py::
-    _geometria_ponto — essa função nem é importada aqui).
+    transformação espacial EFETIVA do raster ABERTO (`dataset.index`,
+    `dataset.transform`) — nunca a caixa pequena da extração
+    ClimateSERV atual (scripts/_chirps.py::_geometria_ponto — essa
+    função nem é importada aqui), e nunca a constante nominal
+    RESOLUCAO_GRAUS/uma origem presumida — sempre os coeficientes REAIS
+    do dataset (`dataset.transform.a/e/c/f`), para não presumir
+    alinhamento matematicamente exato da grade.
 
-    Documenta explicitamente a convenção de indexação usada
-    (numpy.floor, padrão do rasterio) e sinaliza quando o ponto cai
-    exatamente (dentro de tolerância de ponto flutuante) sobre uma
-    borda ou quina de pixel — caso em que a escolha entre pixels
-    vizinhos depende dessa convenção de arredondamento, não é uma
-    propriedade física do dado. Achado empírico confirmado nesta
-    tarefa: com FAZENDAS_LAT=-7.80/FAZENDAS_LON=-47.95 (múltiplos
-    exatos de 0,05°, já registrado em scripts/nmme_auditoria_chirps_
-    sinobras.py na rodada anterior), o ponto cai exatamente numa quina
-    compartilhada por até 4 pixels da grade real do CHIRPS v3.0."""
+    Regra determinística de seleção: usa a convenção padrão do
+    rasterio (`numpy.floor` na fração de pixel, o default de
+    `Dataset.index`) — o pixel cujo canto superior-esquerdo é o maior
+    múltiplo da resolução real que ainda é <= ao ponto (em x) / >= ao
+    ponto (em y). Documentada explicitamente aqui, não deixada
+    implícita.
+
+    Classifica a proximidade a uma borda em três níveis (nunca um só
+    booleano — ver _classificar_proximidade), calculados com os
+    coeficientes REAIS do transform, não a constante nominal —
+    CORREÇÃO (auditoria independente): a versão anterior usava
+    RESOLUCAO_GRAUS (0.05 nominal) como divisor da fração, e não os
+    coeficientes reais (0.05000000074505806) — isso fazia o cálculo de
+    fração cair artificialmente perto de 0/1 por um erro de
+    arredondamento do PRÓPRIO CÓDIGO (não do dado), produzindo um
+    falso "sobre a quina, compartilhada por 4 pixels" quando os
+    limites persistidos (`pixel_bounds_*`) já mostravam o ponto
+    ligeiramente DENTRO do pixel selecionado, a ~1-2 milionésimos de
+    grau (~0,1-0,2m) de duas bordas — perto, mas não exatamente sobre
+    elas. Com os coeficientes reais, a classificação correta para
+    FAZENDAS_LAT/FAZENDAS_LON é 'proximo_de_borda' nos dois eixos, não
+    'sobre_borda_exata'."""
     row, col = dataset.index(lon, lat)   # op=numpy.floor, padrão do rasterio
     window = rasterio.windows.Window(col, row, 1, 1)
     left, bottom, right, top = rasterio.windows.bounds(window, dataset.transform)
 
     origem_lon, origem_lat = dataset.transform.c, dataset.transform.f
-    frac_lon = ((lon - origem_lon) / RESOLUCAO_GRAUS) % 1.0
-    frac_lat = ((origem_lat - lat) / RESOLUCAO_GRAUS) % 1.0
-    tolerancia_fracao = 1e-6
-    sobre_borda_lon = frac_lon < tolerancia_fracao or frac_lon > (1 - tolerancia_fracao)
-    sobre_borda_lat = frac_lat < tolerancia_fracao or frac_lat > (1 - tolerancia_fracao)
+    res_lon_real, res_lat_real = dataset.transform.a, abs(dataset.transform.e)
+    frac_lon = ((lon - origem_lon) / res_lon_real) % 1.0
+    frac_lat = ((origem_lat - lat) / res_lat_real) % 1.0
+    classe_lon = _classificar_proximidade(frac_lon)
+    classe_lat = _classificar_proximidade(frac_lat)
+    dist_graus_lon = min(frac_lon, 1 - frac_lon) * res_lon_real
+    dist_graus_lat = min(frac_lat, 1 - frac_lat) * res_lat_real
 
     return {
         'row': int(row), 'col': int(col),
@@ -213,10 +299,51 @@ def localizar_pixel(dataset, lat=FAZENDAS_LAT, lon=FAZENDAS_LON):
         'pixel_bounds_lat_min': bottom, 'pixel_bounds_lat_max': top,
         'pixel_centro_lon': (left + right) / 2, 'pixel_centro_lat': (bottom + top) / 2,
         'ponto_consultado_lon': lon, 'ponto_consultado_lat': lat,
-        'convencao_indexacao': 'numpy.floor (padrão de rasterio.DatasetReader.index)',
-        'ponto_sobre_borda_ou_quina_de_pixel': bool(sobre_borda_lon or sobre_borda_lat),
-        'ponto_sobre_quina_compartilhada_por_4_pixels': bool(sobre_borda_lon and sobre_borda_lat),
+        'resolucao_real_usada_lon_graus': res_lon_real,
+        'resolucao_real_usada_lat_graus': res_lat_real,
+        'convencao_indexacao': 'numpy.floor (padrão de rasterio.DatasetReader.index), sobre os '
+                                'coeficientes REAIS do transform do arquivo aberto',
+        'classificacao_proximidade_lon': classe_lon,
+        'classificacao_proximidade_lat': classe_lat,
+        'distancia_borda_mais_proxima_lon_graus': dist_graus_lon,
+        'distancia_borda_mais_proxima_lat_graus': dist_graus_lat,
+        # Mantidos para leitura rápida do veredito — SEMPRE derivados
+        # das classificações acima com coeficientes reais, nunca de
+        # constante nominal.
+        'ponto_sobre_ou_proximo_de_borda': bool(classe_lon != 'interior_do_pixel'
+                                                 or classe_lat != 'interior_do_pixel'),
+        'ponto_proximo_de_quina_compartilhada_por_4_pixels': bool(
+            classe_lon != 'interior_do_pixel' and classe_lat != 'interior_do_pixel'),
     }
+
+
+def comparar_pixel_com_vizinhos(dataset, lat=FAZENDAS_LAT, lon=FAZENDAS_LON):
+    """Teste de SENSIBILIDADE (Seção 2 da revisão) — lê o pixel
+    selecionado E seus 8 vizinhos (Moore neighborhood), para permitir
+    inspecionar o quanto o valor muda entre eles quando o ponto está
+    próximo de uma borda. NUNCA altera automaticamente qual pixel é a
+    referência oficial do projeto (CHIRPS_v3_ponto_centroide continua
+    sendo o pixel de localizar_pixel()) — é só informação para decisão
+    humana, retornada, não aplicada."""
+    pixel = localizar_pixel(dataset, lat=lat, lon=lon)
+    row, col = pixel['row'], pixel['col']
+    vizinhos = {}
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            r, c = row + dr, col + dc
+            rotulo = f"{'N' if dr < 0 else ('S' if dr > 0 else '')}" \
+                     f"{'O' if dc < 0 else ('L' if dc > 0 else '')}" or 'centro'
+            if not (0 <= r < dataset.height and 0 <= c < dataset.width):
+                vizinhos[rotulo] = {'dentro_do_raster': False}
+                continue
+            window = rasterio.windows.Window(c, r, 1, 1)
+            arr = dataset.read(1, window=window)
+            classificacao = classificar_valor(arr[0, 0]) if arr.size == 1 else \
+                {'status': 'leitura_falhou', 'valor_mm': None}
+            vizinhos[rotulo] = {'dentro_do_raster': True, 'row': r, 'col': c, **classificacao}
+    return {'pixel_referencia': pixel, 'vizinhos': vizinhos,
+            'nota': 'informativo — NUNCA substitui automaticamente o pixel de referência do '
+                    'projeto (CHIRPS_v3_ponto_centroide continua sendo localizar_pixel()).'}
 
 
 # ══════════════════════════════════════════════════════════════════════════

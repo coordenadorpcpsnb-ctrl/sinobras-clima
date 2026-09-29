@@ -21,8 +21,32 @@
 
 - Coordenadas consultadas: lat=-7.8, lon=-47.95 (centroide das fazendas, já estabelecido no projeto).
 - O pixel é localizado DIRETAMENTE pela transformação espacial do raster (`rasterio.DatasetReader.index`), nunca reutilizando a caixa pequena da extração ClimateSERV atual (`scripts/_chirps.py::_geometria_ponto`).
-- **Achado empírico confirmado nesta tarefa**: como lat/lon são múltiplos EXATOS da resolução do CHIRPS (0,05° — já registrado em `scripts/nmme_auditoria_chirps_sinobras.py` na rodada anterior, como risco teórico), o ponto cai exatamente sobre uma QUINA compartilhada por até 4 pixels da grade real do CHIRPS v3.0 — não é mais uma possibilidade teórica, é um fato verificado ao vivo. O pixel efetivamente selecionado usa a convenção padrão do GDAL/rasterio (`numpy.floor` na fração de pixel) — ver `data/chirps_v3_piloto_metadata.json`, campo `pixel` de cada mês, para as coordenadas centrais e a extensão espacial exatas do pixel selecionado.
+- **Achado empírico CORRIGIDO nesta revisão** (auditoria independente encontrou o erro): lat/lon são múltiplos EXATOS da resolução NOMINAL do CHIRPS (0,05°), mas os coeficientes REAIS da transformação do raster não são exatamente 0,05 (0,05000000074505806 — resíduo de precisão float32→float64, ver `scripts/_chirps_v3.py::RESOLUCAO_GRAUS_REAL_CONFIRMADA`). Usando os coeficientes reais (correção aplicada em `localizar_pixel()`), o ponto fica classificado como **`proximo_de_borda`** nos dois eixos — a cerca de 1-2 milionésimos de grau (~0,1-0,2m) de duas bordas do pixel selecionado — e não `sobre_borda_exata`. A versão anterior deste relatório usava a resolução NOMINAL (não os coeficientes reais) para essa checagem, o que produzia um falso positivo de "exatamente sobre uma quina compartilhada por 4 pixels". O pixel efetivamente selecionado usa a convenção padrão do GDAL/rasterio (`numpy.floor` na fração de pixel, calculada com os coeficientes reais do transform) — ver `data/chirps_v3_piloto.csv`, colunas `pixel__*`, para as coordenadas centrais e a extensão espacial exata do pixel selecionado, e a tabela abaixo (recalculada desses mesmos limites) para a classificação de proximidade de borda. Um teste de sensibilidade comparando o pixel selecionado com seus 8 vizinhos está disponível em `scripts/_chirps_v3.py::comparar_pixel_com_vizinhos()` — informativo, nunca troca automaticamente a referência do projeto.
 - Esta referência (`CHIRPS_v3_ponto_centroide`) é um PONTO ÚNICO — não é apresentada como equivalente à média zonal das 34 fazendas (SINOBRAS.csv/data/serie_subst.csv pós-1996) nem à média zonal do envelope único (`scripts/_chirps.py::buscar_prec_chirps_zonal`).
+
+### Classificação de proximidade de borda, recalculada dos limites persistidos
+
+Recalculada diretamente de `data/chirps_v3_piloto.csv` (pixel_bounds_*/ponto_consultado_*, já gravados na extração original) — nenhum raster reaberto, nenhuma rede usada, os 17 registros originais preservados.
+
+| Ano-mês | Classe (lon) | Classe (lat) | Dist. borda mais próxima (lon, °) | Dist. borda mais próxima (lat, °) |
+|---|---|---|---|---|
+| 1991-01 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1991-04 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1991-07 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1991-10 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1998-01 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1998-04 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1998-07 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 1998-10 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2005-01 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2005-04 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2005-07 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2005-10 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2010-01 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2010-04 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2010-07 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2010-10 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
+| 2011-05 | proximo_de_borda | proximo_de_borda | 1.97e-06 | 1.01e-06 |
 
 ## 3. Extração-piloto
 
@@ -34,7 +58,14 @@
 ## 4. Controle de qualidade
 
 - Veredito: **APROVADO**.
-- APROVADO: 17/17 meses extraídos com sucesso (ok/zero_real), 0 ausentes no servidor (resposta 404 válida, não conta como falha), 0 com falha real, 0 sem nenhuma tentativa registrada. Piloto reprovado bloqueia a Fase 2C.3B (reconstrução histórica) até a causa raiz ser corrigida — nunca prosseguir com dado incompleto/corrompido tratado como se fosse íntegro.
+- APROVADO — cobertura temporal completa: de 17 meses obrigatórios, 17 estavam disponíveis no servidor, 17 tiveram extração bem-sucedida (raster aberto, grade validada, pixel lido e classificado), mas só 17 têm um VALOR VÁLIDO utilizável (ok/zero_real) — 0 ausentes no servidor e 0 com NoData NÃO contam como valor válido, mesmo sendo respostas 'esperadas' do servidor/produto. Um período obrigatório e fixo (como este piloto, todos os meses já deveriam estar publicados) só é considerado com cobertura temporal completa quando TODOS os meses têm valor válido — mes_ausente/NoData/falha de extração em QUALQUER mês impede a aprovação plena, mesmo que sejam respostas 'legítimas' do servidor. Piloto reprovado bloqueia a Fase 2C.3B (reconstrução histórica) até a causa raiz ser corrigida — nunca prosseguir com dado incompleto/corrompido/ausente tratado como se fosse íntegro.
+
+### Quatro dimensões distintas (nunca um único booleano)
+
+1. Disponibilidade no servidor: 17/17.
+2. Sucesso da extração (raster aberto, grade validada, pixel lido/classificado): 17/17.
+3. Valor de precipitação VÁLIDO disponível (ok/zero_real — NoData e ausência NÃO contam): 17/17.
+4. Cobertura temporal completa do período (TODOS os meses com valor válido): SIM.
 
 ### Resultado por mês
 
@@ -60,9 +91,12 @@
 
 ## 5. Comparação com os dados existentes
 
-- 17 meses do piloto comparados às três referências: (1) CHIRPS v3.0 Final, novo, ponto único no centroide, versão e metodologia CONTROLADAS (este piloto); (2) CHIRPS histórico existente (data/chirps_1981_2025.csv), extraído pelo ClimateSERV, versão NÃO registrada (ver docs/nmme-fase2c3a-piloto-chirps-v3.md, Seção 1); (3) série consolidada de produção (data/serie_subst.csv), que combina procedência pré-1996 não comprovada com estimativas CHIRPS ZONAIS por fazenda pós-1996 (metodologia diferente por desenho — zonal vs. ponto — ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md). Diferenças esperadas e não-triviais entre as três: v3 tende a ser mais úmido que v2 (correção de sub-captação por vento, ver README oficial). Nenhum indicador de habilidade preditiva do CFSv2 foi calculado — só estatística descritiva de comparação entre referências (item 6 da tarefa).
+- 17 meses do piloto comparados a três referências: (1) CHIRPS v3.0 Final, novo, ponto único no centroide, versão e metodologia CONTROLADAS (este piloto); (2) CHIRPS histórico existente (data/chirps_1981_2025.csv), extraído pelo ClimateSERV — a versão do CHIRPS usada NUNCA foi registrada por aquele pipeline, então NÃO é identificada aqui como 'CHIRPS v2 confirmado'; (3) série consolidada de produção (data/serie_subst.csv), que combina procedência pré-1996 não comprovada com estimativas CHIRPS ZONAIS por fazenda pós-1996 (metodologia diferente por desenho — zonal vs. ponto). NESTA amostra de 17 meses: 8 meses com CHIRPS v3 superior ao existente, 9 inferior, 0 iguais — diferença média assinada de -2.66 mm (diferença absoluta média 11.02 mm). Isto NÃO confirma nem contradiz, isoladamente, a afirmação geral do README oficial de que "CHIRPS v3.0 is overall wetter compared to CHIRPS v2.0" — aquela é uma caracterização do produto AGREGADO/GLOBAL; esta amostra é REGIONAL (1 ponto, 17 meses, região historicamente com viés conhecido em jun-ago e out-dez, CLAUDE.md armadilha 7) e pequena demais para generalizar. As duas coisas são distintas e não devem ser confundidas: comportamento documentado do produto vs. comportamento observado nesta amostra específica. Nenhum indicador de habilidade preditiva do CFSv2 foi calculado — só estatística descritiva de comparação entre referências (item 6 da tarefa).
 
-| Ano-mês | CHIRPS v3 (novo) | CHIRPS v2 ponto (existente) | Série produção (consolidada) |
+- Meses com CHIRPS v3 superior ao existente: 8. Inferior: 9. Iguais: 0.
+- Diferença média ASSINADA (v3 menos existente): -2.66 mm. Diferença absoluta média: 11.02 mm.
+
+| Ano-mês | CHIRPS v3 (novo) | CHIRPS existente (versão não confirmada) | Série produção (consolidada) |
 |---|---|---|---|
 | 1991-01 | 342.94 | 321.8 (diff 21.14) | 308.35 (diff 34.59) |
 | 1991-04 | 214.63 | 214.2 (diff 0.43) | 208.3 (diff 6.33) |
