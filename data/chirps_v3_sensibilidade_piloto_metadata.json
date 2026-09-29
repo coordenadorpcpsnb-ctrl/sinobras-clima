@@ -1,0 +1,138 @@
+{
+  "fase": "2C.3B, item 2 — análise de sensibilidade espacial do piloto (2026)",
+  "data_geracao_utc": "2026-09-29T15:20:02.962832+00:00",
+  "meses_analisados": [
+    [
+      1991,
+      1
+    ],
+    [
+      1991,
+      4
+    ],
+    [
+      1991,
+      7
+    ],
+    [
+      1991,
+      10
+    ],
+    [
+      1998,
+      1
+    ],
+    [
+      1998,
+      4
+    ],
+    [
+      1998,
+      7
+    ],
+    [
+      1998,
+      10
+    ],
+    [
+      2005,
+      1
+    ],
+    [
+      2005,
+      4
+    ],
+    [
+      2005,
+      7
+    ],
+    [
+      2005,
+      10
+    ],
+    [
+      2010,
+      1
+    ],
+    [
+      2010,
+      4
+    ],
+    [
+      2010,
+      7
+    ],
+    [
+      2010,
+      10
+    ],
+    [
+      2011,
+      5
+    ]
+  ],
+  "n_meses_analisados": 17,
+  "estatisticas": {
+    "n_meses_comparaveis": 17,
+    "por_vizinho": {
+      "L": {
+        "n_meses": 17,
+        "diff_abs_media_mm": 1.001,
+        "diff_abs_maxima_mm": 20.192,
+        "diff_rel_media_pct": -2.8
+      },
+      "N": {
+        "n_meses": 17,
+        "diff_abs_media_mm": 1.623,
+        "diff_abs_maxima_mm": 14.868,
+        "diff_rel_media_pct": -0.87
+      },
+      "NL": {
+        "n_meses": 17,
+        "diff_abs_media_mm": 3.276,
+        "diff_abs_maxima_mm": 29.692,
+        "diff_rel_media_pct": -2.98
+      },
+      "NO": {
+        "n_meses": 17,
+        "diff_abs_media_mm": -1.557,
+        "diff_abs_maxima_mm": 39.83,
+        "diff_rel_media_pct": 2.53
+      },
+      "O": {
+        "n_meses": 17,
+        "diff_abs_media_mm": -3.782,
+        "diff_abs_maxima_mm": 49.283,
+        "diff_rel_media_pct": 1.02
+      },
+      "S": {
+        "n_meses": 17,
+        "diff_abs_media_mm": -0.847,
+        "diff_abs_maxima_mm": 14.208,
+        "diff_rel_media_pct": 5.54
+      },
+      "SL": {
+        "n_meses": 17,
+        "diff_abs_media_mm": 0.112,
+        "diff_abs_maxima_mm": 19.956,
+        "diff_rel_media_pct": -5.42
+      },
+      "SO": {
+        "n_meses": 17,
+        "diff_abs_media_mm": -3.47,
+        "diff_abs_maxima_mm": 61.932,
+        "diff_rel_media_pct": 23.1
+      }
+    },
+    "vizinhos_relevantes_para_borda_conhecida": [
+      "L",
+      "S",
+      "SL"
+    ],
+    "diff_abs_media_vizinhos_relevantes_mm": 5.032,
+    "diff_abs_media_demais_vizinhos_mm": 7.253,
+    "interpretacao": "17 meses comparáveis (dos 17 do piloto). Diferença absoluta média entre o pixel de referência e os vizinhos L/S/SL (os candidatos mais próximos de uma seleção alternativa, dada a proximidade de borda confirmada nesses dois eixos): 5.032 mm. Diferença absoluta média para os outros 5 vizinhos (sem relação especial com a borda observada): 7.253 mm. A proximidade à borda NÃO parece ter influência prática relevante nos valores — a diferença para os vizinhos mais próximos da borda observada não é sistematicamente maior que para os demais. Esta é uma leitura DESCRITIVA da amostra de 17 meses — nenhuma alternativa de pixel foi adotada, nenhuma referência foi substituída."
+  },
+  "pixel_de_referencia_alterado": false,
+  "nenhuma_skill_calculada": true
+}

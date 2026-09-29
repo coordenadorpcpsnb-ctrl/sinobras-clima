@@ -55,6 +55,15 @@ STATUS_RESOLVIDOS = {'ok', 'zero_real', 'nodata_sentinela', 'mes_ausente'}   # n
 RATE_LIMIT_SEGUNDOS = 1.0
 MAX_REQUISICOES_POR_EXECUCAO = 30   # limite de segurança — piloto tem 17, nunca a série completa
 
+# Fase 2C.3B, item 1a — mes_ausente/nodata_sentinela são tratados como
+# STATUS_RESOLVIDOS por padrão (meses_pendentes/executar_piloto NUNCA
+# os retenta sozinhos, para não martelar o servidor à toa quando a
+# ausência é real). reprocessar_ausentes_ou_nodata() é o mecanismo
+# EXPLÍCITO e CONTROLADO para dar a esses meses uma nova chance —
+# nunca automático, sempre com este teto rígido de tentativas.
+MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA = 3
+COLUNA_TENTATIVAS_REPROCESSAMENTO = 'tentativas_reprocessamento_ausente_ou_nodata'
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Item 4 — extração-piloto, com retomada e limitação de downloads
@@ -135,6 +144,98 @@ def executar_piloto(meses=MESES_PILOTO, max_requisicoes=MAX_REQUISICOES_POR_EXEC
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Fase 2C.3B, item 1a — reprocessamento CONTROLADO de ausente/NoData,
+# com teto rígido de tentativas (nunca automático, nunca indefinido)
+# ══════════════════════════════════════════════════════════════════════════
+
+def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA,
+                                    rate_limit_segundos=RATE_LIMIT_SEGUNDOS, caminho_csv=None):
+    """Mecanismo EXPLÍCITO (precisa ser chamado deliberadamente — nunca
+    invocado por dentro de executar_piloto/meses_pendentes, que tratam
+    mes_ausente/nodata_sentinela como resolvidos por padrão) para dar
+    aos meses classificados como AUSENTES ou NODATA uma nova chance —
+    útil quando o CHIRPS Final publica um mês atrasado, ou quando um
+    NoData pontual foi transitório do lado do servidor.
+
+    Nunca tentativas indefinidas: cada mês carrega um contador
+    persistido (COLUNA_TENTATIVAS_REPROCESSAMENTO) que só é
+    incrementado quando o reprocessamento CONFIRMA o mesmo status
+    (ausente/nodata de novo) — ao atingir `max_tentativas`, o mês para
+    de ser candidato, permanentemente, até intervenção manual (não
+    há reset automático). Se o reprocessamento resolver o mês (status
+    vira ok/zero_real), o contador para de importar — o mês sai da
+    lista de candidatos porque o status mudou, não porque o contador
+    zerou.
+
+    `meses`, se fornecido, restringe ainda mais os candidatos a um
+    subconjunto explícito (ex.: só os meses de um lote específico) —
+    nunca reprocessa nada fora de STATUS a reprocessar E (se `meses`
+    fornecido) fora dessa lista."""
+    if caminho_csv is None:
+        caminho_csv = DATA_PILOTO_CSV
+    persistidos = _carregar_resultados_persistidos(caminho_csv)
+    if persistidos.empty:
+        return persistidos
+
+    if COLUNA_TENTATIVAS_REPROCESSAMENTO not in persistidos.columns:
+        persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] = 0
+    persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] = (
+        persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO].fillna(0).astype(int))
+
+    elegivel = (persistidos['status'].isin({'mes_ausente', 'nodata_sentinela'})
+                & (persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] < max_tentativas))
+    if meses is not None:
+        meses_set = set(meses)
+        elegivel &= persistidos.apply(
+            lambda r: (int(r['ano']), int(r['mes'])) in meses_set, axis=1)
+    candidatos = persistidos[elegivel]
+
+    if candidatos.empty:
+        return persistidos
+
+    novos = []
+    for i, (_, row) in enumerate(candidatos.iterrows()):
+        ano, mes = int(row['ano']), int(row['mes'])
+        tentativas_ja_feitas = int(row[COLUNA_TENTATIVAS_REPROCESSAMENTO])
+        if i > 0:
+            time.sleep(rate_limit_segundos)
+        resultado = v3.extrair_pixel_mensal(ano, mes)
+        if resultado['status'] in {'mes_ausente', 'nodata_sentinela'}:
+            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_ja_feitas + 1
+        else:
+            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_ja_feitas
+        novos.append(resultado)
+        print(f"  [reprocessamento {i+1}/{len(candidatos)}] {ano}-{mes:02d}: "
+              f"status={resultado['status']} "
+              f"tentativas={resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO]}/{max_tentativas}")
+
+    novos_df = pd.json_normalize(novos, sep='__')
+    combinado = pd.concat([persistidos, novos_df], ignore_index=True)
+    combinado = combinado.drop_duplicates(subset=['ano', 'mes'], keep='last')
+    combinado = combinado.sort_values(['ano', 'mes']).reset_index(drop=True)
+
+    caminho_csv.parent.mkdir(parents=True, exist_ok=True)
+    combinado.to_csv(caminho_csv, index=False)
+    return combinado
+
+
+def meses_esgotados_reprocessamento(caminho_csv=None,
+                                     max_tentativas=MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA):
+    """Diagnóstico — lista os meses ausentes/NoData que já atingiram o
+    teto de tentativas (não candidatos a reprocessar automaticamente
+    nunca mais, sem intervenção manual)."""
+    if caminho_csv is None:
+        caminho_csv = DATA_PILOTO_CSV
+    persistidos = _carregar_resultados_persistidos(caminho_csv)
+    if persistidos.empty or COLUNA_TENTATIVAS_REPROCESSAMENTO not in persistidos.columns:
+        return []
+    esgotados = persistidos[
+        persistidos['status'].isin({'mes_ausente', 'nodata_sentinela'})
+        & (persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO].fillna(0).astype(int) >= max_tentativas)]
+    return [(int(r['ano']), int(r['mes'])) for _, r in esgotados.iterrows()]
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Item 5 — controle de qualidade: reprova o piloto se algo comprometer
 # a integridade da referência
 # ══════════════════════════════════════════════════════════════════════════
@@ -176,14 +277,34 @@ def avaliar_qualidade_piloto(resultados_df, meses_esperados=MESES_PILOTO):
        valor_valido_disponivel=True. Esta é a condição de
        'aprovado' — um período obrigatório com qualquer lacuna (mês
        sem tentativa, ausente no servidor, NoData, ou falha de
-       extração) NUNCA é aprovado como integralmente coberto."""
+       extração) NUNCA é aprovado como integralmente coberto.
+
+    CORREÇÃO (Fase 2C.3B, item 1b) — a versão anterior calculava
+    `n_meses_disponiveis_no_servidor` e `meses_com_falha` sobre TODO
+    `resultados_df`, não só sobre `meses_esperados`. Isso é inofensivo
+    quando `resultados_df` só tem os meses de UM período (como o
+    piloto de 17 meses, sempre avaliado sozinho), mas quebra assim que
+    o mesmo arquivo de resultados acumula VÁRIOS lotes da reconstrução
+    histórica (Fase 2C.3B) — avaliar a qualidade de UM lote passando o
+    CSV inteiro (com outros lotes já persistidos) inflaria/distorceria
+    os indicadores com meses de fora do período pedido. Agora TODO
+    cálculo desta função opera exclusivamente sobre o subconjunto de
+    `resultados_df` cujos (ano,mes) estão em `meses_esperados` —
+    `df_no_periodo`, filtrado logo abaixo, nunca `resultados_df` bruto
+    depois deste ponto."""
     esperados = sorted(set(meses_esperados))
+    esperados_set = set(esperados)
     n_esperados = len(esperados)
+
     if resultados_df.empty:
+        df_no_periodo = resultados_df
         presentes_map = {}
     else:
+        mask_no_periodo = resultados_df.apply(
+            lambda r: (int(r['ano']), int(r['mes'])) in esperados_set, axis=1)
+        df_no_periodo = resultados_df[mask_no_periodo]
         presentes_map = {(int(r['ano']), int(r['mes'])): r['status']
-                          for _, r in resultados_df.iterrows()}
+                          for _, r in df_no_periodo.iterrows()}
 
     faltando = [(a, m) for a, m in esperados if (a, m) not in presentes_map]
 
@@ -192,8 +313,8 @@ def avaliar_qualidade_piloto(resultados_df, meses_esperados=MESES_PILOTO):
                    and predicado(presentes_map[(a, m)]))
 
     n_disponivel_no_servidor = 0
-    if not resultados_df.empty and 'identificacao_arquivo__disponivel' in resultados_df.columns:
-        n_disponivel_no_servidor = int(resultados_df['identificacao_arquivo__disponivel']
+    if not df_no_periodo.empty and 'identificacao_arquivo__disponivel' in df_no_periodo.columns:
+        n_disponivel_no_servidor = int(df_no_periodo['identificacao_arquivo__disponivel']
                                         .fillna(False).astype(bool).sum())
     n_extracao_sucesso = _contar(lambda s: s in STATUS_EXTRACAO_BEM_SUCEDIDA)
     n_valor_valido = _contar(lambda s: s in STATUS_VALOR_VALIDO)
@@ -228,13 +349,12 @@ def avaliar_qualidade_piloto(resultados_df, meses_esperados=MESES_PILOTO):
             f"{n_valor_valido} têm um VALOR VÁLIDO utilizável (ok/zero_real) — "
             f"{n_mes_ausente} ausentes no servidor e {n_nodata} com NoData NÃO contam como "
             "valor válido, mesmo sendo respostas 'esperadas' do servidor/produto. Um período "
-            "obrigatório e fixo (como este piloto, todos os meses já deveriam estar "
-            "publicados) só é considerado com cobertura temporal completa quando TODOS os "
-            "meses têm valor válido — mes_ausente/NoData/falha de extração em QUALQUER mês "
-            "impede a aprovação plena, mesmo que sejam respostas 'legítimas' do servidor. "
-            "Piloto reprovado bloqueia a Fase 2C.3B (reconstrução histórica) até a causa raiz "
-            "ser corrigida — nunca prosseguir com dado incompleto/corrompido/ausente tratado "
-            "como se fosse íntegro."
+            "obrigatório e fixo (como este — todos os meses já deveriam estar publicados) só "
+            "é considerado com cobertura temporal completa quando TODOS os meses têm valor "
+            "válido — mes_ausente/NoData/falha de extração em QUALQUER mês impede a aprovação "
+            "plena, mesmo que sejam respostas 'legítimas' do servidor. Reprovação bloqueia o "
+            "uso científico deste período até a causa raiz ser corrigida — nunca prosseguir "
+            "com dado incompleto/corrompido/ausente tratado como se fosse íntegro."
         ),
     }
 
@@ -245,7 +365,7 @@ def avaliar_qualidade_piloto(resultados_df, meses_esperados=MESES_PILOTO):
 # ══════════════════════════════════════════════════════════════════════════
 
 def comparar_com_dados_existentes(resultados_df):
-    """Compara os meses do piloto (status ok/zero_real) com os mesmos
+    """Compara os meses extraídos (status ok/zero_real) com os mesmos
     meses de data/chirps_1981_2025.csv (extraído pelo ClimateSERV —
     a versão do CHIRPS usada NUNCA foi registrada por aquele pipeline,
     então NÃO é identificada aqui como "CHIRPS v2 confirmado"; ver
@@ -253,6 +373,11 @@ def comparar_com_dados_existentes(resultados_df):
     METODOLOGIA_CHIRPS_PONTO_CONHECIDA) e data/serie_subst.csv (série
     consolidada de produção — combina procedência pré-1996 não
     comprovada com estimativas CHIRPS zonais por fazenda pós-1996).
+
+    Reutilizada tanto para o piloto de 17 meses (Fase 2C.3A) quanto
+    para os lotes de reconstrução histórica de tamanho arbitrário
+    (Fase 2C.3B) — nenhum texto abaixo assume um tamanho de amostra
+    fixo; todas as contagens usam len(comparacoes) dinamicamente.
 
     Só estatísticas DESCRITIVAS (diferença assinada, contagem de meses
     acima/abaixo/iguais, razão) — nenhum indicador de habilidade
@@ -264,14 +389,14 @@ def comparar_com_dados_existentes(resultados_df):
     (a) o comportamento GERAL do produto, descrito na documentação
     oficial (README: "CHIRPS v3.0 is overall wetter compared to
     CHIRPS v2.0" — uma afirmação sobre o produto agregado/global); (b)
-    o comportamento efetivamente observado nesta amostra REGIONAL de
-    17 meses, que esta função agora calcula e reporta explicitamente —
-    as duas NÃO precisam coincidir numa amostra pequena e regional, e
-    de fato não coincidem aqui (ver interpretacao)."""
+    o comportamento efetivamente observado nesta amostra REGIONAL, que
+    esta função agora calcula e reporta explicitamente — as duas NÃO
+    precisam coincidir numa amostra pequena e regional, e de fato não
+    coincidem aqui (ver interpretacao)."""
     validos = resultados_df[resultados_df['status'].isin({'ok', 'zero_real'})].copy()
     if validos.empty:
         return {'n_meses_comparaveis': 0, 'comparacoes': [],
-                'interpretacao': 'Nenhum mês válido para comparar — piloto sem dado utilizável.'}
+                'interpretacao': 'Nenhum mês válido para comparar — sem dado utilizável no período.'}
 
     validos['prec_v3'] = validos['valor_mm'].astype(float)
     chirps_existente = pd.read_csv(CHIRPS_V2_PONTO_PATH) if CHIRPS_V2_PONTO_PATH.exists() else \
@@ -323,9 +448,9 @@ def comparar_com_dados_existentes(resultados_df):
         'diff_abs_media_vs_serie_producao_mm': round(sum(abs(d) for d in diffs_prod) / len(diffs_prod), 2)
             if diffs_prod else None,
         'interpretacao': (
-            f"{len(comparacoes)} meses do piloto comparados a três referências: (1) CHIRPS "
+            f"{len(comparacoes)} meses comparados a três referências: (1) CHIRPS "
             "v3.0 Final, novo, ponto único no centroide, versão e metodologia CONTROLADAS "
-            "(este piloto); (2) CHIRPS histórico existente (data/chirps_1981_2025.csv), "
+            "(esta extração); (2) CHIRPS histórico existente (data/chirps_1981_2025.csv), "
             "extraído pelo ClimateSERV — a versão do CHIRPS usada NUNCA foi registrada por "
             "aquele pipeline, então NÃO é identificada aqui como 'CHIRPS v2 confirmado'; (3) "
             "série consolidada de produção (data/serie_subst.csv), que combina procedência "
@@ -337,12 +462,12 @@ def comparar_com_dados_existentes(resultados_df):
             f"{diff_abs_media} mm). Isto NÃO confirma nem contradiz, isoladamente, a afirmação "
             "geral do README oficial de que \"CHIRPS v3.0 is overall wetter compared to CHIRPS "
             "v2.0\" — aquela é uma caracterização do produto AGREGADO/GLOBAL; esta amostra é "
-            "REGIONAL (1 ponto, 17 meses, região historicamente com viés conhecido em "
-            "jun-ago e out-dez, CLAUDE.md armadilha 7) e pequena demais para generalizar. As "
-            "duas coisas são distintas e não devem ser confundidas: comportamento documentado "
-            "do produto vs. comportamento observado nesta amostra específica. Nenhum indicador "
-            "de habilidade preditiva do CFSv2 foi calculado — só estatística descritiva de "
-            "comparação entre referências (item 6 da tarefa)."
+            f"REGIONAL (1 ponto, {len(comparacoes)} meses, região historicamente com viés "
+            "conhecido em jun-ago e out-dez, CLAUDE.md armadilha 7) e pequena demais para "
+            "generalizar. As duas coisas são distintas e não devem ser confundidas: "
+            "comportamento documentado do produto vs. comportamento observado nesta amostra "
+            "específica. Nenhum indicador de habilidade preditiva do CFSv2 foi calculado — só "
+            "estatística descritiva de comparação entre referências (item 6 da tarefa)."
         ),
     }
     return resumo
