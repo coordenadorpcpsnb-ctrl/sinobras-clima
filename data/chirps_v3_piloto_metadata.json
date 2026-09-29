@@ -1,0 +1,251 @@
+{
+  "fase": "2C.3A — piloto CHIRPS v3.0 Final, referência histórica independente (2026)",
+  "data_geracao_utc": "2026-09-29T11:20:50.513220+00:00",
+  "metodologia": {
+    "versao_chirps": "v3.0",
+    "data_lancamento_versao": "2025-01-01",
+    "fonte_readme": "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/README-CHIRPSv3.0.txt",
+    "fonte_diretorio_base": "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/",
+    "resolucao_graus": 0.05,
+    "crs": "EPSG:4326",
+    "unidade": "mm/mês (campo mensal Final já consolidado — não soma de registros diários)",
+    "nodata_sentinela": -9999.0,
+    "nodata_sentinela_confirmada_como": "valor empírico, lendo pixel oceânico conhecido (-30,0) — NÃO documentado na tag GDAL NODATA nem no README oficial",
+    "ponto_referencia": {
+      "lat": -7.8,
+      "lon": -47.95,
+      "identificador": "CHIRPS_v3_ponto_centroide"
+    },
+    "nao_e_media_zonal_das_34_fazendas": true
+  },
+  "meses_do_piloto": [
+    "1991-01",
+    "1991-04",
+    "1991-07",
+    "1991-10",
+    "1998-01",
+    "1998-04",
+    "1998-07",
+    "1998-10",
+    "2005-01",
+    "2005-04",
+    "2005-07",
+    "2005-10",
+    "2010-01",
+    "2010-04",
+    "2010-07",
+    "2010-10",
+    "2011-05"
+  ],
+  "n_meses_do_piloto": 17,
+  "qualidade": {
+    "aprovado": true,
+    "n_meses_esperados": 17,
+    "n_meses_com_resultado": 17,
+    "n_meses_ok_ou_zero_real": 17,
+    "n_meses_ausentes_no_servidor": 0,
+    "meses_faltando_sem_nenhuma_tentativa": [],
+    "meses_com_falha": [],
+    "interpretacao": "APROVADO: 17/17 meses extraídos com sucesso (ok/zero_real), 0 ausentes no servidor (resposta 404 válida, não conta como falha), 0 com falha real, 0 sem nenhuma tentativa registrada. Piloto reprovado bloqueia a Fase 2C.3B (reconstrução histórica) até a causa raiz ser corrigida — nunca prosseguir com dado incompleto/corrompido tratado como se fosse íntegro."
+  },
+  "comparacao_com_dados_existentes": {
+    "n_meses_comparaveis": 17,
+    "comparacoes": [
+      {
+        "ano": 1991,
+        "mes": 1,
+        "prec_v3_ponto_novo": 342.94,
+        "prec_v2_ponto_existente": 321.8,
+        "diff_abs_v3_menos_v2_mm": 21.14,
+        "razao_v3_sobre_v2": 1.066,
+        "prec_serie_producao": 308.35,
+        "diff_abs_v3_menos_producao_mm": 34.59,
+        "razao_v3_sobre_producao": 1.112
+      },
+      {
+        "ano": 1991,
+        "mes": 4,
+        "prec_v3_ponto_novo": 214.63,
+        "prec_v2_ponto_existente": 214.2,
+        "diff_abs_v3_menos_v2_mm": 0.43,
+        "razao_v3_sobre_v2": 1.002,
+        "prec_serie_producao": 208.3,
+        "diff_abs_v3_menos_producao_mm": 6.33,
+        "razao_v3_sobre_producao": 1.03
+      },
+      {
+        "ano": 1991,
+        "mes": 7,
+        "prec_v3_ponto_novo": 1.95,
+        "prec_v2_ponto_existente": 0.0,
+        "diff_abs_v3_menos_v2_mm": 1.95,
+        "razao_v3_sobre_v2": null,
+        "prec_serie_producao": 12.81,
+        "diff_abs_v3_menos_producao_mm": -10.86,
+        "razao_v3_sobre_producao": 0.152
+      },
+      {
+        "ano": 1991,
+        "mes": 10,
+        "prec_v3_ponto_novo": 58.28,
+        "prec_v2_ponto_existente": 71.5,
+        "diff_abs_v3_menos_v2_mm": -13.22,
+        "razao_v3_sobre_v2": 0.815,
+        "prec_serie_producao": 106.64,
+        "diff_abs_v3_menos_producao_mm": -48.36,
+        "razao_v3_sobre_producao": 0.546
+      },
+      {
+        "ano": 1998,
+        "mes": 1,
+        "prec_v3_ponto_novo": 347.46,
+        "prec_v2_ponto_existente": 338.7,
+        "diff_abs_v3_menos_v2_mm": 8.76,
+        "razao_v3_sobre_v2": 1.026,
+        "prec_serie_producao": 332.71,
+        "diff_abs_v3_menos_producao_mm": 14.75,
+        "razao_v3_sobre_producao": 1.044
+      },
+      {
+        "ano": 1998,
+        "mes": 4,
+        "prec_v3_ponto_novo": 54.1,
+        "prec_v2_ponto_existente": 59.5,
+        "diff_abs_v3_menos_v2_mm": -5.4,
+        "razao_v3_sobre_v2": 0.909,
+        "prec_serie_producao": 82.32,
+        "diff_abs_v3_menos_producao_mm": -28.22,
+        "razao_v3_sobre_producao": 0.657
+      },
+      {
+        "ano": 1998,
+        "mes": 7,
+        "prec_v3_ponto_novo": 3.36,
+        "prec_v2_ponto_existente": 8.2,
+        "diff_abs_v3_menos_v2_mm": -4.84,
+        "razao_v3_sobre_v2": 0.409,
+        "prec_serie_producao": 3.88,
+        "diff_abs_v3_menos_producao_mm": -0.52,
+        "razao_v3_sobre_producao": 0.865
+      },
+      {
+        "ano": 1998,
+        "mes": 10,
+        "prec_v3_ponto_novo": 89.3,
+        "prec_v2_ponto_existente": 111.4,
+        "diff_abs_v3_menos_v2_mm": -22.1,
+        "razao_v3_sobre_v2": 0.802,
+        "prec_serie_producao": 72.32,
+        "diff_abs_v3_menos_producao_mm": 16.98,
+        "razao_v3_sobre_producao": 1.235
+      },
+      {
+        "ano": 2005,
+        "mes": 1,
+        "prec_v3_ponto_novo": 258.83,
+        "prec_v2_ponto_existente": 249.7,
+        "diff_abs_v3_menos_v2_mm": 9.13,
+        "razao_v3_sobre_v2": 1.037,
+        "prec_serie_producao": 237.76,
+        "diff_abs_v3_menos_producao_mm": 21.07,
+        "razao_v3_sobre_producao": 1.089
+      },
+      {
+        "ano": 2005,
+        "mes": 4,
+        "prec_v3_ponto_novo": 143.77,
+        "prec_v2_ponto_existente": 149.5,
+        "diff_abs_v3_menos_v2_mm": -5.73,
+        "razao_v3_sobre_v2": 0.962,
+        "prec_serie_producao": 165.18,
+        "diff_abs_v3_menos_producao_mm": -21.41,
+        "razao_v3_sobre_producao": 0.87
+      },
+      {
+        "ano": 2005,
+        "mes": 7,
+        "prec_v3_ponto_novo": 1.87,
+        "prec_v2_ponto_existente": 0.0,
+        "diff_abs_v3_menos_v2_mm": 1.87,
+        "razao_v3_sobre_v2": null,
+        "prec_serie_producao": 0.0,
+        "diff_abs_v3_menos_producao_mm": 1.87,
+        "razao_v3_sobre_producao": null
+      },
+      {
+        "ano": 2005,
+        "mes": 10,
+        "prec_v3_ponto_novo": 43.4,
+        "prec_v2_ponto_existente": 57.0,
+        "diff_abs_v3_menos_v2_mm": -13.6,
+        "razao_v3_sobre_v2": 0.761,
+        "prec_serie_producao": 86.79,
+        "diff_abs_v3_menos_producao_mm": -43.39,
+        "razao_v3_sobre_producao": 0.5
+      },
+      {
+        "ano": 2010,
+        "mes": 1,
+        "prec_v3_ponto_novo": 206.42,
+        "prec_v2_ponto_existente": 218.3,
+        "diff_abs_v3_menos_v2_mm": -11.88,
+        "razao_v3_sobre_v2": 0.946,
+        "prec_serie_producao": 275.24,
+        "diff_abs_v3_menos_producao_mm": -68.82,
+        "razao_v3_sobre_producao": 0.75
+      },
+      {
+        "ano": 2010,
+        "mes": 4,
+        "prec_v3_ponto_novo": 179.41,
+        "prec_v2_ponto_existente": 203.5,
+        "diff_abs_v3_menos_v2_mm": -24.09,
+        "razao_v3_sobre_v2": 0.882,
+        "prec_serie_producao": 247.18,
+        "diff_abs_v3_menos_producao_mm": -67.77,
+        "razao_v3_sobre_producao": 0.726
+      },
+      {
+        "ano": 2010,
+        "mes": 7,
+        "prec_v3_ponto_novo": 1.85,
+        "prec_v2_ponto_existente": 0.0,
+        "diff_abs_v3_menos_v2_mm": 1.85,
+        "razao_v3_sobre_v2": null,
+        "prec_serie_producao": 2.97,
+        "diff_abs_v3_menos_producao_mm": -1.12,
+        "razao_v3_sobre_producao": 0.623
+      },
+      {
+        "ano": 2010,
+        "mes": 10,
+        "prec_v3_ponto_novo": 136.15,
+        "prec_v2_ponto_existente": 151.6,
+        "diff_abs_v3_menos_v2_mm": -15.45,
+        "razao_v3_sobre_v2": 0.898,
+        "prec_serie_producao": 137.74,
+        "diff_abs_v3_menos_producao_mm": -1.59,
+        "razao_v3_sobre_producao": 0.988
+      },
+      {
+        "ano": 2011,
+        "mes": 5,
+        "prec_v3_ponto_novo": 102.81,
+        "prec_v2_ponto_existente": 76.9,
+        "diff_abs_v3_menos_v2_mm": 25.91,
+        "razao_v3_sobre_v2": 1.337,
+        "prec_serie_producao": 123.53,
+        "diff_abs_v3_menos_producao_mm": -20.72,
+        "razao_v3_sobre_producao": 0.832
+      }
+    ],
+    "diff_abs_media_vs_chirps_v2_ponto_mm": 11.02,
+    "diff_abs_media_vs_serie_producao_mm": 24.02,
+    "interpretacao": "17 meses do piloto comparados às três referências: (1) CHIRPS v3.0 Final, novo, ponto único no centroide, versão e metodologia CONTROLADAS (este piloto); (2) CHIRPS histórico existente (data/chirps_1981_2025.csv), extraído pelo ClimateSERV, versão NÃO registrada (ver docs/nmme-fase2c3a-piloto-chirps-v3.md, Seção 1); (3) série consolidada de produção (data/serie_subst.csv), que combina procedência pré-1996 não comprovada com estimativas CHIRPS ZONAIS por fazenda pós-1996 (metodologia diferente por desenho — zonal vs. ponto — ver docs/nmme-fase2c2-auditoria-chirps-sinobras.md). Diferenças esperadas e não-triviais entre as três: v3 tende a ser mais úmido que v2 (correção de sub-captação por vento, ver README oficial). Nenhum indicador de habilidade preditiva do CFSv2 foi calculado — só estatística descritiva de comparação entre referências (item 6 da tarefa)."
+  },
+  "nenhuma_skill_calculada": true,
+  "nenhum_indicador_de_habilidade_preditiva_calculado": true,
+  "nenhuma_serie_historica_completa_baixada": true,
+  "scripts_chirps_py_nao_modificado": true,
+  "sarimax_xgboost_dashboard_nao_alterados": true
+}
