@@ -170,6 +170,33 @@ class MontarPlanoReconstrucaoTestCase(unittest.TestCase):
                            side_effect=AssertionError("não deveria ser chamado")):
             rec.imprimir_plano()   # não deve levantar
 
+    def test_f_descricao_da_retomada_inclui_nodata_nan(self):
+        """CORREÇÃO (revisão adicional) — a descrição de 'retomada' era
+        uma lista hardcoded ('ok/zero_real/nodata_sentinela/
+        mes_ausente') que ficou incompleta quando 'nodata_nan' passou a
+        integrar STATUS_NODATA_REPROCESSAMENTO/STATUS_RESOLVIDOS em
+        scripts/chirps_v3_piloto.py. Agora tem que refletir o conjunto
+        real, não uma lista solta que pode divergir de novo."""
+        plano = rec.montar_plano_reconstrucao()
+        self.assertIn('nodata_nan', plano['retomada'])
+
+    def test_g_descricao_da_retomada_e_derivada_das_constantes_do_piloto(self):
+        """Preferência explícita da revisão: evitar lista hardcoded de
+        novo — todo status de piloto.STATUS_RESOLVIDOS precisa aparecer
+        na descrição, e ela precisa distinguir valor científico válido
+        de 'resolvido só para retomada'."""
+        plano = rec.montar_plano_reconstrucao()
+        texto = plano['retomada']
+        for status in piloto.STATUS_RESOLVIDOS:
+            self.assertIn(status, texto)
+        self.assertIn('reprocessar_ausentes_ou_nodata', texto)
+        self.assertIn('valor científico', texto.lower())
+
+    def test_h_relatorio_do_plano_reflete_a_descricao_corrigida(self):
+        plano = rec.montar_plano_reconstrucao()
+        relatorio = rec.gerar_relatorio_plano_markdown(plano)
+        self.assertIn('nodata_nan', relatorio)
+
 
 class InterfaceDeSelecaoDeLoteTestCase(unittest.TestCase):
     """Fase 2C.3B, item 3 — 'selecionar explicitamente um lote,
