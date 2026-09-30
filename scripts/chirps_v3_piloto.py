@@ -51,53 +51,6 @@ ANOS_PILOTO = (1991, 1998, 2005, 2010)
 MESES_TRIMESTRAIS = (1, 4, 7, 10)
 MESES_PILOTO = [(ano, mes) for ano in ANOS_PILOTO for mes in MESES_TRIMESTRAIS] + [(2011, 5)]
 
-STATUS_RESOLVIDOS = {'ok', 'zero_real', 'nodata_sentinela', 'mes_ausente'}   # nunca reprocessa
-RATE_LIMIT_SEGUNDOS = 1.0
-MAX_REQUISICOES_POR_EXECUCAO = 30   # limite de segurança — piloto tem 17, nunca a série completa
-
-# Fase 2C.3B, item 1a — mes_ausente/nodata_sentinela são tratados como
-# STATUS_RESOLVIDOS por padrão (meses_pendentes/executar_piloto NUNCA
-# os retenta sozinhos, para não martelar o servidor à toa quando a
-# ausência é real). reprocessar_ausentes_ou_nodata() é o mecanismo
-# EXPLÍCITO e CONTROLADO para dar a esses meses uma nova chance —
-# nunca automático, sempre com este teto rígido de tentativas.
-#
-# CORREÇÃO (auditoria independente, revisão) — a versão anterior só
-# incrementava COLUNA_TENTATIVAS_REPROCESSAMENTO quando o resultado
-# CONFIRMAVA ausente/nodata de novo; uma falha de rede/extração
-# (status diferente de ok/zero_real/mes_ausente/nodata_sentinela)
-# caía no `else` e (a) não incrementava o contador — então uma
-# sequência de falhas de rede nunca atingia o teto, tentativas
-# efetivamente indefinidas apesar do nome da variável — E (b)
-# sobrescrevia a linha persistida inteira com o resultado da falha,
-# apagando a classificação anterior (mes_ausente/nodata_sentinela)
-# do CSV. Agora três contadores distintos, nunca confundidos:
-#   COLUNA_TENTATIVAS_REPROCESSAMENTO    — toda chamada REAL feita a
-#       extrair_pixel_mensal por este mecanismo conta 1, não importa o
-#       desfecho (confirmação, resolução ou falha) — é este que define
-#       o teto (`max_tentativas`), então "tentativas" agora corresponde
-#       de fato a tentativas.
-#   COLUNA_CONFIRMACOES_REPROCESSAMENTO  — subconjunto das tentativas
-#       em que o resultado confirmou indisponibilidade/NoData EM GERAL
-#       de novo (ver STATUS_NODATA_REPROCESSAMENTO logo abaixo — NÃO
-#       precisa ser o MESMO subtipo de antes: mes_ausente seguido de
-#       nodata_nan também é uma "confirmação", porque as duas
-#       significam "ainda sem valor válido").
-#   COLUNA_FALHAS_REPROCESSAMENTO        — subconjunto das tentativas
-#       em que houve falha de rede/extração OU um valor lido mas
-#       inválido/implausível (nem confirmação, nem resolução) — nessas,
-#       a linha persistida NUNCA é sobrescrita: a classificação
-#       anterior (status/valor_mm/etc.) é preservada intacta, só os
-#       contadores e o histórico de diagnóstico mudam.
-# COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO guarda um log compacto
-# (status + timestamp de cada falha, concatenados) para diagnosticar
-# sem precisar reprocessar de novo.
-MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA = 3
-COLUNA_TENTATIVAS_REPROCESSAMENTO = 'tentativas_reprocessamento_ausente_ou_nodata'
-COLUNA_CONFIRMACOES_REPROCESSAMENTO = 'confirmacoes_reprocessamento_ausente_ou_nodata'
-COLUNA_FALHAS_REPROCESSAMENTO = 'falhas_reprocessamento_ausente_ou_nodata'
-COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO = 'historico_falhas_reprocessamento_ausente_ou_nodata'
-
 # CORREÇÃO (revisão adicional) — extrair_pixel_mensal() (via
 # scripts/_chirps_v3.py::classificar_valor()) pode devolver mais
 # status do que os dois (mes_ausente/nodata_sentinela) que a versão
@@ -141,6 +94,78 @@ STATUS_FALHA_OU_INVALIDO_CONHECIDOS = {
     'valor_negativo_nao_e_sentinela_conhecida', 'valor_implausivel_alto',
 }
 
+# CORREÇÃO (revisão adicional — consistência entre retomada normal e
+# reprocessamento controlado) — STATUS_RESOLVIDOS era uma lista
+# hardcoded separada ({'ok', 'zero_real', 'nodata_sentinela',
+# 'mes_ausente'}) que divergiu de STATUS_NODATA_REPROCESSAMENTO quando
+# 'nodata_nan' foi reconhecido acima: um mês persistido como
+# 'nodata_nan' NÃO estava em STATUS_RESOLVIDOS, então
+# meses_pendentes()/executar_piloto() (retomada NORMAL, sem teto) o
+# reprocessavam automaticamente a cada execução — ignorando por
+# completo o mecanismo controlado e o teto de 3 tentativas de
+# reprocessar_ausentes_ou_nodata(). Agora DERIVADA das duas constantes
+# acima, nunca mais uma lista solta que pode divergir de novo:
+#   STATUS_RESOLVIDOS = RESOLVIDO ∪ NODATA
+# "Resolvido para fins de retomada automática" é um conceito
+# DIFERENTE de "valor científico válido" — só STATUS_RESOLVIDO_
+# REPROCESSAMENTO (ok/zero_real) tem valor válido; os três de
+# STATUS_NODATA_REPROCESSAMENTO entram em STATUS_RESOLVIDOS só para
+# que a retomada NORMAL não fique martelando o servidor à toa quando a
+# ausência é real — quem pode dar a eles uma NOVA chance, respeitando
+# o teto, é exclusivamente reprocessar_ausentes_ou_nodata(). Falhas de
+# rede/arquivo/grade/leitura e valores inválidos (classe 3, "não estão
+# nem em RESOLVIDO nem em NODATA") continuam DE FORA de
+# STATUS_RESOLVIDOS — permanecem pendentes na retomada normal, como já
+# era o comportamento antes desta correção.
+STATUS_RESOLVIDOS = STATUS_RESOLVIDO_REPROCESSAMENTO | STATUS_NODATA_REPROCESSAMENTO
+
+RATE_LIMIT_SEGUNDOS = 1.0
+MAX_REQUISICOES_POR_EXECUCAO = 30   # limite de segurança — piloto tem 17, nunca a série completa
+
+# Fase 2C.3B, item 1a — mes_ausente/nodata_sentinela/nodata_nan são
+# tratados como STATUS_RESOLVIDOS por padrão (meses_pendentes/
+# executar_piloto NUNCA os retentam sozinhos, para não martelar o
+# servidor à toa quando a ausência é real). reprocessar_ausentes_ou_
+# nodata() é o mecanismo EXPLÍCITO e CONTROLADO para dar a esses meses
+# uma nova chance — nunca automático, sempre com este teto rígido de
+# tentativas.
+#
+# CORREÇÃO (auditoria independente, revisão) — a versão anterior só
+# incrementava COLUNA_TENTATIVAS_REPROCESSAMENTO quando o resultado
+# CONFIRMAVA ausente/nodata de novo; uma falha de rede/extração
+# (status diferente de ok/zero_real/mes_ausente/nodata_sentinela)
+# caía no `else` e (a) não incrementava o contador — então uma
+# sequência de falhas de rede nunca atingia o teto, tentativas
+# efetivamente indefinidas apesar do nome da variável — E (b)
+# sobrescrevia a linha persistida inteira com o resultado da falha,
+# apagando a classificação anterior (mes_ausente/nodata_sentinela)
+# do CSV. Agora três contadores distintos, nunca confundidos:
+#   COLUNA_TENTATIVAS_REPROCESSAMENTO    — toda chamada REAL feita a
+#       extrair_pixel_mensal por este mecanismo conta 1, não importa o
+#       desfecho (confirmação, resolução ou falha) — é este que define
+#       o teto (`max_tentativas`), então "tentativas" agora corresponde
+#       de fato a tentativas.
+#   COLUNA_CONFIRMACOES_REPROCESSAMENTO  — subconjunto das tentativas
+#       em que o resultado confirmou indisponibilidade/NoData EM GERAL
+#       de novo (ver STATUS_NODATA_REPROCESSAMENTO acima — NÃO precisa
+#       ser o MESMO subtipo de antes: mes_ausente seguido de nodata_nan
+#       também é uma "confirmação", porque as duas significam "ainda
+#       sem valor válido").
+#   COLUNA_FALHAS_REPROCESSAMENTO        — subconjunto das tentativas
+#       em que houve falha de rede/extração OU um valor lido mas
+#       inválido/implausível (nem confirmação, nem resolução) — nessas,
+#       a linha persistida NUNCA é sobrescrita: a classificação
+#       anterior (status/valor_mm/etc.) é preservada intacta, só os
+#       contadores e o histórico de diagnóstico mudam.
+# COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO guarda um log compacto
+# (status + timestamp de cada falha, concatenados) para diagnosticar
+# sem precisar reprocessar de novo.
+MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA = 3
+COLUNA_TENTATIVAS_REPROCESSAMENTO = 'tentativas_reprocessamento_ausente_ou_nodata'
+COLUNA_CONFIRMACOES_REPROCESSAMENTO = 'confirmacoes_reprocessamento_ausente_ou_nodata'
+COLUNA_FALHAS_REPROCESSAMENTO = 'falhas_reprocessamento_ausente_ou_nodata'
+COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO = 'historico_falhas_reprocessamento_ausente_ou_nodata'
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Item 4 — extração-piloto, com retomada e limitação de downloads
@@ -165,10 +190,18 @@ def _carregar_resultados_persistidos(caminho_csv=None):
 
 def meses_pendentes(meses=MESES_PILOTO, caminho_csv=None):
     """Retomada (item 4) — só reprocessa meses que NUNCA tiveram um
-    resultado resolvido persistido (STATUS_RESOLVIDOS). Um mês com
-    falha de rede/arquivo corrompido é retentado na próxima execução;
-    um mês já 'ok'/'zero_real'/'nodata_sentinela'/'mes_ausente' não é
-    reprocessado — evita repetir requisições desnecessárias."""
+    resultado resolvido persistido (STATUS_RESOLVIDOS = STATUS_
+    RESOLVIDO_REPROCESSAMENTO ∪ STATUS_NODATA_REPROCESSAMENTO, ver
+    definição acima). "Resolvido para fins de retomada automática" é
+    diferente de "valor científico válido": um mês 'ok'/'zero_real'
+    tem valor válido; um mês 'mes_ausente'/'nodata_sentinela'/
+    'nodata_nan' NÃO tem, mas também não é retentado por esta função
+    — só reprocessar_ausentes_ou_nodata() pode tentar de novo,
+    respeitando o teto de tentativas. Um mês com falha de rede/arquivo
+    corrompido/grade inesperada/valor inválido (fora de
+    STATUS_RESOLVIDOS) É retentado na próxima execução normal — evita
+    repetir requisições desnecessárias só para os casos onde a
+    ausência já foi confirmada pelo servidor."""
     persistidos = _carregar_resultados_persistidos(caminho_csv)
     ja_resolvidos = set()
     if not persistidos.empty:

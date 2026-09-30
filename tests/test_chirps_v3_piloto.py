@@ -90,6 +90,69 @@ class RetomadaTestCase(unittest.TestCase):
         pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4)])
         self.assertNotIn((1991, 1), pendentes)
 
+    def test_e_mes_nodata_nan_nao_e_retentado_pela_retomada_normal(self):
+        """CORREÇÃO (revisão adicional) — antes desta correção,
+        STATUS_RESOLVIDOS não incluía 'nodata_nan' (só 'nodata_sentinela'
+        e 'mes_ausente'), então um mês persistido como 'nodata_nan' era
+        reprocessado a cada execução normal — ignorando o mecanismo
+        controlado e o teto de 3 tentativas. Requisito 1 da revisão."""
+        pd.DataFrame([_resultado_falso(1991, 1, status='nodata_nan', valor_mm=None)]
+                     ).to_csv(self.csv_path, index=False)
+        pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4)])
+        self.assertNotIn((1991, 1), pendentes)
+
+    def test_f_mes_nodata_nan_continua_elegivel_no_reprocessamento_controlado(self):
+        """Requisito 2 da revisão — mesmo não sendo retentado pela
+        retomada normal (test_e), 'nodata_nan' continua sendo
+        candidato explícito em reprocessar_ausentes_ou_nodata(), sob o
+        teto de tentativas."""
+        pd.DataFrame([{**_resultado_falso(1991, 1, status='nodata_nan', valor_mm=None),
+                        piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO: 0}]).to_csv(
+            self.csv_path, index=False)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='nodata_nan',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
+
+    def test_g_falha_continua_aparecendo_na_retomada_normal(self):
+        """Requisito 3 da revisão — falhas (fora de STATUS_RESOLVIDOS)
+        continuam pendentes na retomada normal, comportamento
+        inalterado por esta correção."""
+        pd.DataFrame([_resultado_falso(1991, 1, status='erro_inesperado', valor_mm=None)]
+                     ).to_csv(self.csv_path, index=False)
+        pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4)])
+        self.assertIn((1991, 1), pendentes)
+
+    def test_h_ok_e_zero_real_continuam_nao_pendentes(self):
+        """Requisito 4 da revisão — valores científicos válidos
+        (ok/zero_real) nunca são pendentes, com ou sem a correção."""
+        pd.DataFrame([_resultado_falso(1991, 1, status='ok', valor_mm=10.0),
+                       _resultado_falso(1991, 4, status='zero_real', valor_mm=0.0)]
+                     ).to_csv(self.csv_path, index=False)
+        pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4), (1991, 7)])
+        self.assertEqual(pendentes, [(1991, 7)])
+
+
+class StatusResolvidosDerivadoTestCase(unittest.TestCase):
+    """Requisito da revisão — STATUS_RESOLVIDOS deve ser DERIVADO de
+    STATUS_RESOLVIDO_REPROCESSAMENTO e STATUS_NODATA_REPROCESSAMENTO,
+    nunca uma lista solta que pode divergir de novo no futuro."""
+
+    def test_a_e_a_uniao_exata_das_duas_constantes(self):
+        self.assertEqual(piloto.STATUS_RESOLVIDOS,
+                          piloto.STATUS_RESOLVIDO_REPROCESSAMENTO
+                          | piloto.STATUS_NODATA_REPROCESSAMENTO)
+
+    def test_b_contem_nodata_nan(self):
+        self.assertIn('nodata_nan', piloto.STATUS_RESOLVIDOS)
+
+    def test_c_nao_contem_status_de_falha_ou_valor_invalido(self):
+        for status in piloto.STATUS_FALHA_OU_INVALIDO_CONHECIDOS:
+            self.assertNotIn(status, piloto.STATUS_RESOLVIDOS)
+
 
 class ExecutarPilotoTestCase(unittest.TestCase):
     """Orquestração fim a fim com v3.extrair_pixel_mensal mockado —
