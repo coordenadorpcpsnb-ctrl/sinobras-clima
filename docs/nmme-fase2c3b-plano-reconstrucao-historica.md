@@ -17,7 +17,7 @@
 
 ## Retomada
 
-- meses_pendentes_reconstrucao() reusa scripts/chirps_v3_piloto.py::meses_pendentes — um mês com resultado já RESOLVIDO (ok/zero_real/nodata_sentinela/mes_ausente) nunca é reprocessado; falha real é retentada na próxima execução do mesmo lote.
+- meses_pendentes_reconstrucao() reusa scripts/chirps_v3_piloto.py::meses_pendentes — um mês com status em STATUS_RESOLVIDOS nunca é reprocessado pela retomada normal. CORREÇÃO (revisão adicional) — esta descrição era uma lista hardcoded separada que divergiu quando 'nodata_nan' foi reconhecido em scripts/chirps_v3_piloto.py; agora é construída a partir das mesmas constantes que definem STATUS_RESOLVIDOS, para nunca mais divergir. Duas classes distintas, nunca confundidas: (1) valor científico VÁLIDO — ok/zero_real (STATUS_RESOLVIDO_REPROCESSAMENTO); (2) SEM valor válido, mas considerado "resolvido" só para fins de retomada automática (nunca para aprovação científica) — mes_ausente/nodata_nan/nodata_sentinela (STATUS_NODATA_REPROCESSAMENTO) — esses três só podem ser retentados pelo mecanismo controlado scripts/chirps_v3_piloto.py::reprocessar_ausentes_ou_nodata(), respeitando o teto de tentativas, nunca pela retomada normal. Falha real (rede/arquivo/grade/leitura) ou valor inválido/implausível — fora de STATUS_RESOLVIDOS — é retentado na próxima execução normal do mesmo lote.
 
 ## Validação individual por mês
 

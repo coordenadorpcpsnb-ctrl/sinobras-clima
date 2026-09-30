@@ -90,6 +90,69 @@ class RetomadaTestCase(unittest.TestCase):
         pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4)])
         self.assertNotIn((1991, 1), pendentes)
 
+    def test_e_mes_nodata_nan_nao_e_retentado_pela_retomada_normal(self):
+        """CORREÇÃO (revisão adicional) — antes desta correção,
+        STATUS_RESOLVIDOS não incluía 'nodata_nan' (só 'nodata_sentinela'
+        e 'mes_ausente'), então um mês persistido como 'nodata_nan' era
+        reprocessado a cada execução normal — ignorando o mecanismo
+        controlado e o teto de 3 tentativas. Requisito 1 da revisão."""
+        pd.DataFrame([_resultado_falso(1991, 1, status='nodata_nan', valor_mm=None)]
+                     ).to_csv(self.csv_path, index=False)
+        pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4)])
+        self.assertNotIn((1991, 1), pendentes)
+
+    def test_f_mes_nodata_nan_continua_elegivel_no_reprocessamento_controlado(self):
+        """Requisito 2 da revisão — mesmo não sendo retentado pela
+        retomada normal (test_e), 'nodata_nan' continua sendo
+        candidato explícito em reprocessar_ausentes_ou_nodata(), sob o
+        teto de tentativas."""
+        pd.DataFrame([{**_resultado_falso(1991, 1, status='nodata_nan', valor_mm=None),
+                        piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO: 0}]).to_csv(
+            self.csv_path, index=False)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='nodata_nan',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
+
+    def test_g_falha_continua_aparecendo_na_retomada_normal(self):
+        """Requisito 3 da revisão — falhas (fora de STATUS_RESOLVIDOS)
+        continuam pendentes na retomada normal, comportamento
+        inalterado por esta correção."""
+        pd.DataFrame([_resultado_falso(1991, 1, status='erro_inesperado', valor_mm=None)]
+                     ).to_csv(self.csv_path, index=False)
+        pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4)])
+        self.assertIn((1991, 1), pendentes)
+
+    def test_h_ok_e_zero_real_continuam_nao_pendentes(self):
+        """Requisito 4 da revisão — valores científicos válidos
+        (ok/zero_real) nunca são pendentes, com ou sem a correção."""
+        pd.DataFrame([_resultado_falso(1991, 1, status='ok', valor_mm=10.0),
+                       _resultado_falso(1991, 4, status='zero_real', valor_mm=0.0)]
+                     ).to_csv(self.csv_path, index=False)
+        pendentes = piloto.meses_pendentes(meses=[(1991, 1), (1991, 4), (1991, 7)])
+        self.assertEqual(pendentes, [(1991, 7)])
+
+
+class StatusResolvidosDerivadoTestCase(unittest.TestCase):
+    """Requisito da revisão — STATUS_RESOLVIDOS deve ser DERIVADO de
+    STATUS_RESOLVIDO_REPROCESSAMENTO e STATUS_NODATA_REPROCESSAMENTO,
+    nunca uma lista solta que pode divergir de novo no futuro."""
+
+    def test_a_e_a_uniao_exata_das_duas_constantes(self):
+        self.assertEqual(piloto.STATUS_RESOLVIDOS,
+                          piloto.STATUS_RESOLVIDO_REPROCESSAMENTO
+                          | piloto.STATUS_NODATA_REPROCESSAMENTO)
+
+    def test_b_contem_nodata_nan(self):
+        self.assertIn('nodata_nan', piloto.STATUS_RESOLVIDOS)
+
+    def test_c_nao_contem_status_de_falha_ou_valor_invalido(self):
+        for status in piloto.STATUS_FALHA_OU_INVALIDO_CONHECIDOS:
+            self.assertNotIn(status, piloto.STATUS_RESOLVIDOS)
+
 
 class ExecutarPilotoTestCase(unittest.TestCase):
     """Orquestração fim a fim com v3.extrair_pixel_mensal mockado —
@@ -149,6 +212,328 @@ class ExecutarPilotoTestCase(unittest.TestCase):
             resultado_final = piloto.executar_piloto(meses=[(1991, 1)])
         self.assertEqual(len(resultado_final), 1)
         self.assertEqual(resultado_final.iloc[0]['status'], 'ok')
+
+    def test_e_executar_piloto_nunca_retenta_ausente_ou_nodata_sozinho(self):
+        """meses_pendentes/executar_piloto tratam mes_ausente/
+        nodata_sentinela como RESOLVIDOS por padrão — só
+        reprocessar_ausentes_ou_nodata() (chamada explícita) os
+        retenta."""
+        chamadas = []
+
+        def _fake(ano, mes):
+            chamadas.append((ano, mes))
+            return _resultado_falso(ano, mes, status='mes_ausente', valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.executar_piloto(meses=[(1991, 1)])
+            piloto.executar_piloto(meses=[(1991, 1)])   # segunda chamada normal
+        self.assertEqual(len(chamadas), 1, "mes_ausente não deveria ser retentado por "
+                                            "executar_piloto sozinho")
+
+
+class ReprocessarAusentesOuNodataTestCase(unittest.TestCase):
+    """Fase 2C.3B, item 1a — mecanismo EXPLÍCITO e CONTROLADO, com
+    teto rígido de tentativas, nunca indefinido."""
+
+    def setUp(self):
+        tmpdir_ctx = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir_ctx.cleanup)
+        self.tmpdir = Path(tmpdir_ctx.name)
+        self.csv_path = self.tmpdir / 'chirps_v3_piloto.csv'
+        p1 = patch.object(piloto, 'DATA_PILOTO_CSV', self.csv_path)
+        p1.start()
+        self.addCleanup(p1.stop)
+
+    def _semear(self, status='mes_ausente', tentativas=0):
+        linha = _resultado_falso(1991, 1, status=status, valor_mm=None)
+        linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas
+        pd.DataFrame([linha]).to_csv(self.csv_path, index=False)
+
+    def test_a_reprocessa_mes_ausente_e_incrementa_contador(self):
+        self._semear(status='mes_ausente', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='mes_ausente',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
+
+    def test_b_para_de_reprocessar_ao_atingir_o_teto(self):
+        self._semear(status='mes_ausente', tentativas=piloto.MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA)
+        chamado = {'n': 0}
+
+        def _fake(ano, mes):
+            chamado['n'] += 1
+            return _resultado_falso(ano, mes, status='mes_ausente', valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.reprocessar_ausentes_ou_nodata()
+        self.assertEqual(chamado['n'], 0, "não deveria tentar de novo após atingir o teto")
+
+    def test_c_nunca_tentativas_indefinidas_mesmo_chamando_varias_vezes(self):
+        """Mesmo chamando a função repetidamente (simulando um operador
+        insistente), o contador nunca ultrapassa o teto e as
+        requisições param."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        chamadas_totais = {'n': 0}
+
+        def _fake(ano, mes):
+            chamadas_totais['n'] += 1
+            return _resultado_falso(ano, mes, status='nodata_sentinela', valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(10):   # bem mais que o teto
+                piloto.reprocessar_ausentes_ou_nodata()
+        self.assertEqual(chamadas_totais['n'], piloto.MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA)
+
+    def test_d_mes_resolvido_sai_da_lista_de_candidatos(self):
+        self._semear(status='mes_ausente', tentativas=1)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='ok', valor_mm=50.0)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'ok')
+        # não deveria mais aparecer como esgotado nem candidato
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [])
+
+    def test_e_restringe_a_meses_explicitos_quando_fornecido(self):
+        linhas = [
+            {**_resultado_falso(1991, 1, status='mes_ausente', valor_mm=None),
+             piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO: 0},
+            {**_resultado_falso(1991, 4, status='mes_ausente', valor_mm=None),
+             piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO: 0},
+        ]
+        pd.DataFrame(linhas).to_csv(self.csv_path, index=False)
+        chamadas = []
+
+        def _fake(ano, mes):
+            chamadas.append((ano, mes))
+            return _resultado_falso(ano, mes, status='mes_ausente', valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.reprocessar_ausentes_ou_nodata(meses=[(1991, 1)])
+        self.assertEqual(chamadas, [(1991, 1)])
+
+    def test_f_nao_afeta_meses_com_valor_valido(self):
+        pd.DataFrame([{**_resultado_falso(1991, 1, status='ok', valor_mm=10.0),
+                        piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO: 0}]).to_csv(
+            self.csv_path, index=False)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           side_effect=AssertionError("não deveria ser chamado")), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        self.assertEqual(resultado.iloc[0]['status'], 'ok')
+
+    def test_g_meses_esgotados_reprocessamento_lista_corretamente(self):
+        self._semear(status='nodata_sentinela',
+                      tentativas=piloto.MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA)
+        esgotados = piloto.meses_esgotados_reprocessamento()
+        self.assertEqual(esgotados, [(1991, 1)])
+
+    def test_h_falha_de_rede_nao_apaga_a_classificacao_anterior(self):
+        """CORREÇÃO (auditoria independente) — uma falha de rede/extração
+        durante o reprocessamento NÃO pode sobrescrever a classificação
+        original (mes_ausente/nodata_sentinela) no CSV."""
+        self._semear(status='mes_ausente', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='erro_inesperado',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'mes_ausente',
+                          "a falha de rede não deveria sobrescrever a classificação anterior")
+
+    def test_i_falha_de_rede_conta_como_tentativa_real(self):
+        """O contador que define o teto tem que corresponder a
+        tentativas REAIS feitas — uma falha de rede é uma tentativa
+        real, mesmo não confirmando ausente/nodata."""
+        self._semear(status='mes_ausente', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(1991, 1, status='grade_inesperada',
+                                                          valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+
+    def test_j_teto_e_atingido_mesmo_com_falhas_de_rede_intercaladas(self):
+        """Antes da correção, uma sequência de falhas de rede nunca
+        incrementava o contador — o teto nunca era atingido, tentativas
+        efetivamente indefinidas. Intercala falha/confirmação/falha e
+        confirma que o teto (3) é atingido e respeitado."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['erro_inesperado', 'mes_ausente', 'arquivo_corrompido_ou_incompleto'])
+        chamadas = {'n': 0}
+
+        def _fake(ano, mes):
+            chamadas['n'] += 1
+            return _resultado_falso(ano, mes, status=next(desfechos), valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(5):   # bem mais que o teto
+                resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(chamadas['n'], 3, "só 3 tentativas reais, nunca indefinidas")
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 2)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 1)
+        # a classificação nunca foi apagada pelas duas falhas de rede
+        self.assertEqual(linha['status'], 'mes_ausente')
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [(1991, 1)])
+
+    def test_k_historico_de_falhas_e_preservado_e_concatenado(self):
+        """Preservar o histórico necessário para diagnosticar falhas —
+        cada falha deve aparecer no log, nunca substituir a anterior."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        desfechos = iter(['erro_verificacao_disponibilidade', 'leitura_de_pixel_falhou'])
+
+        def _fake(ano, mes):
+            return _resultado_falso(ano, mes, status=next(desfechos), valor_mm=None)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.reprocessar_ausentes_ou_nodata()
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        historico = linha[piloto.COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO]
+        self.assertIn('erro_verificacao_disponibilidade', historico)
+        self.assertIn('leitura_de_pixel_falhou', historico)
+
+    def test_l_falha_depois_resolvida_sai_do_pool_normalmente(self):
+        """Uma falha de rede não impede que uma tentativa POSTERIOR
+        resolva o mês normalmente."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['erro_inesperado', 'ok'])
+
+        def _fake(ano, mes):
+            status = next(desfechos)
+            valor = 42.0 if status == 'ok' else None
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            piloto.reprocessar_ausentes_ou_nodata()
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'ok')
+        self.assertEqual(linha['valor_mm'], 42.0)
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [])
+
+    def test_m_mes_ausente_nodata_nan_nodata_nan_ok(self):
+        """Cenário pedido pela revisão: mes_ausente -> nodata_nan ->
+        nodata_nan -> ok. 'nodata_nan' é uma NODATA (classe 2), não uma
+        falha (classe 3) — conta como confirmação de indisponibilidade
+        EM GERAL mesmo trocando de subtipo (mes_ausente -> nodata_nan),
+        e a sequência resolve dentro do teto de 3 tentativas."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['nodata_nan', 'nodata_nan', 'ok'])
+
+        def _fake(ano, mes):
+            status = next(desfechos)
+            valor = 42.0 if status == 'ok' else None
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(3):
+                resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'ok')
+        self.assertEqual(linha['valor_mm'], 42.0)
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 2)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 0)
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [])
+
+    def test_n_nodata_sentinela_valor_implausivel_alto_ok(self):
+        """Cenário pedido pela revisão: nodata_sentinela ->
+        valor_implausivel_alto -> ok. 'valor_implausivel_alto' é classe
+        3 (falha/valor inválido) — NÃO confirma NoData, NÃO resolve, e
+        NÃO apaga a classificação anterior (nodata_sentinela
+        preservado até a tentativa seguinte resolver)."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        desfechos = iter(['valor_implausivel_alto', 'ok'])
+
+        def _fake(ano, mes):
+            status = next(desfechos)
+            valor = 42.0 if status == 'ok' else 99999.0
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado_1 = piloto.reprocessar_ausentes_ou_nodata()
+        linha_1 = resultado_1[(resultado_1['ano'] == 1991) & (resultado_1['mes'] == 1)].iloc[0]
+        self.assertEqual(linha_1['status'], 'nodata_sentinela',
+                          "valor_implausivel_alto não pode apagar a classificação anterior")
+        self.assertEqual(linha_1[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha_1[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado_2 = piloto.reprocessar_ausentes_ou_nodata()
+        linha_2 = resultado_2[(resultado_2['ano'] == 1991) & (resultado_2['mes'] == 1)].iloc[0]
+        self.assertEqual(linha_2['status'], 'ok')
+        self.assertEqual(linha_2['valor_mm'], 42.0)
+        self.assertEqual(linha_2[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 2)
+
+    def test_o_tres_falhas_ou_valores_invalidos_consecutivos_atingem_o_teto(self):
+        """Três resultados de classe 3 (falha OU valor inválido, não
+        necessariamente o mesmo tipo) consecutivos atingem o teto —
+        nunca tentativas indefinidas, mesmo quando NENHUMA das
+        tentativas confirma NoData nem resolve."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['valor_negativo_nao_e_sentinela_conhecida', 'erro_inesperado',
+                           'valor_implausivel_alto'])
+        chamadas = {'n': 0}
+
+        def _fake(ano, mes):
+            chamadas['n'] += 1
+            status = next(desfechos)
+            valor = -5.0 if status == 'valor_negativo_nao_e_sentinela_conhecida' else \
+                (99999.0 if status == 'valor_implausivel_alto' else None)
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(5):   # bem mais que o teto
+                resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(chamadas['n'], 3, "só 3 tentativas reais, nunca indefinidas")
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+        self.assertEqual(linha['status'], 'mes_ausente',
+                          "classificação original nunca apagada por nenhuma das 3 falhas")
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [(1991, 1)])
+
+    def test_p_status_desconhecido_nunca_e_tratado_como_resolucao(self):
+        """Um status ainda não catalogado (nem em
+        STATUS_RESOLVIDO_REPROCESSAMENTO nem em
+        STATUS_NODATA_REPROCESSAMENTO) tem que cair na classe 3 por
+        exclusão — nunca implicitamente tratado como resolvido."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(
+                               1991, 1, status='status_futuro_nao_catalogado_ainda',
+                               valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'nodata_sentinela',
+                          "status desconhecido não pode sobrescrever a classificação anterior")
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
 
 
 class AvaliarQualidadePilotoTestCase(unittest.TestCase):
@@ -246,6 +631,55 @@ class AvaliarQualidadePilotoTestCase(unittest.TestCase):
         df['identificacao_arquivo__disponivel'] = True
         resultado = piloto.avaliar_qualidade_piloto(df)
         self.assertEqual(resultado['n_meses_disponiveis_no_servidor'], len(piloto.MESES_PILOTO))
+
+    def test_k_ignora_disponibilidade_de_meses_de_outros_lotes(self):
+        """CORREÇÃO (Fase 2C.3B, item 1b) — bug real: n_meses_
+        disponiveis_no_servidor somava identificacao_arquivo__
+        disponivel sobre TODO resultados_df, não só sobre
+        meses_esperados. Um arquivo de resultados com meses de OUTRO
+        lote não deveria inflar a contagem deste lote."""
+        meses_lote_1 = [(1981, m) for m in range(1, 13)]
+        meses_lote_2 = [(1982, m) for m in range(1, 13)]
+        linhas_lote_1 = [_resultado_falso(a, m) for a, m in meses_lote_1]
+        # lote 2 tem disponibilidade False em todos — não deveria
+        # contaminar a contagem do lote 1
+        linhas_lote_2 = [_resultado_falso(a, m) for a, m in meses_lote_2]
+        df = pd.DataFrame(linhas_lote_1 + linhas_lote_2)
+        df['identificacao_arquivo__disponivel'] = (
+            [True] * len(linhas_lote_1) + [False] * len(linhas_lote_2))
+        resultado = piloto.avaliar_qualidade_piloto(df, meses_esperados=meses_lote_1)
+        self.assertEqual(resultado['n_meses_disponiveis_no_servidor'], len(meses_lote_1))
+        self.assertEqual(resultado['n_meses_esperados'], len(meses_lote_1))
+
+    def test_l_ignora_falhas_de_meses_de_outros_lotes(self):
+        """Mesmo bug, segunda manifestação: meses_com_falha vinha de
+        presentes_map, que incluía TODAS as linhas de resultados_df —
+        uma falha em OUTRO lote não deveria aparecer na avaliação
+        deste lote."""
+        meses_lote_1 = [(1981, m) for m in range(1, 13)]
+        meses_lote_2 = [(1982, m) for m in range(1, 13)]
+        linhas_lote_1 = [_resultado_falso(a, m) for a, m in meses_lote_1]
+        linhas_lote_2 = [_resultado_falso(a, m) for a, m in meses_lote_2]
+        linhas_lote_2[0]['status'] = 'arquivo_corrompido_ou_incompleto'
+        linhas_lote_2[0]['valor_mm'] = None
+        df = pd.DataFrame(linhas_lote_1 + linhas_lote_2)
+        resultado = piloto.avaliar_qualidade_piloto(df, meses_esperados=meses_lote_1)
+        self.assertEqual(resultado['meses_com_falha'], [])
+        self.assertTrue(resultado['aprovado'])
+
+    def test_m_avalia_corretamente_o_lote_com_a_falha_quando_e_o_pedido(self):
+        """Reverso do teste anterior — quando meses_esperados É o lote
+        com a falha, ela deve continuar sendo detectada normalmente."""
+        meses_lote_1 = [(1981, m) for m in range(1, 13)]
+        meses_lote_2 = [(1982, m) for m in range(1, 13)]
+        linhas_lote_1 = [_resultado_falso(a, m) for a, m in meses_lote_1]
+        linhas_lote_2 = [_resultado_falso(a, m) for a, m in meses_lote_2]
+        linhas_lote_2[0]['status'] = 'arquivo_corrompido_ou_incompleto'
+        linhas_lote_2[0]['valor_mm'] = None
+        df = pd.DataFrame(linhas_lote_1 + linhas_lote_2)
+        resultado = piloto.avaliar_qualidade_piloto(df, meses_esperados=meses_lote_2)
+        self.assertEqual(len(resultado['meses_com_falha']), 1)
+        self.assertFalse(resultado['aprovado'])
 
 
 class CompararComDadosExistentesTestCase(unittest.TestCase):

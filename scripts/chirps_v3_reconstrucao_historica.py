@@ -45,6 +45,7 @@ DIRETORIO_SAIDA = ROOT / 'data' / 'chirps_v3_historico'
 CAMINHO_CSV = DIRETORIO_SAIDA / 'chirps_v3_1981_2011.csv'
 CAMINHO_METADATA_JSON = DIRETORIO_SAIDA / 'chirps_v3_1981_2011_metadata.json'
 RELATORIO_PLANO_PATH = ROOT / 'docs' / 'nmme-fase2c3b-plano-reconstrucao-historica.md'
+RELATORIO_LOTE_PATH = ROOT / 'docs' / 'nmme-fase2c3b-primeiro-lote-historico.md'
 
 # Confirma explicitamente, em tempo de import, que este módulo NUNCA
 # aponta para os mesmos arquivos do piloto ou da produção — ver
@@ -91,19 +92,68 @@ LOTES_HISTORICOS = definir_lotes()
 
 
 def meses_pendentes_reconstrucao(meses=PERIODO_COMPLETO):
-    """Retomada (item 4) — reaproveita scripts/chirps_v3_piloto.py::
-    meses_pendentes, parametrizada para o CSV separado desta tarefa."""
+    """Retomada (item 4/Fase 2C.3A) — reaproveita scripts/chirps_v3_
+    piloto.py::meses_pendentes, parametrizada para o CSV separado
+    desta tarefa."""
     return piloto.meses_pendentes(meses=meses, caminho_csv=CAMINHO_CSV)
 
 
-def executar_lote(lote, max_requisicoes=None, rate_limit_segundos=piloto.RATE_LIMIT_SEGUNDOS):
+# ══════════════════════════════════════════════════════════════════════════
+# Fase 2C.3B, item 3 — interface de execução por lote: selecionar
+# explicitamente, verificar estado, consultar pendentes
+# ══════════════════════════════════════════════════════════════════════════
+
+def obter_lote(indice_ou_lote):
+    """Aceita um ÍNDICE (int, 0-based, em LOTES_HISTORICOS) OU uma
+    lista explícita de (ano,mes) já pronta — nunca aceita 'o período
+    inteiro' por engano: um índice fora da faixa levanta ValueError
+    em vez de silenciosamente processar tudo."""
+    if isinstance(indice_ou_lote, int):
+        if not (0 <= indice_ou_lote < len(LOTES_HISTORICOS)):
+            raise ValueError(f"índice de lote inválido: {indice_ou_lote} "
+                              f"(válido: 0 a {len(LOTES_HISTORICOS) - 1})")
+        return LOTES_HISTORICOS[indice_ou_lote]
+    return list(indice_ou_lote)
+
+
+def listar_lotes():
+    """Item 3 — 'selecionar explicitamente um lote': lista índice,
+    período e tamanho de cada lote, para escolha explícita antes de
+    executar."""
+    return [{'indice': i, 'inicio': f'{lote[0][0]}-{lote[0][1]:02d}',
+             'fim': f'{lote[-1][0]}-{lote[-1][1]:02d}', 'n_meses': len(lote)}
+            for i, lote in enumerate(LOTES_HISTORICOS)]
+
+
+def meses_pendentes_lote(indice_ou_lote):
+    """Item 3 — 'consultar os meses pendentes' de UM lote específico."""
+    lote = obter_lote(indice_ou_lote)
+    return meses_pendentes_reconstrucao(meses=lote)
+
+
+def estado_lote(indice_ou_lote, caminho_csv=None):
+    """Item 3 — 'verificar seu estado': avalia a qualidade (4
+    dimensões, scripts/chirps_v3_piloto.py::avaliar_qualidade_piloto,
+    já corrigido no item 1b desta revisão para nunca contar meses de
+    OUTROS lotes) exclusivamente sobre os meses DESTE lote — mesmo que
+    CAMINHO_CSV já tenha registros de outros lotes acumulados."""
+    lote = obter_lote(indice_ou_lote)
+    if caminho_csv is None:
+        caminho_csv = CAMINHO_CSV
+    resultados_df = piloto._carregar_resultados_persistidos(caminho_csv)
+    return piloto.avaliar_qualidade_piloto(resultados_df, meses_esperados=lote)
+
+
+def executar_lote(indice_ou_lote, max_requisicoes=None,
+                   rate_limit_segundos=piloto.RATE_LIMIT_SEGUNDOS):
     """Executa UM lote explícito (nunca o período completo de uma vez
-    só) — reaproveita scripts/chirps_v3_piloto.py::executar_piloto
-    (mesma validação por mês via _chirps_v3.py::extrair_pixel_mensal,
-    já testada no piloto de 17 meses), gravando em CAMINHO_CSV
-    (diretório separado). `max_requisicoes` default = o próprio
-    tamanho do lote — nunca processa além do lote pedido numa
-    chamada."""
+    só, nunca os demais lotes automaticamente — item 3) — reaproveita
+    scripts/chirps_v3_piloto.py::executar_piloto (mesma validação por
+    mês via _chirps_v3.py::extrair_pixel_mensal, já testada no piloto
+    de 17 meses), gravando em CAMINHO_CSV (diretório separado).
+    `max_requisicoes` default = o próprio tamanho do lote — nunca
+    processa além do lote pedido numa chamada."""
+    lote = obter_lote(indice_ou_lote)
     limite = max_requisicoes if max_requisicoes is not None else len(lote)
     return piloto.executar_piloto(meses=lote, max_requisicoes=limite,
                                    rate_limit_segundos=rate_limit_segundos,
@@ -111,11 +161,10 @@ def executar_lote(lote, max_requisicoes=None, rate_limit_segundos=piloto.RATE_LI
 
 
 def avaliar_qualidade_reconstrucao(resultados_df, meses_esperados=PERIODO_COMPLETO):
-    """Validação individual de cada mês (item 4) — reaproveita
-    scripts/chirps_v3_piloto.py::avaliar_qualidade_piloto (mesma
-    distinção de 4 dimensões corrigida no item 3 desta revisão:
-    disponibilidade no servidor, sucesso da extração, valor válido
-    disponível, cobertura temporal completa)."""
+    """Validação individual de cada mês (item 4/Fase 2C.3A) —
+    reaproveita scripts/chirps_v3_piloto.py::avaliar_qualidade_piloto
+    (mesma distinção de 4 dimensões, corrigida no item 1b desta
+    revisão para nunca contar meses fora de `meses_esperados`)."""
     return piloto.avaliar_qualidade_piloto(resultados_df, meses_esperados=meses_esperados)
 
 
@@ -152,9 +201,21 @@ def montar_plano_reconstrucao():
         },
         'retomada': (
             'meses_pendentes_reconstrucao() reusa scripts/chirps_v3_piloto.py::'
-            'meses_pendentes — um mês com resultado já RESOLVIDO (ok/zero_real/'
-            'nodata_sentinela/mes_ausente) nunca é reprocessado; falha real é retentada na '
-            'próxima execução do mesmo lote.'
+            'meses_pendentes — um mês com status em STATUS_RESOLVIDOS nunca é reprocessado '
+            'pela retomada normal. CORREÇÃO (revisão adicional) — esta descrição era uma lista '
+            'hardcoded separada que divergiu quando \'nodata_nan\' foi reconhecido em '
+            'scripts/chirps_v3_piloto.py; agora é construída a partir das mesmas constantes que '
+            'definem STATUS_RESOLVIDOS, para nunca mais divergir. Duas classes distintas, nunca '
+            'confundidas: (1) valor científico VÁLIDO — '
+            + '/'.join(sorted(piloto.STATUS_RESOLVIDO_REPROCESSAMENTO))
+            + ' (STATUS_RESOLVIDO_REPROCESSAMENTO); (2) SEM valor válido, mas considerado '
+            '"resolvido" só para fins de retomada automática (nunca para aprovação científica) '
+            '— ' + '/'.join(sorted(piloto.STATUS_NODATA_REPROCESSAMENTO))
+            + ' (STATUS_NODATA_REPROCESSAMENTO) — esses três só podem ser retentados pelo '
+            'mecanismo controlado scripts/chirps_v3_piloto.py::reprocessar_ausentes_ou_nodata(), '
+            'respeitando o teto de tentativas, nunca pela retomada normal. Falha real (rede/'
+            'arquivo/grade/leitura) ou valor inválido/implausível — fora de STATUS_RESOLVIDOS — '
+            'é retentado na próxima execução normal do mesmo lote.'
         ),
         'validacao_individual_por_mes': (
             'Cada mês passa pelas mesmas verificações do piloto (scripts/_chirps_v3.py::'
@@ -179,6 +240,125 @@ def montar_plano_reconstrucao():
             "docs/nmme-fase2c3a-piloto-chirps-v3.md) antes de qualquer uso na Fase 2C.3C.",
         ],
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Item 4 — relatório com os resultados do primeiro lote, a análise de
+# sensibilidade espacial (referenciada, não duplicada) e o estado geral
+# da reconstrução histórica
+# ══════════════════════════════════════════════════════════════════════════
+
+def montar_relatorio_lote(indice):
+    """Item 3/4 — dados do lote pedido (qualidade + comparação
+    descritiva) e o estado GERAL da reconstrução (quantos lotes têm
+    cobertura completa) — nunca dispara execução de outros lotes, só
+    lê o que já está persistido."""
+    lote = obter_lote(indice)
+    resultados_df = piloto._carregar_resultados_persistidos(CAMINHO_CSV)
+    if resultados_df.empty:
+        df_lote = resultados_df
+    else:
+        lote_set = set(lote)
+        df_lote = resultados_df[
+            resultados_df.apply(lambda r: (int(r['ano']), int(r['mes'])) in lote_set, axis=1)]
+
+    qualidade = estado_lote(indice, caminho_csv=CAMINHO_CSV)
+    comparacao = piloto.comparar_com_dados_existentes(df_lote)
+
+    estado_geral = []
+    for i in range(len(LOTES_HISTORICOS)):
+        q = estado_lote(i, caminho_csv=CAMINHO_CSV)
+        estado_geral.append({
+            'indice': i, 'periodo': f"{LOTES_HISTORICOS[i][0][0]}-{LOTES_HISTORICOS[i][0][1]:02d} "
+                                     f"a {LOTES_HISTORICOS[i][-1][0]}-{LOTES_HISTORICOS[i][-1][1]:02d}",
+            'cobertura_temporal_completa': q['cobertura_temporal_completa'],
+            'n_meses_com_valor_valido': q['n_meses_com_valor_valido'],
+            'n_meses_esperados': q['n_meses_esperados'],
+        })
+    n_lotes_completos = sum(1 for e in estado_geral if e['cobertura_temporal_completa'])
+
+    return {
+        'indice_lote': indice,
+        'periodo_lote': f"{lote[0][0]}-{lote[0][1]:02d} a {lote[-1][0]}-{lote[-1][1]:02d}",
+        'n_meses_lote': len(lote),
+        'qualidade_lote': qualidade,
+        'comparacao_lote': comparacao,
+        'estado_geral_reconstrucao': {
+            'n_lotes_total': len(LOTES_HISTORICOS),
+            'n_lotes_completos': n_lotes_completos,
+            'lotes': estado_geral,
+        },
+        'sensibilidade_espacial_referencia': {
+            'relatorio': str(sens_relatorio_relpath()),
+            'nota': 'Análise de sensibilidade espacial (item 2) apresentada SEPARADAMENTE — '
+                    'ver o relatório dedicado, não duplicada aqui.',
+        },
+    }
+
+
+def sens_relatorio_relpath():
+    import chirps_v3_sensibilidade_espacial as sens
+    return sens.RELATORIO_SENSIBILIDADE_PATH.relative_to(ROOT)
+
+
+def gerar_relatorio_lote_markdown(dados):
+    q = dados['qualidade_lote']
+    comp = dados['comparacao_lote']
+    estado = dados['estado_geral_reconstrucao']
+    linhas = [
+        f"# Primeiro lote histórico CHIRPS v3.0 — lote {dados['indice_lote']} "
+        f"({dados['periodo_lote']}) — Fase 2C.3B",
+        "",
+        "**Relatório técnico — não substitui dados operacionais, não calcula skill, não "
+        "altera SARIMAX/XGBoost/dashboard/previsões históricas do CFSv2.**",
+        "",
+        "## 1. Resultados do lote",
+        "",
+        f"- Período: {dados['periodo_lote']} ({dados['n_meses_lote']} meses).",
+        f"- Veredito: **{'APROVADO' if q['aprovado'] else 'REPROVADO'}**.",
+        f"- {q['interpretacao']}",
+        "",
+        "### Quatro dimensões",
+        "",
+        f"1. Disponibilidade no servidor: {q['n_meses_disponiveis_no_servidor']}/"
+        f"{q['n_meses_esperados']}.",
+        f"2. Extração bem-sucedida: {q['n_meses_com_extracao_bem_sucedida']}/"
+        f"{q['n_meses_esperados']}.",
+        f"3. Valor válido disponível: {q['n_meses_com_valor_valido']}/{q['n_meses_esperados']}.",
+        f"4. Cobertura temporal completa: "
+        f"{'SIM' if q['cobertura_temporal_completa'] else 'NÃO'}.",
+        "",
+        "## 2. Comparação com os dados existentes (descritiva)",
+        "",
+        f"- {comp.get('interpretacao', 'Sem meses válidos para comparar.')}",
+        "",
+        "## 3. Análise de sensibilidade espacial",
+        "",
+        f"- {dados['sensibilidade_espacial_referencia']['nota']} Ver "
+        f"`{dados['sensibilidade_espacial_referencia']['relatorio']}`.",
+        "",
+        "## 4. Estado geral da reconstrução histórica",
+        "",
+        f"- Lotes com cobertura temporal completa: {estado['n_lotes_completos']}/"
+        f"{estado['n_lotes_total']}.",
+        "",
+        "| Lote | Período | Cobertura completa | Meses válidos |",
+        "|---|---|---|---|",
+    ]
+    for e in estado['lotes']:
+        linhas.append(f"| {e['indice']} | {e['periodo']} | "
+                       f"{'SIM' if e['cobertura_temporal_completa'] else 'não'} | "
+                       f"{e['n_meses_com_valor_valido']}/{e['n_meses_esperados']} |")
+    linhas += [
+        "",
+        "## Restrições respeitadas",
+        "",
+        "- Nenhum dado operacional foi substituído.",
+        "- SARIMAX, XGBoost, dashboard e as previsões históricas do CFSv2 não foram alterados.",
+        "- Nenhum indicador de habilidade preditiva foi calculado.",
+        "- Os demais lotes NÃO foram iniciados automaticamente.",
+    ]
+    return '\n'.join(linhas) + '\n'
 
 
 def gerar_relatorio_plano_markdown(plano):
@@ -257,8 +437,60 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run-plan', action='store_true')
     ap.add_argument('--gerar-relatorio', action='store_true',
-                     help='Escreve o relatório do plano em docs/ — não executa rede.')
+                     help='Escreve o relatório do PLANO geral em docs/ — não executa rede.')
+    ap.add_argument('--listar-lotes', action='store_true',
+                     help='Lista todos os lotes (índice, período, tamanho) — não executa rede.')
+    ap.add_argument('--lote', type=int, default=None,
+                     help='Seleciona explicitamente um lote por índice (0-based) para as ações '
+                          'abaixo. Item 3 da revisão: "selecionar explicitamente um lote".')
+    ap.add_argument('--estado', action='store_true',
+                     help='Com --lote N: mostra o estado atual do lote N (não executa rede).')
+    ap.add_argument('--meses-pendentes', action='store_true',
+                     help='Com --lote N: lista os meses pendentes do lote N (não executa rede).')
+    ap.add_argument('--executar-lote-real', action='store_true',
+                     help='Com --lote N: executa REALMENTE (rede) o lote N — só esse lote, '
+                          'nunca os demais automaticamente.')
+    ap.add_argument('--gerar-relatorio-lote', action='store_true',
+                     help='Com --lote N: gera o relatório do lote N + estado geral da '
+                          'reconstrução (não executa rede).')
     args = ap.parse_args()
+
+    if args.listar_lotes:
+        for l in listar_lotes():
+            print(f"  lote {l['indice']}: {l['inicio']} a {l['fim']} ({l['n_meses']} meses)")
+        return
+
+    if args.lote is not None:
+        if args.estado:
+            q = estado_lote(args.lote)
+            print(f"=== Estado do lote {args.lote} ===")
+            print(f"  aprovado={q['aprovado']} cobertura_temporal_completa="
+                  f"{q['cobertura_temporal_completa']}")
+            print(f"  {q['interpretacao']}")
+            return
+        if args.meses_pendentes:
+            pendentes = meses_pendentes_lote(args.lote)
+            print(f"=== Meses pendentes do lote {args.lote} ===")
+            print(f"  {len(pendentes)} pendentes: "
+                  f"{', '.join(f'{a}-{m:02d}' for a, m in pendentes)}")
+            return
+        if args.executar_lote_real:
+            lote = obter_lote(args.lote)
+            print(f"=== Executando lote {args.lote} ({len(lote)} meses) — REDE ===")
+            resultado_df = executar_lote(args.lote)
+            qualidade = estado_lote(args.lote)
+            print(f"\naprovado={qualidade['aprovado']}")
+            return
+        if args.gerar_relatorio_lote:
+            dados = montar_relatorio_lote(args.lote)
+            relatorio = gerar_relatorio_lote_markdown(dados)
+            RELATORIO_LOTE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            RELATORIO_LOTE_PATH.write_text(relatorio)
+            print(f"  ✅ {RELATORIO_LOTE_PATH.relative_to(ROOT)}")
+            return
+        print(f"--lote {args.lote} selecionado — use --estado, --meses-pendentes, "
+              "--executar-lote-real ou --gerar-relatorio-lote.")
+        return
 
     plano = imprimir_plano()
 
