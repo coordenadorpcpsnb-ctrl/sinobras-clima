@@ -78,13 +78,17 @@ MAX_REQUISICOES_POR_EXECUCAO = 30   # limite de segurança — piloto tem 17, nu
 #       o teto (`max_tentativas`), então "tentativas" agora corresponde
 #       de fato a tentativas.
 #   COLUNA_CONFIRMACOES_REPROCESSAMENTO  — subconjunto das tentativas
-#       em que o resultado confirmou o MESMO tipo (ausente/nodata) de
-#       novo.
+#       em que o resultado confirmou indisponibilidade/NoData EM GERAL
+#       de novo (ver STATUS_NODATA_REPROCESSAMENTO logo abaixo — NÃO
+#       precisa ser o MESMO subtipo de antes: mes_ausente seguido de
+#       nodata_nan também é uma "confirmação", porque as duas
+#       significam "ainda sem valor válido").
 #   COLUNA_FALHAS_REPROCESSAMENTO        — subconjunto das tentativas
-#       em que houve falha de rede/extração (nem confirmação, nem
-#       resolução) — nessas, a linha persistida NUNCA é sobrescrita: a
-#       classificação anterior (status/valor_mm/etc.) é preservada
-#       intacta, só os contadores e o histórico de diagnóstico mudam.
+#       em que houve falha de rede/extração OU um valor lido mas
+#       inválido/implausível (nem confirmação, nem resolução) — nessas,
+#       a linha persistida NUNCA é sobrescrita: a classificação
+#       anterior (status/valor_mm/etc.) é preservada intacta, só os
+#       contadores e o histórico de diagnóstico mudam.
 # COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO guarda um log compacto
 # (status + timestamp de cada falha, concatenados) para diagnosticar
 # sem precisar reprocessar de novo.
@@ -94,14 +98,47 @@ COLUNA_CONFIRMACOES_REPROCESSAMENTO = 'confirmacoes_reprocessamento_ausente_ou_n
 COLUNA_FALHAS_REPROCESSAMENTO = 'falhas_reprocessamento_ausente_ou_nodata'
 COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO = 'historico_falhas_reprocessamento_ausente_ou_nodata'
 
-# Desfechos de extrair_pixel_mensal() que NÃO são confirmação de
-# ausente/nodata nem resolução (ok/zero_real) — falha de rede/extração
-# durante a TENTATIVA de reprocessamento (scripts/_chirps_v3.py::
-# extrair_pixel_mensal nunca levanta exceção, sempre devolve um destes
-# status em vez de propagar o erro).
-STATUS_FALHA_REPROCESSAMENTO = {
+# CORREÇÃO (revisão adicional) — extrair_pixel_mensal() (via
+# scripts/_chirps_v3.py::classificar_valor()) pode devolver mais
+# status do que os dois (mes_ausente/nodata_sentinela) que a versão
+# anterior tratava explicitamente: classificar_valor() também produz
+# 'nodata_nan', 'valor_negativo_nao_e_sentinela_conhecida' e
+# 'valor_implausivel_alto'. A versão anterior tratava qualquer status
+# fora de STATUS_FALHA_REPROCESSAMENTO (que não incluía esses três)
+# como "resolvido" por omissão — ou seja, um valor implausível ou um
+# NaN de ponto flutuante seriam gravados como se o mês estivesse
+# definitivamente resolvido, quando na verdade não há valor válido
+# algum. Três classes EXPLÍCITAS e EXAUSTIVAS agora — nenhum status
+# cai implicitamente em "resolvido":
+#   1. STATUS_RESOLVIDO_REPROCESSAMENTO — só ok/zero_real. Único caso
+#      que encerra o reprocessamento como resolução válida; o mês sai
+#      da lista de candidatos.
+#   2. STATUS_NODATA_REPROCESSAMENTO — mes_ausente, nodata_sentinela,
+#      nodata_nan (as três formas de "ainda sem valor válido"
+#      devolvidas por classificar_valor()/extrair_pixel_mensal).
+#      Continua sujeito ao MESMO teto controlado de tentativas — nunca
+#      indefinido, valendo igualmente para as três, não só para as
+#      duas originais.
+#   3. Falha ou valor inválido — TUDO que não está em (1) nem em (2),
+#      seja um status conhecido (erros de rede/arquivo/grade/leitura
+#      já existentes, valor_negativo_nao_e_sentinela_conhecida,
+#      valor_implausivel_alto) seja um status futuro AINDA NÃO
+#      catalogado. É a classe "catch-all", verificada por EXCLUSÃO
+#      depois de checar (1) e (2) explicitamente — nunca uma lista
+#      fechada, exatamente para que um status desconhecido nunca seja
+#      interpretado implicitamente como resolução. Nessas tentativas a
+#      linha persistida NUNCA é sobrescrita — só conta a tentativa e
+#      registra o desfecho no histórico de diagnóstico
+#      (COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO).
+STATUS_RESOLVIDO_REPROCESSAMENTO = {'ok', 'zero_real'}
+STATUS_NODATA_REPROCESSAMENTO = {'mes_ausente', 'nodata_sentinela', 'nodata_nan'}
+# Documentados por completude/diagnóstico (aparecem no histórico de
+# falhas) — a classificação REAL de "falha ou valor inválido" nunca é
+# esta lista fechada, é "não está em (1) nem em (2)" (ver acima).
+STATUS_FALHA_OU_INVALIDO_CONHECIDOS = {
     'erro_verificacao_disponibilidade', 'grade_inesperada', 'leitura_de_pixel_falhou',
     'arquivo_corrompido_ou_incompleto', 'erro_inesperado',
+    'valor_negativo_nao_e_sentinela_conhecida', 'valor_implausivel_alto',
 }
 
 
@@ -193,17 +230,19 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
     """Mecanismo EXPLÍCITO (precisa ser chamado deliberadamente — nunca
     invocado por dentro de executar_piloto/meses_pendentes, que tratam
     mes_ausente/nodata_sentinela como resolvidos por padrão) para dar
-    aos meses classificados como AUSENTES ou NODATA uma nova chance —
-    útil quando o CHIRPS Final publica um mês atrasado, ou quando um
-    NoData pontual foi transitório do lado do servidor.
+    aos meses classificados como AUSENTES ou NODATA (STATUS_NODATA_
+    REPROCESSAMENTO) uma nova chance — útil quando o CHIRPS Final
+    publica um mês atrasado, ou quando um NoData pontual foi
+    transitório do lado do servidor.
 
     Nunca tentativas indefinidas: cada mês carrega um contador
     persistido (COLUNA_TENTATIVAS_REPROCESSAMENTO) que conta toda
     TENTATIVA REAL (toda chamada a extrair_pixel_mensal feita por este
-    mecanismo para aquele mês) — não importa se o desfecho foi
-    confirmação do mesmo status, resolução, ou falha de rede/extração.
-    Ao atingir `max_tentativas`, o mês para de ser candidato,
-    permanentemente, até intervenção manual (não há reset automático).
+    mecanismo para aquele mês) — não importa qual das três classes de
+    desfecho ocorreu (ver STATUS_RESOLVIDO_REPROCESSAMENTO/
+    STATUS_NODATA_REPROCESSAMENTO acima). Ao atingir `max_tentativas`,
+    o mês para de ser candidato, permanentemente, até intervenção
+    manual (não há reset automático).
 
     CORREÇÃO (auditoria independente) — a versão anterior só contava
     como "tentativa" um resultado que CONFIRMASSE ausente/nodata de
@@ -211,31 +250,46 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
     teto de 3 nunca era atingido por uma sequência de falhas — tentativa
     indefinida de fato) nem preservava a classificação anterior (a
     linha era sobrescrita pelo resultado da falha, apagando
-    mes_ausente/nodata_sentinela do CSV). Agora:
-    - COLUNA_TENTATIVAS_REPROCESSAMENTO sobe em toda chamada real — é
-      o contador que define o teto, e por isso corresponde de fato a
-      tentativas (nunca mais preso a "só quando confirma").
-    - COLUNA_CONFIRMACOES_REPROCESSAMENTO sobe só quando o resultado
-      confirma o mesmo tipo (ausente/nodata) de novo — diagnóstico
-      separado, nunca usado para o teto.
-    - COLUNA_FALHAS_REPROCESSAMENTO sobe quando a tentativa falha por
-      rede/extração (`STATUS_FALHA_REPROCESSAMENTO`); nesse caso a
-      linha persistida NUNCA é sobrescrita — a classificação anterior
-      (status/valor_mm/proveniência) é preservada intacta, só os três
-      contadores e COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO (log
-      compacto status@timestamp, concatenado, nunca substituído) mudam.
-      Isso cobre "preservar o histórico necessário para diagnosticar
-      falhas e evitar que um erro de rede apague indevidamente a
-      classificação anterior".
+    mes_ausente/nodata_sentinela do CSV).
 
-    Se o reprocessamento resolver o mês (status vira ok/zero_real), o
-    mês sai da lista de candidatos porque o status mudou — os
-    contadores continuam persistidos, só para diagnóstico.
+    CORREÇÃO (revisão adicional) — a versão anterior só reconhecia
+    explicitamente 'mes_ausente'/'nodata_sentinela'; qualquer outro
+    status (inclusive 'nodata_nan', 'valor_implausivel_alto',
+    'valor_negativo_nao_e_sentinela_conhecida', ou um status futuro
+    ainda não catalogado) caía num `else` e era tratado IMPLICITAMENTE
+    como resolução — sobrescrevendo a linha persistida com um valor
+    inválido/implausível como se fosse definitivo. Agora TRÊS classes
+    EXPLÍCITAS, checadas nesta ordem (nunca um `else` genérico):
+    1. status_novo em STATUS_RESOLVIDO_REPROCESSAMENTO (ok/zero_real)
+       — RESOLVIDO. Usa o resultado novo integralmente, sai do pool.
+    2. status_novo em STATUS_NODATA_REPROCESSAMENTO (mes_ausente,
+       nodata_sentinela, nodata_nan) — AINDA SEM VALOR VÁLIDO. Usa o
+       resultado novo integralmente (o subtipo pode mudar de uma
+       tentativa para outra — isso é informação real, não é
+       escondido) e COLUNA_CONFIRMACOES_REPROCESSAMENTO sobe. Aqui
+       "confirmação" significa confirmar indisponibilidade/NoData EM
+       GERAL, não necessariamente o MESMO subtipo da tentativa
+       anterior — mes_ausente seguido de nodata_nan também conta,
+       porque as duas significam "ainda sem valor válido".
+    3. Qualquer outro status — FALHA OU VALOR INVÁLIDO, verificado por
+       EXCLUSÃO (não é RESOLVIDO nem NODATA), nunca uma lista fechada:
+       cobre tanto os erros de rede/extração já catalogados quanto
+       'valor_negativo_nao_e_sentinela_conhecida'/
+       'valor_implausivel_alto' quanto qualquer status futuro ainda
+       não catalogado — nenhum deles é interpretado implicitamente
+       como resolução. A linha persistida NUNCA é sobrescrita nesse
+       caso — a classificação anterior (status/valor_mm/proveniência)
+       é preservada intacta, só os três contadores e
+       COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO (log compacto
+       status@timestamp, concatenado, nunca substituído) mudam. Isso
+       cobre "preservar o histórico necessário para diagnosticar
+       falhas e evitar que um erro de rede ou valor inválido apague
+       indevidamente a classificação anterior".
 
     `meses`, se fornecido, restringe ainda mais os candidatos a um
     subconjunto explícito (ex.: só os meses de um lote específico) —
-    nunca reprocessa nada fora de STATUS a reprocessar E (se `meses`
-    fornecido) fora dessa lista."""
+    nunca reprocessa nada fora de STATUS_NODATA_REPROCESSAMENTO E (se
+    `meses` fornecido) fora dessa lista."""
     if caminho_csv is None:
         caminho_csv = DATA_PILOTO_CSV
     persistidos = _carregar_resultados_persistidos(caminho_csv)
@@ -252,7 +306,7 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
     persistidos[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = (
         persistidos[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO].fillna(''))
 
-    elegivel = (persistidos['status'].isin({'mes_ausente', 'nodata_sentinela'})
+    elegivel = (persistidos['status'].isin(STATUS_NODATA_REPROCESSAMENTO)
                 & (persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO] < max_tentativas))
     if meses is not None:
         meses_set = set(meses)
@@ -276,10 +330,25 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
         status_novo = resultado_bruto['status']
         tentativas_novas = tentativas_ja_feitas + 1   # toda chamada real conta 1 tentativa
 
-        if status_novo in STATUS_FALHA_REPROCESSAMENTO:
-            # Falha de rede/extração — NUNCA sobrescreve a classificação
-            # anterior. Preserva a linha persistida inteira, só atualiza
-            # os contadores de diagnóstico e o log de falhas.
+        if status_novo in STATUS_RESOLVIDO_REPROCESSAMENTO:
+            # Classe 1 — RESOLVIDO. Usa o resultado novo integralmente.
+            resultado = resultado_bruto
+            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_novas
+            resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO] = confirmacoes_ja_feitas
+            resultado[COLUNA_FALHAS_REPROCESSAMENTO] = falhas_ja_feitas
+            resultado[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = historico_ja_feito
+        elif status_novo in STATUS_NODATA_REPROCESSAMENTO:
+            # Classe 2 — AINDA SEM VALOR VÁLIDO. Confirma indisponibilidade/
+            # NoData EM GERAL (não precisa ser o MESMO subtipo de antes).
+            resultado = resultado_bruto
+            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_novas
+            resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO] = confirmacoes_ja_feitas + 1
+            resultado[COLUNA_FALHAS_REPROCESSAMENTO] = falhas_ja_feitas
+            resultado[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = historico_ja_feito
+        else:
+            # Classe 3 — FALHA OU VALOR INVÁLIDO (por exclusão: não é
+            # nem (1) nem (2), inclui status futuro não catalogado).
+            # NUNCA sobrescreve a classificação persistida anterior.
             resultado = row.to_dict()
             entrada_log = f"{status_novo}@{resultado_bruto.get('data_extracao_utc', '')}"
             resultado[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = (
@@ -287,20 +356,12 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
             resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_novas
             resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO] = confirmacoes_ja_feitas
             resultado[COLUNA_FALHAS_REPROCESSAMENTO] = falhas_ja_feitas + 1
-        else:
-            # Confirmação (ausente/nodata de novo) ou resolução
-            # (ok/zero_real) — usa o resultado novo integralmente.
-            resultado = resultado_bruto
-            resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO] = tentativas_novas
-            resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO] = (
-                confirmacoes_ja_feitas + 1 if status_novo in {'mes_ausente', 'nodata_sentinela'}
-                else confirmacoes_ja_feitas)
-            resultado[COLUNA_FALHAS_REPROCESSAMENTO] = falhas_ja_feitas
-            resultado[COLUNA_HISTORICO_FALHAS_REPROCESSAMENTO] = historico_ja_feito
 
         novos.append(resultado)
-        rotulo_tentativa = (f"FALHA({status_novo}) — status anterior preservado: {resultado['status']}"
-                             if status_novo in STATUS_FALHA_REPROCESSAMENTO else f"status={status_novo}")
+        classe3 = (status_novo not in STATUS_RESOLVIDO_REPROCESSAMENTO
+                   and status_novo not in STATUS_NODATA_REPROCESSAMENTO)
+        rotulo_tentativa = (f"FALHA/INVÁLIDO({status_novo}) — status anterior preservado: "
+                             f"{resultado['status']}" if classe3 else f"status={status_novo}")
         print(f"  [reprocessamento {i+1}/{len(candidatos)}] {ano}-{mes:02d}: {rotulo_tentativa} "
               f"tentativas={resultado[COLUNA_TENTATIVAS_REPROCESSAMENTO]}/{max_tentativas} "
               f"confirmacoes={resultado[COLUNA_CONFIRMACOES_REPROCESSAMENTO]} "
@@ -318,19 +379,21 @@ def reprocessar_ausentes_ou_nodata(meses=None, max_tentativas=MAX_TENTATIVAS_REP
 
 def meses_esgotados_reprocessamento(caminho_csv=None,
                                      max_tentativas=MAX_TENTATIVAS_REPROCESSAMENTO_AUSENTE_OU_NODATA):
-    """Diagnóstico — lista os meses ausentes/NoData que já atingiram o
-    teto de TENTATIVAS REAIS (não candidatos a reprocessar
-    automaticamente nunca mais, sem intervenção manual). Usa
-    COLUNA_TENTATIVAS_REPROCESSAMENTO (tentativas reais, confirmação ou
-    falha) — não COLUNA_CONFIRMACOES_REPROCESSAMENTO, que sozinho
-    poderia nunca atingir o teto numa sequência de falhas de rede."""
+    """Diagnóstico — lista os meses ainda sem valor válido
+    (STATUS_NODATA_REPROCESSAMENTO: mes_ausente, nodata_sentinela ou
+    nodata_nan) que já atingiram o teto de TENTATIVAS REAIS (não
+    candidatos a reprocessar automaticamente nunca mais, sem
+    intervenção manual). Usa COLUNA_TENTATIVAS_REPROCESSAMENTO
+    (tentativas reais, de qualquer uma das três classes de desfecho) —
+    não COLUNA_CONFIRMACOES_REPROCESSAMENTO, que sozinho poderia nunca
+    atingir o teto numa sequência de falhas/valores inválidos."""
     if caminho_csv is None:
         caminho_csv = DATA_PILOTO_CSV
     persistidos = _carregar_resultados_persistidos(caminho_csv)
     if persistidos.empty or COLUNA_TENTATIVAS_REPROCESSAMENTO not in persistidos.columns:
         return []
     esgotados = persistidos[
-        persistidos['status'].isin({'mes_ausente', 'nodata_sentinela'})
+        persistidos['status'].isin(STATUS_NODATA_REPROCESSAMENTO)
         & (persistidos[COLUNA_TENTATIVAS_REPROCESSAMENTO].fillna(0).astype(int) >= max_tentativas)]
     return [(int(r['ano']), int(r['mes'])) for _, r in esgotados.iterrows()]
 

@@ -366,6 +366,112 @@ class ReprocessarAusentesOuNodataTestCase(unittest.TestCase):
         self.assertEqual(linha['valor_mm'], 42.0)
         self.assertEqual(piloto.meses_esgotados_reprocessamento(), [])
 
+    def test_m_mes_ausente_nodata_nan_nodata_nan_ok(self):
+        """Cenário pedido pela revisão: mes_ausente -> nodata_nan ->
+        nodata_nan -> ok. 'nodata_nan' é uma NODATA (classe 2), não uma
+        falha (classe 3) — conta como confirmação de indisponibilidade
+        EM GERAL mesmo trocando de subtipo (mes_ausente -> nodata_nan),
+        e a sequência resolve dentro do teto de 3 tentativas."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['nodata_nan', 'nodata_nan', 'ok'])
+
+        def _fake(ano, mes):
+            status = next(desfechos)
+            valor = 42.0 if status == 'ok' else None
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(3):
+                resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'ok')
+        self.assertEqual(linha['valor_mm'], 42.0)
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 2)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 0)
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [])
+
+    def test_n_nodata_sentinela_valor_implausivel_alto_ok(self):
+        """Cenário pedido pela revisão: nodata_sentinela ->
+        valor_implausivel_alto -> ok. 'valor_implausivel_alto' é classe
+        3 (falha/valor inválido) — NÃO confirma NoData, NÃO resolve, e
+        NÃO apaga a classificação anterior (nodata_sentinela
+        preservado até a tentativa seguinte resolver)."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        desfechos = iter(['valor_implausivel_alto', 'ok'])
+
+        def _fake(ano, mes):
+            status = next(desfechos)
+            valor = 42.0 if status == 'ok' else 99999.0
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado_1 = piloto.reprocessar_ausentes_ou_nodata()
+        linha_1 = resultado_1[(resultado_1['ano'] == 1991) & (resultado_1['mes'] == 1)].iloc[0]
+        self.assertEqual(linha_1['status'], 'nodata_sentinela',
+                          "valor_implausivel_alto não pode apagar a classificação anterior")
+        self.assertEqual(linha_1[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha_1[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado_2 = piloto.reprocessar_ausentes_ou_nodata()
+        linha_2 = resultado_2[(resultado_2['ano'] == 1991) & (resultado_2['mes'] == 1)].iloc[0]
+        self.assertEqual(linha_2['status'], 'ok')
+        self.assertEqual(linha_2['valor_mm'], 42.0)
+        self.assertEqual(linha_2[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 2)
+
+    def test_o_tres_falhas_ou_valores_invalidos_consecutivos_atingem_o_teto(self):
+        """Três resultados de classe 3 (falha OU valor inválido, não
+        necessariamente o mesmo tipo) consecutivos atingem o teto —
+        nunca tentativas indefinidas, mesmo quando NENHUMA das
+        tentativas confirma NoData nem resolve."""
+        self._semear(status='mes_ausente', tentativas=0)
+        desfechos = iter(['valor_negativo_nao_e_sentinela_conhecida', 'erro_inesperado',
+                           'valor_implausivel_alto'])
+        chamadas = {'n': 0}
+
+        def _fake(ano, mes):
+            chamadas['n'] += 1
+            status = next(desfechos)
+            valor = -5.0 if status == 'valor_negativo_nao_e_sentinela_conhecida' else \
+                (99999.0 if status == 'valor_implausivel_alto' else None)
+            return _resultado_falso(ano, mes, status=status, valor_mm=valor)
+
+        with patch.object(v3, 'extrair_pixel_mensal', side_effect=_fake), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            for _ in range(5):   # bem mais que o teto
+                resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(chamadas['n'], 3, "só 3 tentativas reais, nunca indefinidas")
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 3)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+        self.assertEqual(linha['status'], 'mes_ausente',
+                          "classificação original nunca apagada por nenhuma das 3 falhas")
+        self.assertEqual(piloto.meses_esgotados_reprocessamento(), [(1991, 1)])
+
+    def test_p_status_desconhecido_nunca_e_tratado_como_resolucao(self):
+        """Um status ainda não catalogado (nem em
+        STATUS_RESOLVIDO_REPROCESSAMENTO nem em
+        STATUS_NODATA_REPROCESSAMENTO) tem que cair na classe 3 por
+        exclusão — nunca implicitamente tratado como resolvido."""
+        self._semear(status='nodata_sentinela', tentativas=0)
+        with patch.object(v3, 'extrair_pixel_mensal',
+                           return_value=_resultado_falso(
+                               1991, 1, status='status_futuro_nao_catalogado_ainda',
+                               valor_mm=None)), \
+             patch.object(piloto.time, 'sleep', return_value=None):
+            resultado = piloto.reprocessar_ausentes_ou_nodata()
+        linha = resultado[(resultado['ano'] == 1991) & (resultado['mes'] == 1)].iloc[0]
+        self.assertEqual(linha['status'], 'nodata_sentinela',
+                          "status desconhecido não pode sobrescrever a classificação anterior")
+        self.assertEqual(linha[piloto.COLUNA_FALHAS_REPROCESSAMENTO], 1)
+        self.assertEqual(linha[piloto.COLUNA_CONFIRMACOES_REPROCESSAMENTO], 0)
+        self.assertEqual(linha[piloto.COLUNA_TENTATIVAS_REPROCESSAMENTO], 1)
+
 
 class AvaliarQualidadePilotoTestCase(unittest.TestCase):
     """Item 5 — reprova o piloto se algo comprometer a integridade."""
