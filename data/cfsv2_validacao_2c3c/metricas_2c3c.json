@@ -1,0 +1,916 @@
+{
+  "auditoria": {
+    "n_raw_total": 34560,
+    "n_raw_esperado": 34560,
+    "unicidade_init_lead_member_ok": true,
+    "vinte_quatro_membros_por_init_lead_ok": true,
+    "target_month_corresponde_a_init_mais_lead_ok": true,
+    "h1_igual_mes_corrente_ok": true,
+    "sem_valores_faltantes_ok": true,
+    "valores_faltantes_por_coluna": {
+      "init_date": 0,
+      "target_month": 0,
+      "lead": 0,
+      "member": 0,
+      "forecast_prec_mm": 0
+    },
+    "unidades_ok": true,
+    "periodo_cobertura_ok": true,
+    "n_inicializacoes_distintas": 240,
+    "localizacao_unica_ok": true,
+    "n_meses_alvo_distintos": 245,
+    "problemas": [],
+    "auditoria_aprovada": true
+  },
+  "STOP_ON_FAILURE": false,
+  "expanding_operational_simulation": {
+    "rotulo": "expanding_operational_simulation",
+    "n_registros_pareados": 34560,
+    "n_meses_alvo_distintos": 245,
+    "deterministico_por_horizonte": {
+      "1": {
+        "n": 240,
+        "rotulo": "H1 — previsão do mês corrente",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.8333162950399576
+        },
+        "anomalia": {
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.40860020549740955
+        },
+        "benchmark_climatologico": {
+          "bias": 7.326612982533047,
+          "mae": 40.79580612334468,
+          "rmse": 58.63469015628005
+        },
+        "rmsess_absoluto": -0.22467082681090722,
+        "rmsess_anomalia": -0.22467082681090722,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "2": {
+        "n": 240,
+        "rotulo": "H2 — horizonte futuro (+1 mês)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.8008073106791047
+        },
+        "anomalia": {
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.1697080703554077
+        },
+        "benchmark_climatologico": {
+          "bias": 7.516763010310824,
+          "mae": 40.6056560955669,
+          "rmse": 58.54423205572158
+        },
+        "rmsess_absoluto": -0.2777337158892277,
+        "rmsess_anomalia": -0.2777337158892277,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "3": {
+        "n": 240,
+        "rotulo": "H3 — horizonte futuro (+2 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": -5.718504548611112,
+          "mae": 55.743752673611105,
+          "rmse": 77.33356897598601,
+          "corr": 0.8110125881846395
+        },
+        "anomalia": {
+          "bias": -5.718504548611111,
+          "mae": 55.743752673611105,
+          "rmse": 77.333568975986,
+          "corr": 0.1390584362469991
+        },
+        "benchmark_climatologico": {
+          "bias": 6.948504635310825,
+          "mae": 40.8089157205669,
+          "rmse": 58.78050751059848
+        },
+        "rmsess_absoluto": -0.31563289007061224,
+        "rmsess_anomalia": -0.315632890070612,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "4": {
+        "n": 240,
+        "rotulo": "H4 — horizonte futuro (+3 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": 0.6995977083333302,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.8113816628303042
+        },
+        "anomalia": {
+          "bias": 0.6995977083333305,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.13395230955783594
+        },
+        "benchmark_climatologico": {
+          "bias": 7.310570010310826,
+          "mae": 40.6745050955669,
+          "rmse": 58.68107326217558
+        },
+        "rmsess_absoluto": -0.37893911502500477,
+        "rmsess_anomalia": -0.37893911502500477,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "5": {
+        "n": 240,
+        "rotulo": "H5 — horizonte futuro (+4 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.808356142647537
+        },
+        "anomalia": {
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.10529458730979825
+        },
+        "benchmark_climatologico": {
+          "bias": 7.283656690866381,
+          "mae": 40.70141841501134,
+          "rmse": 58.686300565503615
+        },
+        "rmsess_absoluto": -0.4471199300234603,
+        "rmsess_anomalia": -0.4471199300234603,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "6": {
+        "n": 240,
+        "rotulo": "H6 — horizonte futuro (+5 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": 7.854337604166668,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.8067463971029689
+        },
+        "anomalia": {
+          "bias": 7.854337604166667,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.09611617382291765
+        },
+        "benchmark_climatologico": {
+          "bias": 7.5431670103108255,
+          "mae": 40.441908095566895,
+          "rmse": 58.47156931895882
+        },
+        "rmsess_absoluto": -0.49054855492951965,
+        "rmsess_anomalia": -0.49054855492951965,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      }
+    },
+    "por_mes_do_ano": {
+      "por_mes": {
+        "1": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": 30.338309374999994,
+          "mae": 77.88063631944445,
+          "rmse": 93.33939279158515,
+          "corr": 0.10654775257672346
+        },
+        "2": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": 61.73393125,
+          "mae": 81.92229999999999,
+          "rmse": 98.51031846995517,
+          "corr": 0.2704879246888762
+        },
+        "3": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": 85.63257006944445,
+          "mae": 106.67804854166666,
+          "rmse": 123.48147917622256,
+          "corr": 0.18275196741741503
+        },
+        "4": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": -8.401968680555557,
+          "mae": 62.036248680555566,
+          "rmse": 81.07410253165104,
+          "corr": 0.2575003502709997
+        },
+        "5": {
+          "n": 120,
+          "grupo_sazonal": "transicao",
+          "amostra_suficiente": true,
+          "bias": -78.14552847222221,
+          "mae": 78.24875722222221,
+          "rmse": 98.58006750873648,
+          "corr": 0.31223091368920847
+        },
+        "6": {
+          "n": 120,
+          "grupo_sazonal": "seca",
+          "amostra_suficiente": true,
+          "bias": -4.910236041666667,
+          "mae": 5.638200208333334,
+          "rmse": 10.412359161452228,
+          "corr": 0.22214349915082993
+        },
+        "7": {
+          "n": 120,
+          "grupo_sazonal": "seca",
+          "amostra_suficiente": true,
+          "bias": -2.4251002083333333,
+          "mae": 2.701258263888889,
+          "rmse": 5.574238699504829,
+          "corr": 0.09923380361792422
+        },
+        "8": {
+          "n": 120,
+          "grupo_sazonal": "seca",
+          "amostra_suficiente": true,
+          "bias": -8.468687777777777,
+          "mae": 8.956708194444444,
+          "rmse": 15.679048059471887,
+          "corr": 0.15739613307051142
+        },
+        "9": {
+          "n": 120,
+          "grupo_sazonal": "transicao",
+          "amostra_suficiente": true,
+          "bias": -45.780768055555555,
+          "mae": 45.78660652777778,
+          "rmse": 56.81962467908323,
+          "corr": 0.1356299668588306
+        },
+        "10": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": -81.91155375,
+          "mae": 81.91155375,
+          "rmse": 87.70501143974344,
+          "corr": 0.2669929971967971
+        },
+        "11": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": -78.95436833333333,
+          "mae": 80.59501583333333,
+          "rmse": 96.38687260055248,
+          "corr": 0.3383319220657587
+        },
+        "12": {
+          "n": 120,
+          "grupo_sazonal": "chuvosa",
+          "amostra_suficiente": true,
+          "bias": 38.418499791666676,
+          "mae": 61.17427229166666,
+          "rmse": 75.00350935644295,
+          "corr": -0.12744328404343122
+        }
+      },
+      "por_grupo_sazonal": {
+        "chuvosa": {
+          "n": 840,
+          "amostra_suficiente": true,
+          "bias": 6.693631388888887,
+          "mae": 78.8854393452381,
+          "rmse": 94.75180778505876,
+          "corr": 0.5629691728018875
+        },
+        "transicao": {
+          "n": 240,
+          "amostra_suficiente": true,
+          "bias": -61.96314826388889,
+          "mae": 62.017681875,
+          "rmse": 80.45650830945539,
+          "corr": 0.5145065583900519
+        },
+        "seca": {
+          "n": 360,
+          "amostra_suficiente": true,
+          "bias": -5.268008009259258,
+          "mae": 5.7653888888888885,
+          "rmse": 11.33316531891193,
+          "corr": 0.2025133438298376
+        }
+      }
+    },
+    "probabilistico_por_horizonte": {
+      "1": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 42.3400025830314,
+        "crps_medio_climatologia": 27.868659216155812,
+        "crpss": -0.5192694508419826,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 1,
+          "2": 0,
+          "3": 4,
+          "4": 3,
+          "5": 4,
+          "6": 1,
+          "7": 3,
+          "8": 4,
+          "9": 1,
+          "10": 3,
+          "11": 2,
+          "12": 8,
+          "13": 3,
+          "14": 3,
+          "15": 9,
+          "16": 3,
+          "17": 6,
+          "18": 9,
+          "19": 5,
+          "20": 11,
+          "21": 12,
+          "22": 11,
+          "23": 18,
+          "24": 33,
+          "25": 83
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.330078125,
+          "normal": 0.234375,
+          "umido": 0.22983217592592595
+        },
+        "bss_por_categoria": {
+          "seco": -0.4853515625,
+          "normal": -0.0546875,
+          "umido": -0.03424479166666683
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9)"
+      },
+      "2": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 41.37890265247585,
+        "crps_medio_climatologia": 27.768966461047253,
+        "crpss": -0.49011317041705005,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 7,
+          "2": 6,
+          "3": 2,
+          "4": 5,
+          "5": 3,
+          "6": 5,
+          "7": 2,
+          "8": 6,
+          "9": 5,
+          "10": 2,
+          "11": 7,
+          "12": 8,
+          "13": 4,
+          "14": 7,
+          "15": 7,
+          "16": 8,
+          "17": 6,
+          "18": 5,
+          "19": 7,
+          "20": 10,
+          "21": 13,
+          "22": 14,
+          "23": 22,
+          "24": 21,
+          "25": 58
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.32437789351851853,
+          "normal": 0.2191840277777778,
+          "umido": 0.25198206018518515
+        },
+        "bss_por_categoria": {
+          "seco": -0.45970052083333357,
+          "normal": 0.013671874999999889,
+          "umido": -0.13391927083333321
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9)"
+      },
+      "3": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 41.551138771135264,
+        "crps_medio_climatologia": 27.940242093231163,
+        "crpss": -0.4871431189639368,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 9,
+          "2": 7,
+          "3": 7,
+          "4": 3,
+          "5": 5,
+          "6": 7,
+          "7": 7,
+          "8": 7,
+          "9": 2,
+          "10": 4,
+          "11": 7,
+          "12": 7,
+          "13": 5,
+          "14": 5,
+          "15": 7,
+          "16": 7,
+          "17": 6,
+          "18": 3,
+          "19": 8,
+          "20": 8,
+          "21": 12,
+          "22": 15,
+          "23": 17,
+          "24": 20,
+          "25": 55
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.31783854166666664,
+          "normal": 0.22162181712962964,
+          "umido": 0.262232349537037
+        },
+        "bss_por_categoria": {
+          "seco": -0.4302734374999999,
+          "normal": 0.002701822916666541,
+          "umido": -0.18004557291666656
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9)"
+      },
+      "4": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 43.694812901570046,
+        "crps_medio_climatologia": 27.851650534163475,
+        "crpss": -0.5688410583772399,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 16,
+          "2": 11,
+          "3": 4,
+          "4": 8,
+          "5": 9,
+          "6": 1,
+          "7": 5,
+          "8": 7,
+          "9": 1,
+          "10": 4,
+          "11": 7,
+          "12": 8,
+          "13": 5,
+          "14": 3,
+          "15": 5,
+          "16": 1,
+          "17": 7,
+          "18": 11,
+          "19": 11,
+          "20": 7,
+          "21": 10,
+          "22": 14,
+          "23": 15,
+          "24": 26,
+          "25": 44
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.3183449074074074,
+          "normal": 0.21955295138888886,
+          "umido": 0.2740234375
+        },
+        "bss_por_categoria": {
+          "seco": -0.4325520833333334,
+          "normal": 0.012011718750000067,
+          "umido": -0.23310546875000027
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9)"
+      },
+      "5": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 46.13776588466183,
+        "crps_medio_climatologia": 27.85478123052363,
+        "crpss": -0.656367914105298,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 19,
+          "2": 11,
+          "3": 7,
+          "4": 7,
+          "5": 5,
+          "6": 3,
+          "7": 1,
+          "8": 6,
+          "9": 8,
+          "10": 7,
+          "11": 4,
+          "12": 3,
+          "13": 4,
+          "14": 2,
+          "15": 6,
+          "16": 7,
+          "17": 11,
+          "18": 6,
+          "19": 8,
+          "20": 5,
+          "21": 13,
+          "22": 9,
+          "23": 15,
+          "24": 16,
+          "25": 57
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.32837818287037035,
+          "normal": 0.2302589699074074,
+          "umido": 0.2979890046296296
+        },
+        "bss_por_categoria": {
+          "seco": -0.47770182291666674,
+          "normal": -0.036165364583333304,
+          "umido": -0.3409505208333332
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9)"
+      },
+      "6": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 47.275789984903376,
+        "crps_medio_climatologia": 27.694068667943807,
+        "crpss": -0.7070727509109425,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 26,
+          "2": 7,
+          "3": 8,
+          "4": 5,
+          "5": 1,
+          "6": 4,
+          "7": 8,
+          "8": 7,
+          "9": 6,
+          "10": 3,
+          "11": 1,
+          "12": 5,
+          "13": 5,
+          "14": 4,
+          "15": 3,
+          "16": 8,
+          "17": 6,
+          "18": 6,
+          "19": 14,
+          "20": 3,
+          "21": 12,
+          "22": 15,
+          "23": 21,
+          "24": 17,
+          "25": 45
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.3398220486111111,
+          "normal": 0.22994791666666667,
+          "umido": 0.30713975694444445
+        },
+        "bss_por_categoria": {
+          "seco": -0.5291992187500001,
+          "normal": -0.03476562500000013,
+          "umido": -0.3821289062500002
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9)"
+      }
+    },
+    "intervalos_confianca_por_horizonte": {
+      "1": {
+        "bias": {
+          "estimativa": -37.834971111111116,
+          "ic95_lo": -44.042918847222225,
+          "ic95_hi": -30.91593036024306,
+          "n_anos_distintos": 20,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 52.468960069444435,
+          "ic95_lo": 48.270055125000006,
+          "ic95_hi": 56.5999527109375,
+          "n_anos_distintos": 20,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 71.80819447349285,
+          "ic95_lo": 65.12208209847027,
+          "ic95_hi": 78.33783895093902,
+          "n_anos_distintos": 20,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "2": {
+        "bias": {
+          "estimativa": -17.272623159722222,
+          "ic95_lo": -23.78268689738058,
+          "ic95_hi": -11.024063371173023,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 54.05028371527778,
+          "ic95_lo": 49.48333911151906,
+          "ic95_hi": 58.329333363224634,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 74.80393916843838,
+          "ic95_lo": 68.07556970238402,
+          "ic95_hi": 80.79310771554086,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "3": {
+        "bias": {
+          "estimativa": -5.718504548611112,
+          "ic95_lo": -9.66443356770833,
+          "ic95_hi": -1.4747833234731935,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 55.743752673611105,
+          "ic95_lo": 49.151218143212375,
+          "ic95_hi": 63.05426516364584,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 77.33356897598601,
+          "ic95_lo": 68.12948069000987,
+          "ic95_hi": 86.59576648987284,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "4": {
+        "bias": {
+          "estimativa": 0.6995977083333302,
+          "ic95_lo": -3.1691133817039003,
+          "ic95_hi": 4.491245576989024,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 59.52018076388889,
+          "ic95_lo": 53.82039366323946,
+          "ic95_hi": 65.55626123190277,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 80.91762723286186,
+          "ic95_lo": 73.04125094261263,
+          "ic95_hi": 88.88855408136104,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "5": {
+        "bias": {
+          "estimativa": 5.834713090277777,
+          "ic95_lo": 1.6717478385416658,
+          "ic95_hi": 10.396955342361922,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 61.6044934375,
+          "ic95_lo": 55.579028275284784,
+          "ic95_hi": 68.17494437035532,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 84.92611516768734,
+          "ic95_lo": 76.67260839065335,
+          "ic95_hi": 93.5291801221777,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "6": {
+        "bias": {
+          "estimativa": 7.854337604166668,
+          "ic95_lo": 4.096345149346578,
+          "ic95_hi": 11.832528332218768,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 63.37713225694445,
+          "ic95_lo": 56.85466414060907,
+          "ic95_hi": 70.62484324487434,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 87.15471315283531,
+          "ic95_lo": 78.32738648724059,
+          "ic95_hi": 95.88071154051032,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      }
+    }
+  },
+  "loyo_retrospective": {
+    "rotulo": "loyo_retrospective",
+    "aviso": "NÃO simula uso em tempo real — usa anos futuros na climatologia. Análise complementar apenas, nunca misturada com expanding_operational_simulation.",
+    "deterministico_por_horizonte": {
+      "1": {
+        "n": 240,
+        "rotulo": "H1 — previsão do mês corrente",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.8333162950399576
+        },
+        "anomalia": {
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.3652543854369203
+        },
+        "benchmark_climatologico": {
+          "bias": 4.604504625478924,
+          "mae": 39.49055790996169,
+          "rmse": 57.007328815132254
+        },
+        "rmsess_absoluto": -0.25963092756648853,
+        "rmsess_anomalia": -0.25963092756648853,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "2": {
+        "n": 240,
+        "rotulo": "H2 — horizonte futuro (+1 mês)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.8008073106791047
+        },
+        "anomalia": {
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.11750494608981615
+        },
+        "benchmark_climatologico": {
+          "bias": 4.8995957782567015,
+          "mae": 39.19546675718391,
+          "rmse": 56.79748020416273
+        },
+        "rmsess_absoluto": -0.31702918685036896,
+        "rmsess_anomalia": -0.31702918685036896,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "3": {
+        "n": 240,
+        "rotulo": "H3 — horizonte futuro (+2 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": -5.718504548611112,
+          "mae": 55.743752673611105,
+          "rmse": 77.33356897598601,
+          "corr": 0.8110125881846395
+        },
+        "anomalia": {
+          "bias": -5.718504548611112,
+          "mae": 55.743752673611105,
+          "rmse": 77.33356897598601,
+          "corr": 0.10165347396122716
+        },
+        "benchmark_climatologico": {
+          "bias": 4.306549847701147,
+          "mae": 39.373938826628354,
+          "rmse": 57.020661779943445
+        },
+        "rmsess_absoluto": -0.35623766126101786,
+        "rmsess_anomalia": -0.35623766126101786,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "4": {
+        "n": 240,
+        "rotulo": "H4 — horizonte futuro (+3 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": 0.6995977083333302,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.8113816628303042
+        },
+        "anomalia": {
+          "bias": 0.6995977083333305,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.09367999734822974
+        },
+        "benchmark_climatologico": {
+          "bias": 4.7973681115900355,
+          "mae": 39.11077531273947,
+          "rmse": 56.74818199432736
+        },
+        "rmsess_absoluto": -0.42590695224299013,
+        "rmsess_anomalia": -0.42590695224299013,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "5": {
+        "n": 240,
+        "rotulo": "H5 — horizonte futuro (+4 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.808356142647537
+        },
+        "anomalia": {
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.06880576486054078
+        },
+        "benchmark_climatologico": {
+          "bias": 4.7736117782567025,
+          "mae": 39.134531646072794,
+          "rmse": 56.753111876142775
+        },
+        "rmsess_absoluto": -0.4964133658966392,
+        "rmsess_anomalia": -0.4964133658966392,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "6": {
+        "n": 240,
+        "rotulo": "H6 — horizonte futuro (+5 meses)",
+        "amostra_suficiente": true,
+        "absoluto": {
+          "bias": 7.854337604166668,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.8067463971029689
+        },
+        "anomalia": {
+          "bias": 7.854337604166668,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.06592533298419478
+        },
+        "benchmark_climatologico": {
+          "bias": 4.882259458812259,
+          "mae": 39.025883965517245,
+          "rmse": 56.69494679276023
+        },
+        "rmsess_absoluto": -0.5372571645832236,
+        "rmsess_anomalia": -0.5372571645832236,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      }
+    }
+  },
+  "nenhuma_skill_apresentada_no_dashboard": true,
+  "nenhum_dado_operacional_alterado": true,
+  "data_geracao_utc": "2026-10-01T12:12:38.506673+00:00"
+}
