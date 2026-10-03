@@ -4,6 +4,8 @@
 
 **Revisão 2C.3C (refinamentos pré-merge):** esta versão substitui a definição de anomalia usada até o commit anterior (que subtraía a MESMA climatologia observada dos dois lados) por uma climatologia PRÓPRIA do modelo, sem leakage, específica por lead e mês-alvo. A versão antiga foi mantida apenas como diagnóstico explícito, nunca como a anomaly correlation principal. Também foram adicionados: IC 95% dos skill scores (RMSESS/CRPSS/BSS) via bootstrap pareado (modelo e climatologia nos MESMOS blocos), a matriz mês-alvo × lead como visão sazonal principal, e a frequência observada das categorias de tercil como contexto do Brier Score.
 
+**Segunda revisão (dois pontos finais pré-merge):** (1) o BS da referência nominal do BSS (p=1/3) deixou de assumir a constante 2/9 — agora é calculado `mean((1/3 - o_i)^2)` sobre as MESMAS observações da amostra avaliada, por horizonte e categoria (a previsão nominal em si continua 1/3; só o cálculo do seu BS passou a ser exato); (2) o RMSESS da anomalia CORRIGIDA (seção 3.2) ganhou IC 95% próprio (seção 6.3), bootstrap em blocos por ano, INDEPENDENTE do IC do RMSESS absoluto/diagnóstico (seção 6.2) — os pontos estimados estavam próximos de zero, e o IC confirma que a incerteza INCLUI zero em todos os H1-H6; (3) as matrizes sazonais (seção 4) agora separam explicitamente RMSESS absoluto (4.2a) de RMSESS de anomalia corrigida (4.2b) — nunca mais um campo `rmsess` ambíguo.
+
 ## 1. Auditoria da base RAW (antes de qualquer métrica)
 
 - Registros RAW: 34560 (esperado 34560).
@@ -79,7 +81,9 @@ Cada célula da matriz mês × lead tem N≈20 (uma observação por ano de inic
 | Nov | 20 | 20 | 20 | 20 | 20 | 20 |
 | Dez | 20 | 20 | 20 | 20 | 20 | 20 |
 
-### 4.2. Matriz mês-alvo × lead — RMSESS (ponto estimado, sem IC nesta matriz)
+### 4.2a. Matriz mês-alvo × lead — RMSESS ABSOLUTO/BRUTO (precipitação vs. climatologia observada; ponto estimado, sem IC nesta matriz)
+
+**Rotulagem explícita (segunda revisão, item 3):** esta é a métrica RMSESS absoluta/bruta — nunca confundir com a RMSESS de anomalia corrigida da tabela 4.2b.
 
 | Mês \ Lead | H1 | H2 | H3 | H4 | H5 | H6 |
 |---|---|---|---|---|---|---|
@@ -95,6 +99,25 @@ Cada célula da matriz mês × lead tem N≈20 (uma observação por ano de inic
 | Out | -0.841 | -0.754 | -0.646 | -0.676 | -0.705 | -0.692 |
 | Nov | -0.867 | -0.688 | -0.626 | -0.467 | -0.405 | -0.347 |
 | Dez | -0.654 | -0.679 | -0.697 | -0.601 | -1.098 | -1.341 |
+
+### 4.2b. Matriz mês-alvo × lead — RMSESS de ANOMALIA CORRIGIDA (climatologia própria do modelo; ponto estimado, sem IC nesta matriz)
+
+**Rotulagem explícita (segunda revisão, item 3):** métrica DIFERENTE da 4.2a — RMSE da anomalia do modelo (previsto - climatologia própria do modelo) contra a anomalia observada, dividido pelo RMSE do benchmark de anomalia zero. Nunca a mesma coisa que o RMSESS absoluto.
+
+| Mês \ Lead | H1 | H2 | H3 | H4 | H5 | H6 |
+|---|---|---|---|---|---|---|
+| Jan | -0.185 | -0.093 | -0.078 | 0.036 | -0.058 | -0.009 |
+| Fev | 0.033 | 0.056 | 0.042 | 0.066 | 0.023 | -0.051 |
+| Mar | 0.237 | -0.087 | 0.105 | -0.056 | -0.044 | -0.014 |
+| Abr | 0.178 | -0.013 | -0.006 | 0.017 | 0.119 | 0.018 |
+| Mai | 0.196 | 0.015 | 0.027 | 0.009 | -0.016 | -0.015 |
+| Jun | 0.029 | 0.015 | 0.045 | -0.005 | 0.008 | 0.003 |
+| Jul | 0.037 | -0.007 | -0.056 | 0.027 | -0.003 | -0.013 |
+| Ago | 0.008 | -0.005 | 0.033 | 0.004 | 0.013 | 0.027 |
+| Set | 0.024 | 0.018 | -0.012 | -0.000 | -0.008 | 0.001 |
+| Out | 0.063 | 0.021 | 0.006 | -0.005 | -0.003 | 0.059 |
+| Nov | 0.155 | 0.213 | -0.013 | 0.067 | 0.049 | 0.076 |
+| Dez | -0.719 | -0.761 | -0.512 | -0.165 | -0.569 | -0.421 |
 
 ### 4.3. Matriz mês-alvo × lead — correlação de anomalia corrigida (climatologia própria do modelo)
 
@@ -117,42 +140,47 @@ Cada célula da matriz mês × lead tem N≈20 (uma observação por ano de inic
 
 ### 4.4. Resumo por grupo sazonal regional (CLAUDE.md) × lead
 
+Cada métrica em sua própria linha, explicitamente rotulada — nunca uma correlação de anomalia ao lado de um RMSESS absoluto sem identificação (segunda revisão, item 3).
+
 | Grupo | Métrica | H1 | H2 | H3 | H4 | H5 | H6 |
 |---|---|---|---|---|---|---|---|
 | chuvosa | N | 140 | 140 | 140 | 140 | 140 | 140 |
-| chuvosa | RMSESS | -0.214 | -0.253 | -0.299 | -0.371 | -0.452 | -0.498 |
+| chuvosa | RMSESS absoluto/bruto | -0.214 | -0.253 | -0.299 | -0.371 | -0.452 | -0.498 |
+| chuvosa | RMSESS anomalia corrigida | 0.025 | -0.056 | -0.017 | 0.009 | -0.021 | -0.020 |
 | chuvosa | Corr anomalia corrigida | 0.411 | 0.139 | 0.168 | 0.227 | 0.176 | 0.169 |
 | transicao | N | 40 | 40 | 40 | 40 | 40 | 40 |
-| transicao | RMSESS | -0.283 | -0.407 | -0.410 | -0.431 | -0.438 | -0.468 |
+| transicao | RMSESS absoluto/bruto | -0.283 | -0.407 | -0.410 | -0.431 | -0.438 | -0.468 |
+| transicao | RMSESS anomalia corrigida | 0.155 | 0.015 | 0.018 | 0.007 | -0.014 | -0.011 |
 | transicao | Corr anomalia corrigida | 0.678 | 0.196 | 0.189 | 0.111 | -0.126 | -0.104 |
 | seca | N | 60 | 60 | 60 | 60 | 60 | 60 |
-| seca | RMSESS | -0.109 | -0.105 | -0.071 | -0.084 | -0.069 | -0.080 |
+| seca | RMSESS absoluto/bruto | -0.109 | -0.105 | -0.071 | -0.084 | -0.069 | -0.080 |
+| seca | RMSESS anomalia corrigida | 0.017 | 0.001 | 0.028 | 0.004 | 0.010 | 0.016 |
 | seca | Corr anomalia corrigida | 0.321 | 0.086 | 0.311 | 0.099 | 0.156 | 0.234 |
 
 ### 4.5. Visão agregada mensal descritiva (SECUNDÁRIA — H1 a H6 combinados)
 
 **Rótulo: `visao_agregada_descritiva_H1_a_H6_combinados`.** Mantida só como visão descritiva de referência — a matriz 4.1-4.3 é a análise sazonal principal porque não mistura lead times diferentes dentro da mesma célula.
 
-| Mês | Grupo sazonal | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | RMSESS |
-|---|---|---|---|---|---|---|---|---|
-| Jan | chuvosa | 120 | 30.34 | 77.88 | 93.34 | 0.107 | 0.144 | -0.157 |
-| Fev | chuvosa | 120 | 61.73 | 81.92 | 98.51 | 0.270 | 0.339 | -0.353 |
-| Mar | chuvosa | 120 | 85.63 | 106.68 | 123.48 | 0.183 | 0.280 | -0.423 |
-| Abr | chuvosa | 120 | -8.40 | 62.04 | 81.07 | 0.258 | 0.323 | 0.037 |
-| Mai | transicao | 120 | -78.15 | 78.25 | 98.58 | 0.312 | 0.310 | -0.373 |
-| Jun | seca | 120 | -4.91 | 5.64 | 10.41 | 0.222 | 0.230 | -0.059 |
-| Jul | seca | 120 | -2.43 | 2.70 | 5.57 | 0.099 | 0.106 | -0.032 |
-| Ago | seca | 120 | -8.47 | 8.96 | 15.68 | 0.157 | 0.199 | -0.107 |
-| Set | transicao | 120 | -45.78 | 45.79 | 56.82 | 0.136 | 0.137 | -0.526 |
-| Out | chuvosa | 120 | -81.91 | 81.91 | 87.71 | 0.267 | 0.301 | -0.720 |
-| Nov | chuvosa | 120 | -78.95 | 80.60 | 96.39 | 0.338 | 0.411 | -0.577 |
-| Dez | chuvosa | 120 | 38.42 | 61.17 | 75.00 | -0.127 | -0.203 | -0.866 |
+| Mês | Grupo sazonal | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | RMSESS absoluto | RMSESS anomalia corrigida |
+|---|---|---|---|---|---|---|---|---|---|
+| Jan | chuvosa | 120 | 30.34 | 77.88 | 93.34 | 0.107 | 0.144 | -0.157 | -0.067 |
+| Fev | chuvosa | 120 | 61.73 | 81.92 | 98.51 | 0.270 | 0.339 | -0.353 | 0.027 |
+| Mar | chuvosa | 120 | 85.63 | 106.68 | 123.48 | 0.183 | 0.280 | -0.423 | 0.021 |
+| Abr | chuvosa | 120 | -8.40 | 62.04 | 81.07 | 0.258 | 0.323 | 0.037 | 0.049 |
+| Mai | transicao | 120 | -78.15 | 78.25 | 98.58 | 0.312 | 0.310 | -0.373 | 0.033 |
+| Jun | seca | 120 | -4.91 | 5.64 | 10.41 | 0.222 | 0.230 | -0.059 | 0.016 |
+| Jul | seca | 120 | -2.43 | 2.70 | 5.57 | 0.099 | 0.106 | -0.032 | -0.003 |
+| Ago | seca | 120 | -8.47 | 8.96 | 15.68 | 0.157 | 0.199 | -0.107 | 0.013 |
+| Set | transicao | 120 | -45.78 | 45.79 | 56.82 | 0.136 | 0.137 | -0.526 | 0.004 |
+| Out | chuvosa | 120 | -81.91 | 81.91 | 87.71 | 0.267 | 0.301 | -0.720 | 0.023 |
+| Nov | chuvosa | 120 | -78.95 | 80.60 | 96.39 | 0.338 | 0.411 | -0.577 | 0.088 |
+| Dez | chuvosa | 120 | 38.42 | 61.17 | 75.00 | -0.127 | -0.203 | -0.866 | -0.537 |
 
-| Grupo | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | RMSESS |
-|---|---|---|---|---|---|---|---|
-| chuvosa | 840 | 6.69 | 78.89 | 94.75 | 0.563 | 0.226 | -0.352 |
-| transicao | 240 | -61.96 | 62.02 | 80.46 | 0.515 | 0.249 | -0.407 |
-| seca | 360 | -5.27 | 5.77 | 11.33 | 0.203 | 0.186 | -0.086 |
+| Grupo | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | RMSESS absoluto | RMSESS anomalia corrigida |
+|---|---|---|---|---|---|---|---|---|
+| chuvosa | 840 | 6.69 | 78.89 | 94.75 | 0.563 | 0.226 | -0.352 | -0.013 |
+| transicao | 240 | -61.96 | 62.02 | 80.46 | 0.515 | 0.249 | -0.407 | 0.027 |
+| seca | 360 | -5.27 | 5.77 | 11.33 | 0.203 | 0.186 | -0.086 | 0.012 |
 
 ## 5. Avaliação probabilística (24 membros)
 
@@ -160,14 +188,25 @@ CRPS calculado com a fórmula "fair" (Ferro et al. 2008), não-viesada para ense
 
 | Horizonte | N | CRPS modelo | CRPS climatologia | CRPSS | BS seco | BS normal | BS úmido | BSS seco | BSS normal | BSS úmido |
 |---|---|---|---|---|---|---|---|---|---|---|
-| H1 | 240 | 42.34 | 27.87 | -0.519 | 0.3301 | 0.2344 | 0.2298 | -0.485 | -0.055 | -0.034 |
-| H2 | 240 | 41.38 | 27.77 | -0.490 | 0.3244 | 0.2192 | 0.2520 | -0.460 | 0.014 | -0.134 |
-| H3 | 240 | 41.55 | 27.94 | -0.487 | 0.3178 | 0.2216 | 0.2622 | -0.430 | 0.003 | -0.180 |
-| H4 | 240 | 43.69 | 27.85 | -0.569 | 0.3183 | 0.2196 | 0.2740 | -0.433 | 0.012 | -0.233 |
-| H5 | 240 | 46.14 | 27.85 | -0.656 | 0.3284 | 0.2303 | 0.2980 | -0.478 | -0.036 | -0.341 |
-| H6 | 240 | 47.28 | 27.69 | -0.707 | 0.3398 | 0.2299 | 0.3071 | -0.529 | -0.035 | -0.382 |
+| H1 | 240 | 42.34 | 27.87 | -0.519 | 0.3301 | 0.2344 | 0.2298 | -0.320 | -0.140 | -0.089 |
+| H2 | 240 | 41.38 | 27.77 | -0.490 | 0.3244 | 0.2192 | 0.2520 | -0.298 | -0.059 | -0.202 |
+| H3 | 240 | 41.55 | 27.94 | -0.487 | 0.3178 | 0.2216 | 0.2622 | -0.271 | -0.078 | -0.242 |
+| H4 | 240 | 43.69 | 27.85 | -0.569 | 0.3183 | 0.2196 | 0.2740 | -0.273 | -0.061 | -0.307 |
+| H5 | 240 | 46.14 | 27.85 | -0.656 | 0.3284 | 0.2303 | 0.2980 | -0.314 | -0.113 | -0.421 |
+| H6 | 240 | 47.28 | 27.69 | -0.707 | 0.3398 | 0.2299 | 0.3071 | -0.359 | -0.111 | -0.465 |
 
-**Fórmulas:** `CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica` — `BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9) — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.`. **O Brier Score de referência nominal (p=1/3) é a referência PRINCIPAL e nunca é alterada silenciosamente** — a seção 5.1 só complementa.
+**Fórmulas:** `CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica` — `BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.`. **A previsão climatológica NOMINAL (p=1/3 por categoria) é a referência PRINCIPAL e nunca é alterada silenciosamente** — mas o BS dessa referência (BS_ref_nominal) é SEMPRE calculado sobre as mesmas observações da amostra avaliada (segunda revisão, item 1), nunca assumido como a constante 2/9 (exata só quando a frequência observada da categoria é exatamente 1/3 — ver tabela abaixo).
+
+| Horizonte | BS_ref_nominal seco | BS_ref_nominal normal | BS_ref_nominal úmido |
+|---|---|---|---|
+| H1 | 0.2500 | 0.2056 | 0.2111 |
+| H2 | 0.2500 | 0.2069 | 0.2097 |
+| H3 | 0.2500 | 0.2056 | 0.2111 |
+| H4 | 0.2500 | 0.2069 | 0.2097 |
+| H5 | 0.2500 | 0.2069 | 0.2097 |
+| H6 | 0.2500 | 0.2069 | 0.2097 |
+
+*Para comparação: a constante antiga `2/9 ≈ 0,2222` só seria exata se a frequência observada de cada categoria fosse exatamente 1/3 — a seção 5.1 mostra que não é.*
 
 ### 5.1. Frequência observada das categorias e sensibilidade do Brier/BSS
 
@@ -217,9 +256,9 @@ O mesmo `target_month` aparece em vários horizontes/inicializações — as obs
 | H5 | 84.93 | [76.67, 93.53] | 61.60 | [55.58, 68.17] | 5.83 | [1.67, 10.40] |
 | H6 | 87.15 | [78.33, 95.88] | 63.38 | [56.85, 70.62] | 7.85 | [4.10, 11.83] |
 
-### 6.2. Intervalos de confiança dos skill scores (RMSESS, CRPSS, BSS) — PRINCIPAL para interpretação de habilidade
+### 6.2. Intervalos de confiança do RMSESS/CRPSS/BSS ABSOLUTOS/DIAGNÓSTICO
 
-Diferente da seção 6.1, aqui o bootstrap reamostra os MESMOS blocos (mesmos anos sorteados) para recalcular modelo E climatologia a cada reamostra — garante que RMSESS/CRPSS/BSS sejam proporções válidas a cada iteração, em vez de dividir dois ICs calculados de forma independente. **A classificação abaixo nunca é 'bom'/'mau' — só indica se o IC 95% está totalmente acima de zero, inclui zero, ou totalmente abaixo de zero.**
+Diferente da seção 6.1, aqui o bootstrap reamostra os MESMOS blocos (mesmos anos sorteados) para recalcular modelo E climatologia a cada reamostra — garante que RMSESS/CRPSS/BSS sejam proporções válidas a cada iteração, em vez de dividir dois ICs calculados de forma independente. **A classificação abaixo nunca é 'bom'/'mau' — só indica se o IC 95% está totalmente acima de zero, inclui zero, ou totalmente abaixo de zero.** Esta seção é sobre o RMSESS/CRPSS/BSS **absolutos/diagnóstico** (precipitação bruta e BS nominal) — o IC do RMSESS de **anomalia corrigida** é INDEPENDENTE e está na seção 6.3, nunca reaproveitado daqui (segunda revisão, item 2).
 
 | Horizonte | RMSESS | IC 95% | Classificação | CRPSS | IC 95% | Classificação |
 |---|---|---|---|---|---|---|
@@ -234,12 +273,25 @@ Diferente da seção 6.1, aqui o bootstrap reamostra os MESMOS blocos (mesmos an
 
 | Horizonte | BSS seco | IC 95% | BSS normal | IC 95% | BSS úmido | IC 95% |
 |---|---|---|---|---|---|---|
-| H1 | -0.485 | [-0.700, -0.304] | -0.055 | [-0.241, 0.122] | -0.034 | [-0.185, 0.139] |
-| H2 | -0.460 | [-0.653, -0.295] | 0.014 | [-0.134, 0.160] | -0.134 | [-0.312, 0.049] |
-| H3 | -0.430 | [-0.640, -0.220] | 0.003 | [-0.182, 0.183] | -0.180 | [-0.398, 0.056] |
-| H4 | -0.433 | [-0.638, -0.213] | 0.012 | [-0.146, 0.193] | -0.233 | [-0.446, -0.018] |
-| H5 | -0.478 | [-0.755, -0.264] | -0.036 | [-0.223, 0.137] | -0.341 | [-0.560, -0.096] |
-| H6 | -0.529 | [-0.742, -0.310] | -0.035 | [-0.219, 0.146] | -0.382 | [-0.582, -0.174] |
+| H1 | -0.320 | [-0.587, -0.113] | -0.140 | [-0.237, -0.034] | -0.089 | [-0.181, 0.031] |
+| H2 | -0.298 | [-0.526, -0.115] | -0.059 | [-0.135, 0.022] | -0.202 | [-0.325, -0.049] |
+| H3 | -0.271 | [-0.536, -0.057] | -0.078 | [-0.163, 0.021] | -0.242 | [-0.407, -0.043] |
+| H4 | -0.273 | [-0.507, -0.045] | -0.061 | [-0.140, 0.036] | -0.307 | [-0.469, -0.142] |
+| H5 | -0.314 | [-0.571, -0.097] | -0.113 | [-0.212, 0.002] | -0.421 | [-0.600, -0.228] |
+| H6 | -0.359 | [-0.607, -0.144] | -0.111 | [-0.215, 0.006] | -0.465 | [-0.627, -0.285] |
+
+### 6.3. Intervalo de confiança do RMSESS de ANOMALIA CORRIGIDA — INDEPENDENTE da seção 6.2
+
+Segunda revisão, item 2. Mesmo desenho da seção 6.2 (bootstrap em blocos por ano, modelo e benchmark nos MESMOS blocos sorteados a cada reamostra), mas aplicado à anomalia CORRIGIDA (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — **nunca o IC do RMSESS absoluto/diagnóstico da seção 6.2 reaproveitado aqui**: amostra elegível e métrica são diferentes. Os pontos estimados (seção 3.2) estavam muito próximos de zero — este IC diz se essa proximidade é estatisticamente estável ou só ruído amostral. **Classificação meramente DESCRITIVA — nunca convertida em 'bom'/'mau'.**
+
+| Horizonte | RMSESS anomalia corrigida | IC 95% | Posição do IC em relação a zero |
+|---|---|---|---|
+| H1 | 0.045 | [-0.043, 0.133] | IC 95% inclui zero (indeterminado) |
+| H2 | -0.044 | [-0.111, 0.008] | IC 95% inclui zero (indeterminado) |
+| H3 | -0.011 | [-0.076, 0.056] | IC 95% inclui zero (indeterminado) |
+| H4 | 0.008 | [-0.035, 0.050] | IC 95% inclui zero (indeterminado) |
+| H5 | -0.020 | [-0.076, 0.028] | IC 95% inclui zero (indeterminado) |
+| H6 | -0.018 | [-0.060, 0.031] | IC 95% inclui zero (indeterminado) |
 
 ## 7. LOYO retrospectivo (complementar — NUNCA misturado com a simulação operacional)
 
@@ -256,16 +308,17 @@ Diferente da seção 6.1, aqui o bootstrap reamostra os MESMOS blocos (mesmos an
 
 ## 8. Interpretação — separada por dimensão, nunca uma conclusão única
 
-Esta seção separa deliberadamente SEIS leituras DIFERENTES — nunca resumidas numa frase como "modelo validado" ou "boa habilidade":
+Esta seção separa deliberadamente SETE leituras DIFERENTES (a segunda revisão desdobrou o item 3 em 3 e 3b, porque são dois skill scores INDEPENDENTES com ICs próprios) — nunca resumidas numa frase como "modelo validado" ou "boa habilidade":
 
 1. **Precipitação absoluta** — correlação alta (0.80-0.83) em todos os horizontes, mas dominada pelo ciclo sazonal regional (chuva concentrada out-abr); não é medida de habilidade preditiva real.
 2. **Anomalia corrigida pela climatologia própria do modelo (seção 3.2, PRINCIPAL)** — correlação entre 0,14 e 0,40 (H2 mais baixa, H4 mais alta — não monotônica com o lead, diferente do padrão da versão diagnóstico). Ao remover o viés sistemático próprio do CFSv2 (em vez de só o ciclo sazonal compartilhado), a leitura muda qualitativamente em relação à versão diagnóstico anterior: bias e RMSE caem fortemente (ex.: RMSE de H1 cai de ~72mm para ~56mm), e a correlação em H3-H6 fica MAIOR que na versão diagnóstico — evidência de que parte do que parecia 'sem skill' na versão anterior era viés sistemático do modelo, não ausência de sinal.
-3. **Skill relativo à climatologia (RMSESS/CRPSS, seção 6.2)** — ponto estimado ainda negativo em todos os horizontes tanto para RMSESS quanto CRPSS, e os ICs 95% calculados nesta revisão (bootstrap pareado, mesmos blocos) ficaram TOTALMENTE ABAIXO de zero em todos os H1-H6 testados — ou seja, a incerteza amostral não muda a conclusão de que a climatologia expansível sem leakage teve erro MENOR que o ensemble bruto do CFSv2 nesta amostra. Isso é mais forte que apenas 'o ponto estimado é negativo': a faixa de incerteza também não inclui zero.
-4. **Probabilístico (CRPSS/BSS, seções 5 e 6.2)** — predominantemente negativo, consistente com o item 3; a seção 5.1 mostra que a frequência observada de 'seco' (~41,7% em H1) se desvia do nominal 1/3, contexto relevante para a leitura do Brier Score mas que não altera a referência nominal.
-5. **Dependência com o lead** — RMSESS (ponto estimado) piora monotonicamente de H1 (-0,22) a H6 (-0,49); a anomalia corrigida NÃO segue o mesmo padrão monotônico (ver item 2) — os dois fenômenos (skill relativo à climatologia vs. correlação de anomalia) respondem de forma diferente ao aumento do lead, e não devem ser lidos como a mesma coisa.
-6. **Dependência com a época do ano (seção 4)** — a matriz mês × lead mostra variação relevante célula a célula (N≈20/célula), mas qualquer leitura por mês isolado deve considerar a amostra pequena; o resumo por grupo sazonal (4.4) suaviza esse ruído sem substituir a matriz completa.
+3. **Skill ABSOLUTO/DIAGNÓSTICO relativo à climatologia (RMSESS/CRPSS, seção 6.2)** — ponto estimado negativo em todos os horizontes tanto para RMSESS quanto CRPSS, e os ICs 95% (bootstrap pareado, mesmos blocos) ficaram TOTALMENTE ABAIXO de zero em todos os H1-H6 — a incerteza amostral não muda a conclusão de que a climatologia expansível sem leakage teve erro MENOR que o ensemble bruto do CFSv2 (precipitação absoluta) nesta amostra. **Esta conclusão vale só para a versão absoluta/diagnóstico — NÃO pode ser estendida à anomalia corrigida sem olhar o IC próprio dela (item 3b abaixo), que é outra métrica, sobre outra amostra.**
+3b. **Skill da ANOMALIA CORRIGIDA relativo à climatologia (RMSESS, seção 6.3 — INDEPENDENTE do item 3)** — os pontos estimados (seção 3.2) já estavam muito próximos de zero (entre -0,04 e +0,05 conforme o horizonte); o IC 95% (bootstrap próprio, nunca reaproveitado do item 3) confirma que a incerteza amostral INCLUI zero em todos os H1-H6 — diferente do item 3, aqui não há evidência de que o modelo seja sistematicamente melhor OU pior que o benchmark de anomalia zero; o resultado é estatisticamente indeterminado, não negativo.
+4. **Probabilístico (CRPSS/BSS, seções 5 e 6.2)** — CRPSS predominantemente negativo com IC abaixo de zero, consistente com o item 3 (mesma métrica absoluta). O BSS nominal foi recalculado nesta revisão: BS_ref_nominal agora é computado sobre as mesmas observações da amostra (nunca a constante 2/9) — a seção 5.1 mostra que a frequência observada de 'seco' (~41,7% em H1) se desvia do nominal 1/3, por isso BS_ref_nominal difere de 2/9 e o BSS muda de valor em relação à revisão anterior (mesma conclusão qualitativa: negativo), sem alterar a referência nominal em si.
+5. **Dependência com o lead** — RMSESS absoluto (ponto estimado) piora monotonicamente de H1 a H6; o RMSESS de anomalia corrigida NÃO segue o mesmo padrão monotônico e, com IC incluindo zero em todos os horizontes (item 3b), não há sequer uma tendência estatisticamente distinguível de ruído para interpretar — os dois fenômenos (skill absoluto vs. skill de anomalia corrigida) respondem de forma diferente ao aumento do lead, e não devem ser lidos como a mesma coisa.
+6. **Dependência com a época do ano (seção 4)** — a matriz mês × lead agora reporta RMSESS absoluto (4.2a) e RMSESS de anomalia corrigida (4.2b) em tabelas SEPARADAS e explicitamente rotuladas — nunca uma ao lado da outra sem identificação. Variação relevante célula a célula (N≈20/célula) em ambas, mas qualquer leitura por mês isolado deve considerar a amostra pequena e a ausência de IC nesta matriz; o resumo por grupo sazonal (4.4) suaviza esse ruído sem substituir a matriz completa.
 
-**O ensemble bruto aqui avaliado (`forecast_prec_mm`, sem qualquer correção operacional de viés ou downscaling) não deve ser confundido com um produto operacional corrigido — esta é avaliação científica do RAW, nenhuma correção de viés foi aplicada nesta fase.** Nenhuma das seis leituras acima, isoladamente, autoriza uma conclusão geral de habilidade. Qualquer decisão sobre uso operacional do CFSv2 deve revisar conjuntamente: magnitude do skill, intervalo de confiança (seção 6.2), horizonte, época do ano (seção 4) e tamanho da amostra (N=240 inicializações, mas com dependência temporal relevante — daí o bootstrap em blocos).
+**O ensemble bruto aqui avaliado (`forecast_prec_mm`, sem qualquer correção operacional de viés ou downscaling) não deve ser confundido com um produto operacional corrigido — esta é avaliação científica do RAW, nenhuma correção de viés foi aplicada nesta fase.** Nenhuma das leituras acima, isoladamente, autoriza uma conclusão geral de habilidade — e, especificamente, a conclusão negativa do item 3 (RMSESS/CRPSS absolutos) NUNCA deve ser extrapolada para a anomalia corrigida (item 3b), cujo próprio IC (seção 6.3) a contradiz. Qualquer decisão sobre uso operacional do CFSv2 deve revisar conjuntamente: qual definição de skill (absoluta vs. anomalia corrigida), magnitude, intervalo de confiança (seções 6.2 e 6.3), horizonte, época do ano (seção 4) e tamanho da amostra (N=240 inicializações, mas com dependência temporal relevante — daí o bootstrap em blocos).
 
 ## Restrições respeitadas
 

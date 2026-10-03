@@ -547,7 +547,15 @@ def metricas_deterministicas_por_horizonte(base_enriquecida):
 def _metricas_de_subconjunto(sub):
     """Núcleo compartilhado por metricas_por_mes_do_ano (visão
     agregada descritiva) e pelas matrizes mes×lead / grupo_sazonal×lead
-    (Seção 10, item 3 da revisão) — nunca duas fórmulas paralelas."""
+    (Seção 10, item 3 da revisão) — nunca duas fórmulas paralelas.
+
+    CORREÇÃO (segunda revisão, item 3) — 'rmsess_absoluto' (precipitação
+    bruta vs. climatologia observada) e 'rmsess_anomalia_corrigida'
+    (anomalia do modelo vs. anomalia observada, cada lado com sua
+    própria climatologia) são SEMPRE campos separados e explicitamente
+    rotulados — nunca um único campo 'rmsess' ambíguo ao lado da
+    correlação de anomalia corrigida, que usa a definição de anomalia
+    (não a absoluta)."""
     n = len(sub)
     if n == 0:
         return {'n': 0}
@@ -556,24 +564,39 @@ def _metricas_de_subconjunto(sub):
     clim = sub['clim_media'].values
     clim_modelo = sub['clim_modelo_media'].values
 
-    rmse_modelo = _rmse(prev, obs)
-    rmse_clim = _rmse(clim, obs)
+    rmse_modelo_absoluto = _rmse(prev, obs)
+    rmse_clim_absoluto = _rmse(clim, obs)
+    rmsess_absoluto = rmsess(rmse_modelo_absoluto, rmse_clim_absoluto)
 
     tem_clim_modelo = ~pd.isna(clim_modelo)
-    if tem_clim_modelo.sum() > 0:
+    n_com_clim_modelo = int(tem_clim_modelo.sum())
+    if n_com_clim_modelo > 0:
         anom_modelo = prev[tem_clim_modelo] - clim_modelo[tem_clim_modelo]
         anom_obs_corrigida = obs[tem_clim_modelo] - clim[tem_clim_modelo]
         corr_anomalia = _corr(anom_modelo, anom_obs_corrigida)
+        rmse_modelo_anom_corrigida = _rmse(anom_modelo, anom_obs_corrigida)
+        rmse_benchmark_anom_corrigida = _rmse(np.zeros_like(anom_obs_corrigida), anom_obs_corrigida)
+        rmsess_anomalia_corrigida = rmsess(rmse_modelo_anom_corrigida, rmse_benchmark_anom_corrigida)
     else:
         corr_anomalia = None
+        rmsess_anomalia_corrigida = None
 
     return {
         'n': n,
         'amostra_suficiente': n >= AMOSTRA_MINIMA_ESTRATO,
-        'bias': _bias(prev, obs), 'mae': _mae(prev, obs), 'rmse': rmse_modelo,
+        'n_com_climatologia_modelo_disponivel': n_com_clim_modelo,
+        'bias': _bias(prev, obs), 'mae': _mae(prev, obs), 'rmse': rmse_modelo_absoluto,
         'corr_absoluta': _corr(prev, obs),
         'corr_anomalia_climatologia_propria_modelo': corr_anomalia,
-        'rmsess': rmsess(rmse_modelo, rmse_clim),
+        'rmsess_absoluto': rmsess_absoluto,
+        'rmsess_anomalia_corrigida': rmsess_anomalia_corrigida,
+        'formula_rmsess_absoluto': 'RMSESS_absoluto = 1 - RMSE(previsto,observado) / '
+                                    'RMSE(climatologia_observada,observado)',
+        'formula_rmsess_anomalia_corrigida': 'RMSESS_anomalia_corrigida = 1 - '
+                                               'RMSE(anomalia_modelo,anomalia_observada) / '
+                                               'RMSE(0,anomalia_observada), onde '
+                                               'anomalia_modelo=previsto-climatologia_propria_do_modelo '
+                                               'e anomalia_observada=observado-climatologia_observada',
     }
 
 
@@ -783,9 +806,9 @@ def avaliar_probabilistico_por_horizonte(base_enriquecida, chirps_df, seed=20261
         hist_rank = {int(r): int((ranks_arr == r).sum()) for r in range(1, N_MEMBROS_ESPERADO + 2)}
 
         bs, bss = {}, {}
+        bs_referencia_nominal = {}
         bs_sensibilidade, bss_sensibilidade = {}, {}
         freq_observada = {}
-        bs_referencia_nominal = 2 / 9   # p=1/3 climatológico: p*(1-p) = (1/3)(2/3) = 2/9
         mapa = {
             'seco': (np.array(prob_seco), np.array(obs_cat_seco), np.array(prob_clim_emp_seco)),
             'normal': (np.array(prob_normal), np.array(obs_cat_normal), np.array(prob_clim_emp_normal)),
@@ -793,7 +816,16 @@ def avaliar_probabilistico_por_horizonte(base_enriquecida, chirps_df, seed=20261
         }
         for cat, (p, o, p_clim_emp) in mapa.items():
             bs[cat] = float(np.mean((p - o) ** 2))
-            bss[cat] = float(1 - bs[cat] / bs_referencia_nominal)
+            # CORREÇÃO (segunda revisão, item 1) — BS_ref_nominal NUNCA é a
+            # constante 2/9: isso só é exato quando a frequência OBSERVADA
+            # da categoria nesta amostra é exatamente 1/3. BS_ref_nominal é
+            # calculado contra as MESMAS observações (o) usadas no BS do
+            # modelo: BS_ref_nominal = mean((1/3 - o_i)^2). A previsão
+            # nominal em si continua sendo p=1/3 — só o cálculo do BS da
+            # referência passa a ser exato, nunca assumido.
+            bs_ref_nom = float(np.mean((1 / 3 - o) ** 2))
+            bs_referencia_nominal[cat] = bs_ref_nom
+            bss[cat] = float(1 - bs[cat] / bs_ref_nom) if bs_ref_nom > 0 else None
             freq_observada[cat] = float(o.mean())   # frequência OBSERVADA efetiva da categoria
             validos_emp = ~np.isnan(p_clim_emp)
             if validos_emp.any():
@@ -812,9 +844,14 @@ def avaliar_probabilistico_por_horizonte(base_enriquecida, chirps_df, seed=20261
             'formula_crpss': 'CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica',
             'rank_histogram': hist_rank,
             'brier_score_por_categoria': bs,
+            'brier_referencia_nominal_por_categoria': bs_referencia_nominal,
             'bss_por_categoria': bss,
-            'formula_bss': 'BSS = 1 - BS_modelo / BS_referencia_climatologica (p=1/3, BS_ref=2/9) '
-                           '— REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.',
+            'formula_bss': 'BSS = 1 - BS_modelo / BS_referencia_nominal, onde '
+                           'BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS '
+                           'observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é '
+                           'exata quando a frequência observada da categoria é exatamente 1/3). A '
+                           'previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, '
+                           'nunca alterada silenciosamente.',
             'frequencia_observada_por_categoria': freq_observada,
             'nota_frequencia_observada': 'frequência OBSERVADA efetiva de cada categoria nesta '
                                            'amostra — pode não ser exatamente 1/3 por tamanho de '
@@ -921,6 +958,27 @@ def _brier_score_categoria(linhas, categoria):
     return float(np.mean((np.array(probs) - np.array(obs_ind)) ** 2))
 
 
+def _indicador_observado_categoria(linhas, categoria):
+    """Indicador binário (1.0 se a observação cai na categoria, senão
+    0.0) de cada linha — a MESMA amostra usada no BS do modelo
+    (_brier_score_categoria), reaproveitada aqui para o benchmark
+    nominal (segunda revisão, item 1): nunca uma amostra diferente da
+    que o modelo foi avaliado contra."""
+    return np.array([1.0 if categoria_tercil(l['observado'], l['tercil_33'], l['tercil_67']) == categoria
+                      else 0.0 for l in linhas])
+
+
+def _brier_score_referencia_nominal_categoria(linhas, categoria):
+    """BS da previsão climatológica NOMINAL p=1/3 (segunda revisão,
+    item 1) — CALCULADO contra as mesmas observações da amostra
+    avaliada (via _indicador_observado_categoria), nunca assumido como
+    a constante 2/9 (que só é exata quando a frequência observada da
+    categoria nesta amostra é exatamente 1/3).
+    BS_ref_nominal = mean((1/3 - o_i)^2)."""
+    obs_ind = _indicador_observado_categoria(linhas, categoria)
+    return float(np.mean((1 / 3 - obs_ind) ** 2))
+
+
 def _classificar_ic_relativo_a_zero(ic_lo, ic_hi):
     """Rótulo EXPLÍCITO da posição do IC em relação a zero — nunca
     convertido automaticamente em 'bom'/'ruim' (item 2 da revisão)."""
@@ -1000,7 +1058,12 @@ def bootstrap_skill_scores_por_horizonte(base_enriquecida, chirps_df, n_resample
 
             for cat in ('seco', 'normal', 'umido'):
                 bs_resample = _brier_score_categoria(linhas_resample, cat)
-                bss_boot[cat].append(1 - bs_resample / (2 / 9))
+                # CORREÇÃO (segunda revisão, item 1) — referência nominal
+                # calculada sobre a MESMA linhas_resample (nunca a
+                # constante 2/9), preservando a garantia de modelo e
+                # benchmark usando exatamente os mesmos blocos sorteados.
+                bs_ref_resample = _brier_score_referencia_nominal_categoria(linhas_resample, cat)
+                bss_boot[cat].append(1 - bs_resample / bs_ref_resample if bs_ref_resample > 0 else None)
 
         rmse_modelo_pontual, rmse_clim_pontual = _rmse_modelo_e_climatologia(linhas)
         rmsess_pontual = rmsess(rmse_modelo_pontual, rmse_clim_pontual)
@@ -1012,7 +1075,9 @@ def bootstrap_skill_scores_por_horizonte(base_enriquecida, chirps_df, n_resample
         crpss_resumo = _resumo_bootstrap(crpss_pontual, crpss_boot)
         bss_resumo = {}
         for cat in ('seco', 'normal', 'umido'):
-            bss_pontual = 1 - _brier_score_categoria(linhas, cat) / (2 / 9)
+            bs_pontual = _brier_score_categoria(linhas, cat)
+            bs_ref_pontual = _brier_score_referencia_nominal_categoria(linhas, cat)
+            bss_pontual = (1 - bs_pontual / bs_ref_pontual) if bs_ref_pontual > 0 else None
             bss_resumo[cat] = _resumo_bootstrap(bss_pontual, bss_boot[cat])
 
         resultado[lead] = {
@@ -1034,6 +1099,122 @@ def bootstrap_skill_scores_por_horizonte(base_enriquecida, chirps_df, n_resample
             'nota': "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver "
                     "*_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / "
                     "ic_totalmente_abaixo_de_zero).",
+        }
+    return resultado
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Segunda revisão, item 2 — IC do RMSESS da anomalia CORRIGIDA (climatologia
+# própria do modelo). INDEPENDENTE do IC do RMSESS absoluto/diagnóstico
+# (bootstrap_skill_scores_por_horizonte) — nunca reaproveitado dali, porque
+# a amostra elegível (só linhas com climatologia do modelo disponível) e a
+# métrica (RMSE de ANOMALIAS, não de precipitação absoluta) são diferentes.
+# ══════════════════════════════════════════════════════════════════════════
+
+def construir_linhas_anomalia_corrigida_por_lead(base_enriquecida, lead):
+    """Linhas (1 por init_date/target_month, com climatologia do
+    modelo disponível) já com a anomalia do modelo (previsão -
+    climatologia PRÓPRIA do modelo) e a anomalia observada (observação
+    - climatologia OBSERVADA) calculadas, mais o ano-alvo para o
+    bootstrap em blocos — mesma condição de elegibilidade de
+    metricas_deterministicas_por_horizonte (item 1 da primeira
+    revisão), nunca misturando com linhas sem climatologia do modelo."""
+    sub = base_enriquecida[base_enriquecida['lead'] == lead]
+    media_membros = sub.groupby(
+        ['init_date', 'target_month', 'target_ano'], as_index=False
+    ).agg(previsto=('forecast_prec_mm', 'mean'), observado=('obs_prec_mm', 'first'),
+          clim_media=('clim_media', 'first'), clim_modelo_media=('clim_modelo_media', 'first'))
+    media_membros = media_membros.dropna(subset=['clim_media', 'clim_modelo_media'])
+
+    linhas = []
+    for _, row in media_membros.iterrows():
+        linhas.append({
+            'target_ano': int(row['target_ano']),
+            'anom_modelo': float(row['previsto'] - row['clim_modelo_media']),
+            'anom_obs': float(row['observado'] - row['clim_media']),
+        })
+    return linhas
+
+
+def _rmse_anomalia_modelo_e_benchmark_zero(linhas):
+    """RMSE da anomalia do MODELO (vs. anomalia observada) e RMSE do
+    benchmark de anomalia ZERO (a climatologia observada "prevendo"
+    nenhum desvio em relação a si mesma) — sobre a MESMA lista de
+    linhas, para garantir que modelo e benchmark usem exatamente a
+    mesma amostra/reamostra (segunda revisão, item 2)."""
+    anom_modelo = np.array([l['anom_modelo'] for l in linhas])
+    anom_obs = np.array([l['anom_obs'] for l in linhas])
+    rmse_modelo = _rmse(anom_modelo, anom_obs)
+    rmse_benchmark = _rmse(np.zeros_like(anom_obs), anom_obs)
+    return rmse_modelo, rmse_benchmark
+
+
+def bootstrap_rmsess_anomalia_corrigida_por_horizonte(base_enriquecida, n_resamples=500, seed=20261001):
+    """Segunda revisão, item 2 — IC 95% do RMSESS da anomalia
+    CORRIGIDA (climatologia própria do modelo), com o mesmo desenho do
+    bootstrap_skill_scores_por_horizonte (blocos por ano do
+    target_month, modelo e benchmark recalculados nos MESMOS blocos
+    sorteados em cada reamostra) — mas NUNCA reaproveitando aqueles
+    ICs: a amostra elegível aqui é só a que tem climatologia do modelo
+    disponível, e a métrica é RMSE de ANOMALIAS (modelo: previsto -
+    climatologia própria do modelo; benchmark: climatologia observada
+    prevendo anomalia zero), não de precipitação absoluta. A
+    classificação do IC é meramente DESCRITIVA (acima/abaixo/inclui
+    zero) — nunca convertida automaticamente em rótulo 'bom'/'ruim'."""
+    rng = np.random.default_rng(seed)
+    resultado = {}
+
+    for lead in LEADS_ESPERADOS:
+        linhas = construir_linhas_anomalia_corrigida_por_lead(base_enriquecida, lead)
+        n = len(linhas)
+        if n < AMOSTRA_MINIMA_ESTRATO:
+            resultado[lead] = {'n': n, 'amostra_suficiente': False,
+                                'nota': 'amostra insuficiente — IC não calculado'}
+            continue
+
+        por_ano = {}
+        for linha in linhas:
+            por_ano.setdefault(linha['target_ano'], []).append(linha)
+        anos = np.array(sorted(por_ano))
+        if len(anos) < 3:
+            resultado[lead] = {'n': n, 'amostra_suficiente': True,
+                                'nota': 'menos de 3 anos distintos — bootstrap em blocos não é '
+                                        'confiável'}
+            continue
+
+        rmse_modelo_boot, rmse_benchmark_boot, rmsess_boot = [], [], []
+        for _ in range(n_resamples):
+            anos_sorteados = rng.choice(anos, size=len(anos), replace=True)
+            linhas_resample = [l for a in anos_sorteados for l in por_ano[a]]
+            rm, rb = _rmse_anomalia_modelo_e_benchmark_zero(linhas_resample)
+            rmse_modelo_boot.append(rm)
+            rmse_benchmark_boot.append(rb)
+            rs = rmsess(rm, rb)
+            if rs is not None:
+                rmsess_boot.append(rs)
+
+        rmse_modelo_pontual, rmse_benchmark_pontual = _rmse_anomalia_modelo_e_benchmark_zero(linhas)
+        rmsess_pontual = rmsess(rmse_modelo_pontual, rmse_benchmark_pontual)
+        rmsess_resumo = _resumo_bootstrap(rmsess_pontual, rmsess_boot)
+
+        resultado[lead] = {
+            'n': n, 'amostra_suficiente': True, 'n_anos_distintos': int(len(anos)),
+            'n_resamples': n_resamples,
+            'metodo': 'bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: '
+                      'previsto - climatologia própria do modelo; benchmark: climatologia '
+                      'observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS '
+                      'blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS '
+                      'absoluto/diagnóstico — nunca reaproveitado dali.',
+            'rmse_anomalia_modelo': _resumo_bootstrap(rmse_modelo_pontual, rmse_modelo_boot),
+            'rmse_anomalia_benchmark_zero': _resumo_bootstrap(rmse_benchmark_pontual, rmse_benchmark_boot),
+            'rmsess_anomalia_corrigida': rmsess_resumo,
+            'rmsess_anomalia_corrigida_ic_classificacao': _classificar_ic_relativo_a_zero(
+                rmsess_resumo['ic95_lo'], rmsess_resumo['ic95_hi']),
+            'nota': "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver "
+                    "rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / "
+                    "ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida "
+                    "automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do "
+                    "RMSESS absoluto/diagnóstico.",
         }
     return resultado
 
@@ -1140,6 +1321,9 @@ def executar_todas_metricas(n_resamples_bootstrap=1000, n_resamples_bootstrap_sk
             base_enriquecida, n_resamples_bootstrap),
         'intervalos_confianca_skill_scores_por_horizonte': bootstrap_skill_scores_por_horizonte(
             base_enriquecida, chirps_df, n_resamples_bootstrap_skill),
+        'intervalos_confianca_rmsess_anomalia_corrigida_por_horizonte':
+            bootstrap_rmsess_anomalia_corrigida_por_horizonte(
+                base_enriquecida, n_resamples_bootstrap_skill),
     }
     loyo = executar_loyo_retrospectivo(base, chirps_df)
 

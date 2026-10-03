@@ -95,6 +95,17 @@ def gerar_relatorio_markdown(resultados):
         "MESMOS blocos), a matriz mês-alvo × lead como visão sazonal principal, e a "
         "frequência observada das categorias de tercil como contexto do Brier Score.",
         "",
+        "**Segunda revisão (dois pontos finais pré-merge):** (1) o BS da referência nominal "
+        "do BSS (p=1/3) deixou de assumir a constante 2/9 — agora é calculado "
+        "`mean((1/3 - o_i)^2)` sobre as MESMAS observações da amostra avaliada, por "
+        "horizonte e categoria (a previsão nominal em si continua 1/3; só o cálculo do seu "
+        "BS passou a ser exato); (2) o RMSESS da anomalia CORRIGIDA (seção 3.2) ganhou IC "
+        "95% próprio (seção 6.3), bootstrap em blocos por ano, INDEPENDENTE do IC do RMSESS "
+        "absoluto/diagnóstico (seção 6.2) — os pontos estimados estavam próximos de zero, e "
+        "o IC confirma que a incerteza INCLUI zero em todos os H1-H6; (3) as matrizes "
+        "sazonais (seção 4) agora separam explicitamente RMSESS absoluto (4.2a) de RMSESS de "
+        "anomalia corrigida (4.2b) — nunca mais um campo `rmsess` ambíguo.",
+        "",
         "## 1. Auditoria da base RAW (antes de qualquer métrica)",
         "",
         f"- Registros RAW: {aud['n_raw_total']} (esperado {aud['n_raw_esperado']}).",
@@ -204,13 +215,34 @@ def gerar_relatorio_markdown(resultados):
 
     linhas += [
         "",
-        "### 4.2. Matriz mês-alvo × lead — RMSESS (ponto estimado, sem IC nesta matriz)",
+        "### 4.2a. Matriz mês-alvo × lead — RMSESS ABSOLUTO/BRUTO (precipitação vs. climatologia "
+        "observada; ponto estimado, sem IC nesta matriz)",
+        "",
+        "**Rotulagem explícita (segunda revisão, item 3):** esta é a métrica RMSESS "
+        "absoluta/bruta — nunca confundir com a RMSESS de anomalia corrigida da tabela 4.2b.",
         "",
         "| Mês \\ Lead | H1 | H2 | H3 | H4 | H5 | H6 |",
         "|---|---|---|---|---|---|---|",
     ]
     for mes in range(1, 13):
-        linhas.append(_linha_matriz(_fmt, NOMES_MES[mes-1], mml.get(str(mes), {}), 'rmsess'))
+        linhas.append(_linha_matriz(_fmt, NOMES_MES[mes-1], mml.get(str(mes), {}), 'rmsess_absoluto'))
+
+    linhas += [
+        "",
+        "### 4.2b. Matriz mês-alvo × lead — RMSESS de ANOMALIA CORRIGIDA (climatologia própria "
+        "do modelo; ponto estimado, sem IC nesta matriz)",
+        "",
+        "**Rotulagem explícita (segunda revisão, item 3):** métrica DIFERENTE da 4.2a — RMSE da "
+        "anomalia do modelo (previsto - climatologia própria do modelo) contra a anomalia "
+        "observada, dividido pelo RMSE do benchmark de anomalia zero. Nunca a mesma coisa que "
+        "o RMSESS absoluto.",
+        "",
+        "| Mês \\ Lead | H1 | H2 | H3 | H4 | H5 | H6 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for mes in range(1, 13):
+        linhas.append(_linha_matriz(_fmt, NOMES_MES[mes-1], mml.get(str(mes), {}),
+                                     'rmsess_anomalia_corrigida'))
 
     linhas += [
         "",
@@ -230,6 +262,9 @@ def gerar_relatorio_markdown(resultados):
         "",
         "### 4.4. Resumo por grupo sazonal regional (CLAUDE.md) × lead",
         "",
+        "Cada métrica em sua própria linha, explicitamente rotulada — nunca uma correlação de "
+        "anomalia ao lado de um RMSESS absoluto sem identificação (segunda revisão, item 3).",
+        "",
         "| Grupo | Métrica | H1 | H2 | H3 | H4 | H5 | H6 |",
         "|---|---|---|---|---|---|---|---|",
     ]
@@ -238,7 +273,10 @@ def gerar_relatorio_markdown(resultados):
         por_lead = mgsl.get(grupo, {})
         linhas.append(_linha_matriz(lambda v, _c: str(int(v)), f"{grupo} | N",
                                      por_lead, 'n', marcar_amostra=False))
-        linhas.append(_linha_matriz(_fmt, f"{grupo} | RMSESS", por_lead, 'rmsess'))
+        linhas.append(_linha_matriz(_fmt, f"{grupo} | RMSESS absoluto/bruto",
+                                     por_lead, 'rmsess_absoluto'))
+        linhas.append(_linha_matriz(_fmt, f"{grupo} | RMSESS anomalia corrigida",
+                                     por_lead, 'rmsess_anomalia_corrigida'))
         linhas.append(_linha_matriz(_fmt, f"{grupo} | Corr anomalia corrigida",
                                      por_lead, 'corr_anomalia_climatologia_propria_modelo'))
 
@@ -250,8 +288,9 @@ def gerar_relatorio_markdown(resultados):
         "de referência — a matriz 4.1-4.3 é a análise sazonal principal porque não mistura "
         "lead times diferentes dentro da mesma célula.",
         "",
-        "| Mês | Grupo sazonal | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | RMSESS |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Mês | Grupo sazonal | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | "
+        "RMSESS absoluto | RMSESS anomalia corrigida |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for mes in range(1, 13):
         d = exp['por_mes_do_ano']['por_mes'][str(mes)]
@@ -262,9 +301,11 @@ def gerar_relatorio_markdown(resultados):
                        f"{_fmt(d['bias'])} | {_fmt(d['mae'])} | {_fmt(d['rmse'])} | "
                        f"{_fmt(d['corr_absoluta'], 3)} | "
                        f"{_fmt(d.get('corr_anomalia_climatologia_propria_modelo'), 3)} | "
-                       f"{_fmt(d['rmsess'], 3)} |")
-    linhas += ["", "| Grupo | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | RMSESS |",
-               "|---|---|---|---|---|---|---|---|"]
+                       f"{_fmt(d.get('rmsess_absoluto'), 3)} | "
+                       f"{_fmt(d.get('rmsess_anomalia_corrigida'), 3)} |")
+    linhas += ["", "| Grupo | N | Bias | MAE | RMSE | Corr abs | Corr anomalia corrigida | "
+               "RMSESS absoluto | RMSESS anomalia corrigida |",
+               "|---|---|---|---|---|---|---|---|---|"]
     for grupo in ('chuvosa', 'transicao', 'seca'):
         d = exp['por_mes_do_ano']['por_grupo_sazonal'][grupo]
         if d.get('n', 0) == 0:
@@ -272,7 +313,8 @@ def gerar_relatorio_markdown(resultados):
         linhas.append(f"| {grupo} | {d['n']} | {_fmt(d['bias'])} | {_fmt(d['mae'])} | "
                        f"{_fmt(d['rmse'])} | {_fmt(d['corr_absoluta'], 3)} | "
                        f"{_fmt(d.get('corr_anomalia_climatologia_propria_modelo'), 3)} | "
-                       f"{_fmt(d['rmsess'], 3)} |")
+                       f"{_fmt(d.get('rmsess_absoluto'), 3)} | "
+                       f"{_fmt(d.get('rmsess_anomalia_corrigida'), 3)} |")
 
     linhas += [
         "",
@@ -301,9 +343,28 @@ def gerar_relatorio_markdown(resultados):
     linhas += [
         "",
         f"**Fórmulas:** `{exp['probabilistico_por_horizonte']['1'].get('formula_crpss', 'CRPSS = 1 - CRPS_modelo/CRPS_climatologia')}` "
-        f"— `{exp['probabilistico_por_horizonte']['1'].get('formula_bss', 'BSS = 1 - BS_modelo/BS_referencia (p=1/3)')}`. "
-        "**O Brier Score de referência nominal (p=1/3) é a referência PRINCIPAL e nunca é "
-        "alterada silenciosamente** — a seção 5.1 só complementa.",
+        f"— `{exp['probabilistico_por_horizonte']['1'].get('formula_bss', 'BSS = 1 - BS_modelo/BS_referencia_nominal')}`. "
+        "**A previsão climatológica NOMINAL (p=1/3 por categoria) é a referência PRINCIPAL e "
+        "nunca é alterada silenciosamente** — mas o BS dessa referência (BS_ref_nominal) é "
+        "SEMPRE calculado sobre as mesmas observações da amostra avaliada (segunda revisão, "
+        "item 1), nunca assumido como a constante 2/9 (exata só quando a frequência observada "
+        "da categoria é exatamente 1/3 — ver tabela abaixo).",
+        "",
+        "| Horizonte | BS_ref_nominal seco | BS_ref_nominal normal | BS_ref_nominal úmido |",
+        "|---|---|---|---|",
+    ]
+    for lead in c.LEADS_ESPERADOS:
+        d = exp['probabilistico_por_horizonte'][str(lead)]
+        bs_ref = d.get('brier_referencia_nominal_por_categoria')
+        if not bs_ref:
+            linhas.append(f"| H{lead} | — | — | — |")
+            continue
+        linhas.append(f"| H{lead} | {_fmt(bs_ref['seco'], 4)} | {_fmt(bs_ref['normal'], 4)} | "
+                       f"{_fmt(bs_ref['umido'], 4)} |")
+    linhas += [
+        "",
+        "*Para comparação: a constante antiga `2/9 ≈ 0,2222` só seria exata se a frequência "
+        "observada de cada categoria fosse exatamente 1/3 — a seção 5.1 mostra que não é.*",
         "",
         "### 5.1. Frequência observada das categorias e sensibilidade do Brier/BSS",
         "",
@@ -380,14 +441,16 @@ def gerar_relatorio_markdown(resultados):
 
     linhas += [
         "",
-        "### 6.2. Intervalos de confiança dos skill scores (RMSESS, CRPSS, BSS) — PRINCIPAL para interpretação de habilidade",
+        "### 6.2. Intervalos de confiança do RMSESS/CRPSS/BSS ABSOLUTOS/DIAGNÓSTICO",
         "",
         "Diferente da seção 6.1, aqui o bootstrap reamostra os MESMOS blocos (mesmos anos "
         "sorteados) para recalcular modelo E climatologia a cada reamostra — garante que "
         "RMSESS/CRPSS/BSS sejam proporções válidas a cada iteração, em vez de dividir dois "
         "ICs calculados de forma independente. **A classificação abaixo nunca é 'bom'/'mau' "
         "— só indica se o IC 95% está totalmente acima de zero, inclui zero, ou totalmente "
-        "abaixo de zero.**",
+        "abaixo de zero.** Esta seção é sobre o RMSESS/CRPSS/BSS **absolutos/diagnóstico** "
+        "(precipitação bruta e BS nominal) — o IC do RMSESS de **anomalia corrigida** é "
+        "INDEPENDENTE e está na seção 6.3, nunca reaproveitado daqui (segunda revisão, item 2).",
         "",
         "| Horizonte | RMSESS | IC 95% | Classificação | CRPSS | IC 95% | Classificação |",
         "|---|---|---|---|---|---|---|",
@@ -425,6 +488,36 @@ def gerar_relatorio_markdown(resultados):
 
     linhas += [
         "",
+        "### 6.3. Intervalo de confiança do RMSESS de ANOMALIA CORRIGIDA — INDEPENDENTE da seção 6.2",
+        "",
+        "Segunda revisão, item 2. Mesmo desenho da seção 6.2 (bootstrap em blocos por ano, "
+        "modelo e benchmark nos MESMOS blocos sorteados a cada reamostra), mas aplicado à "
+        "anomalia CORRIGIDA (modelo: previsto - climatologia própria do modelo; benchmark: "
+        "climatologia observada prevendo anomalia zero) — **nunca o IC do RMSESS "
+        "absoluto/diagnóstico da seção 6.2 reaproveitado aqui**: amostra elegível e métrica "
+        "são diferentes. Os pontos estimados (seção 3.2) estavam muito próximos de zero — "
+        "este IC diz se essa proximidade é estatisticamente estável ou só ruído amostral. "
+        "**Classificação meramente DESCRITIVA — nunca convertida em 'bom'/'mau'.**",
+        "",
+        "| Horizonte | RMSESS anomalia corrigida | IC 95% | Posição do IC em relação a zero |",
+        "|---|---|---|---|",
+    ]
+    ic_rmsess_corrigida = exp.get('intervalos_confianca_rmsess_anomalia_corrigida_por_horizonte', {})
+    for lead in c.LEADS_ESPERADOS:
+        d = ic_rmsess_corrigida.get(str(lead), {})
+        if not d or not d.get('amostra_suficiente', False):
+            linhas.append(f"| H{lead} | — | — | {d.get('nota', 'amostra insuficiente')} |")
+            continue
+        r = d.get('rmsess_anomalia_corrigida')
+        if not r:
+            linhas.append(f"| H{lead} | — | — | {d.get('nota', 'N/D')} |")
+            continue
+        linhas.append(f"| H{lead} | {_fmt(r['estimativa'], 3)} | [{_fmt(r['ic95_lo'], 3)}, "
+                       f"{_fmt(r['ic95_hi'], 3)}] | "
+                       f"{_ic_texto(d.get('rmsess_anomalia_corrigida_ic_classificacao'))} |")
+
+    linhas += [
+        "",
         "## 7. LOYO retrospectivo (complementar — NUNCA misturado com a simulação operacional)",
         "",
         f"**Rótulo: `{loyo['rotulo']}`.** {loyo['aviso']}",
@@ -440,8 +533,10 @@ def gerar_relatorio_markdown(resultados):
         "",
         "## 8. Interpretação — separada por dimensão, nunca uma conclusão única",
         "",
-        "Esta seção separa deliberadamente SEIS leituras DIFERENTES — nunca resumidas numa "
-        "frase como \"modelo validado\" ou \"boa habilidade\":",
+        "Esta seção separa deliberadamente SETE leituras DIFERENTES (a segunda revisão "
+        "desdobrou o item 3 em 3 e 3b, porque são dois skill scores INDEPENDENTES com ICs "
+        "próprios) — nunca resumidas numa frase como \"modelo validado\" ou \"boa "
+        "habilidade\":",
         "",
         "1. **Precipitação absoluta** — correlação alta (0.80-0.83) em todos os horizontes, "
         "mas dominada pelo ciclo sazonal regional (chuva concentrada out-abr); não é medida "
@@ -454,35 +549,52 @@ def gerar_relatorio_markdown(resultados):
         "fortemente (ex.: RMSE de H1 cai de ~72mm para ~56mm), e a correlação em H3-H6 fica "
         "MAIOR que na versão diagnóstico — evidência de que parte do que parecia 'sem skill' "
         "na versão anterior era viés sistemático do modelo, não ausência de sinal.",
-        "3. **Skill relativo à climatologia (RMSESS/CRPSS, seção 6.2)** — ponto estimado "
-        "ainda negativo em todos os horizontes tanto para RMSESS quanto CRPSS, e os ICs 95% "
-        "calculados nesta revisão (bootstrap pareado, mesmos blocos) ficaram TOTALMENTE "
-        "ABAIXO de zero em todos os H1-H6 testados — ou seja, a incerteza amostral não muda "
-        "a conclusão de que a climatologia expansível sem leakage teve erro MENOR que o "
-        "ensemble bruto do CFSv2 nesta amostra. Isso é mais forte que apenas 'o ponto "
-        "estimado é negativo': a faixa de incerteza também não inclui zero.",
-        "4. **Probabilístico (CRPSS/BSS, seções 5 e 6.2)** — predominantemente negativo, "
-        "consistente com o item 3; a seção 5.1 mostra que a frequência observada de 'seco' "
-        "(~41,7% em H1) se desvia do nominal 1/3, contexto relevante para a leitura do Brier "
-        "Score mas que não altera a referência nominal.",
-        "5. **Dependência com o lead** — RMSESS (ponto estimado) piora monotonicamente de H1 "
-        "(-0,22) a H6 (-0,49); a anomalia corrigida NÃO segue o mesmo padrão monotônico "
-        "(ver item 2) — os dois fenômenos (skill relativo à climatologia vs. correlação de "
-        "anomalia) respondem de forma diferente ao aumento do lead, e não devem ser lidos "
-        "como a mesma coisa.",
-        "6. **Dependência com a época do ano (seção 4)** — a matriz mês × lead mostra "
-        "variação relevante célula a célula (N≈20/célula), mas qualquer leitura por mês "
-        "isolado deve considerar a amostra pequena; o resumo por grupo sazonal (4.4) suaviza "
-        "esse ruído sem substituir a matriz completa.",
+        "3. **Skill ABSOLUTO/DIAGNÓSTICO relativo à climatologia (RMSESS/CRPSS, seção 6.2)** "
+        "— ponto estimado negativo em todos os horizontes tanto para RMSESS quanto CRPSS, e "
+        "os ICs 95% (bootstrap pareado, mesmos blocos) ficaram TOTALMENTE ABAIXO de zero em "
+        "todos os H1-H6 — a incerteza amostral não muda a conclusão de que a climatologia "
+        "expansível sem leakage teve erro MENOR que o ensemble bruto do CFSv2 (precipitação "
+        "absoluta) nesta amostra. **Esta conclusão vale só para a versão absoluta/diagnóstico "
+        "— NÃO pode ser estendida à anomalia corrigida sem olhar o IC próprio dela (item 3b "
+        "abaixo), que é outra métrica, sobre outra amostra.**",
+        "3b. **Skill da ANOMALIA CORRIGIDA relativo à climatologia (RMSESS, seção 6.3 — "
+        "INDEPENDENTE do item 3)** — os pontos estimados (seção 3.2) já estavam muito "
+        "próximos de zero (entre -0,04 e +0,05 conforme o horizonte); o IC 95% (bootstrap "
+        "próprio, nunca reaproveitado do item 3) confirma que a incerteza amostral INCLUI "
+        "zero em todos os H1-H6 — diferente do item 3, aqui não há evidência de que o modelo "
+        "seja sistematicamente melhor OU pior que o benchmark de anomalia zero; o resultado é "
+        "estatisticamente indeterminado, não negativo.",
+        "4. **Probabilístico (CRPSS/BSS, seções 5 e 6.2)** — CRPSS predominantemente negativo "
+        "com IC abaixo de zero, consistente com o item 3 (mesma métrica absoluta). O BSS "
+        "nominal foi recalculado nesta revisão: BS_ref_nominal agora é computado sobre as "
+        "mesmas observações da amostra (nunca a constante 2/9) — a seção 5.1 mostra que a "
+        "frequência observada de 'seco' (~41,7% em H1) se desvia do nominal 1/3, por isso "
+        "BS_ref_nominal difere de 2/9 e o BSS muda de valor em relação à revisão anterior "
+        "(mesma conclusão qualitativa: negativo), sem alterar a referência nominal em si.",
+        "5. **Dependência com o lead** — RMSESS absoluto (ponto estimado) piora "
+        "monotonicamente de H1 a H6; o RMSESS de anomalia corrigida NÃO segue o mesmo padrão "
+        "monotônico e, com IC incluindo zero em todos os horizontes (item 3b), não há sequer "
+        "uma tendência estatisticamente distinguível de ruído para interpretar — os dois "
+        "fenômenos (skill absoluto vs. skill de anomalia corrigida) respondem de forma "
+        "diferente ao aumento do lead, e não devem ser lidos como a mesma coisa.",
+        "6. **Dependência com a época do ano (seção 4)** — a matriz mês × lead agora reporta "
+        "RMSESS absoluto (4.2a) e RMSESS de anomalia corrigida (4.2b) em tabelas SEPARADAS e "
+        "explicitamente rotuladas — nunca uma ao lado da outra sem identificação. Variação "
+        "relevante célula a célula (N≈20/célula) em ambas, mas qualquer leitura por mês "
+        "isolado deve considerar a amostra pequena e a ausência de IC nesta matriz; o resumo "
+        "por grupo sazonal (4.4) suaviza esse ruído sem substituir a matriz completa.",
         "",
         "**O ensemble bruto aqui avaliado (`forecast_prec_mm`, sem qualquer correção "
         "operacional de viés ou downscaling) não deve ser confundido com um produto "
         "operacional corrigido — esta é avaliação científica do RAW, nenhuma correção de "
-        "viés foi aplicada nesta fase.** Nenhuma das seis leituras acima, isoladamente, "
-        "autoriza uma conclusão geral de habilidade. Qualquer decisão sobre uso operacional "
-        "do CFSv2 deve revisar conjuntamente: magnitude do skill, intervalo de confiança "
-        "(seção 6.2), horizonte, época do ano (seção 4) e tamanho da amostra (N=240 "
-        "inicializações, mas com dependência temporal relevante — daí o bootstrap em blocos).",
+        "viés foi aplicada nesta fase.** Nenhuma das leituras acima, isoladamente, autoriza "
+        "uma conclusão geral de habilidade — e, especificamente, a conclusão negativa do item "
+        "3 (RMSESS/CRPSS absolutos) NUNCA deve ser extrapolada para a anomalia corrigida "
+        "(item 3b), cujo próprio IC (seção 6.3) a contradiz. Qualquer decisão sobre uso "
+        "operacional do CFSv2 deve revisar conjuntamente: qual definição de skill (absoluta "
+        "vs. anomalia corrigida), magnitude, intervalo de confiança (seções 6.2 e 6.3), "
+        "horizonte, época do ano (seção 4) e tamanho da amostra (N=240 inicializações, mas "
+        "com dependência temporal relevante — daí o bootstrap em blocos).",
         "",
         "## Restrições respeitadas",
         "",

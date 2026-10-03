@@ -684,6 +684,166 @@ class BootstrapSkillScoresMesmosBlocosTestCase(unittest.TestCase):
                               "reamostradas")
 
 
+class BrierReferenciaNominalTestCase(unittest.TestCase):
+    """Item 1 da segunda revisão — BS_ref_nominal NUNCA é a constante
+    2/9: isso só é exato quando a frequência OBSERVADA da categoria,
+    nesta amostra, é exatamente 1/3. BS_ref_nominal = mean((1/3-o_i)^2)
+    calculado sobre as MESMAS observações da amostra avaliada."""
+
+    def _linha(self, observado, t33=10.0, t67=20.0):
+        return {'observado': observado, 'tercil_33': t33, 'tercil_67': t67}
+
+    def test_a_frequencia_observada_igual_a_um_terco_da_bs_ref_exatamente_dois_nonos(self):
+        # 3 linhas, exatamente 1 'seco' (observado <= t33) -> freq=1/3.
+        linhas = [self._linha(5.0), self._linha(15.0), self._linha(25.0)]
+        bs_ref = c._brier_score_referencia_nominal_categoria(linhas, 'seco')
+        self.assertAlmostEqual(bs_ref, 2 / 9, places=10)
+
+    def test_b_frequencia_observada_diferente_de_um_terco_da_bs_ref_diferente_de_dois_nonos(self):
+        # 4 linhas, 2 'seco' -> freq=1/2 != 1/3.
+        linhas = [self._linha(5.0), self._linha(6.0), self._linha(15.0), self._linha(25.0)]
+        bs_ref = c._brier_score_referencia_nominal_categoria(linhas, 'seco')
+        self.assertNotAlmostEqual(bs_ref, 2 / 9, places=6)
+        esperado = np.mean([(1 / 3 - 1) ** 2, (1 / 3 - 1) ** 2, (1 / 3 - 0) ** 2, (1 / 3 - 0) ** 2])
+        self.assertAlmostEqual(bs_ref, esperado, places=10)
+
+    def test_c_benchmark_e_calculado_sobre_exatamente_as_mesmas_observacoes_da_amostra(self):
+        """Duas amostras DIFERENTES (frequências diferentes de 'seco')
+        produzem BS_ref DIFERENTES — prova de que o benchmark não é
+        uma constante externa, mas rastreia a amostra efetivamente
+        passada (nunca uma amostra retrospectiva diferente)."""
+        linhas_a = [self._linha(5.0), self._linha(15.0), self._linha(25.0), self._linha(26.0)]  # freq=1/4
+        linhas_b = [self._linha(5.0), self._linha(6.0), self._linha(7.0), self._linha(25.0)]    # freq=3/4
+        bs_ref_a = c._brier_score_referencia_nominal_categoria(linhas_a, 'seco')
+        bs_ref_b = c._brier_score_referencia_nominal_categoria(linhas_b, 'seco')
+        self.assertNotAlmostEqual(bs_ref_a, bs_ref_b, places=6)
+        ind_a = [1.0 if l['observado'] <= 10.0 else 0.0 for l in linhas_a]
+        ind_b = [1.0 if l['observado'] <= 10.0 else 0.0 for l in linhas_b]
+        self.assertAlmostEqual(bs_ref_a, np.mean([(1 / 3 - o) ** 2 for o in ind_a]), places=10)
+        self.assertAlmostEqual(bs_ref_b, np.mean([(1 / 3 - o) ** 2 for o in ind_b]), places=10)
+
+
+class AvaliarProbabilisticoBssNominalTestCase(unittest.TestCase):
+    """Confirma, com os dados REAIS já aprovados, que o BSS nominal
+    (item 1 da segunda revisão) bate exatamente com BSS = 1 -
+    BS_modelo/BS_ref_nominal (ambos reportados sobre a mesma amostra),
+    e que BS_ref_nominal difere de fato da constante antiga 2/9."""
+
+    def test_a_bss_bate_com_a_formula_usando_o_proprio_bs_ref_nominal_reportado(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+        prob = c.avaliar_probabilistico_por_horizonte(base_enr, chirps)
+        for lead in c.LEADS_ESPERADOS:
+            d = prob[lead]
+            for cat in ('seco', 'normal', 'umido'):
+                bs = d['brier_score_por_categoria'][cat]
+                bs_ref = d['brier_referencia_nominal_por_categoria'][cat]
+                bss = d['bss_por_categoria'][cat]
+                self.assertAlmostEqual(bss, 1 - bs / bs_ref, places=9,
+                                        msg=f"H{lead} {cat}: BSS não bate com 1 - BS/BS_ref_nominal")
+
+    def test_b_bs_ref_nominal_difere_da_constante_antiga_dois_nonos(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+        prob = c.avaliar_probabilistico_por_horizonte(base_enr, chirps)
+        pelo_menos_uma_diferenca = any(
+            abs(bs_ref - 2 / 9) > 1e-6
+            for lead in c.LEADS_ESPERADOS
+            for bs_ref in prob[lead]['brier_referencia_nominal_por_categoria'].values())
+        self.assertTrue(pelo_menos_uma_diferenca,
+                         "nenhum BS_ref_nominal real difere de 2/9 — suspeito que a correção "
+                         "não esteja de fato ativa")
+
+
+class BootstrapBssNominalCorrigidoTestCase(unittest.TestCase):
+    """Confirma que, também DENTRO do bootstrap de skill scores
+    (bootstrap_skill_scores_por_horizonte), o BSS pontual usa o
+    BS_ref_nominal calculado sobre a MESMA amostra — nunca a constante
+    2/9 (item 1 da segunda revisão aplicado ao contexto do bootstrap)."""
+
+    def test_a_bss_pontual_do_bootstrap_bate_com_bs_ref_nominal_da_mesma_amostra(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+        linhas = c.construir_linhas_avaliacao_por_lead(base_enr, chirps, lead=1)
+        ic = c.bootstrap_skill_scores_por_horizonte(base_enr, chirps, n_resamples=5, seed=1)
+        for cat in ('seco', 'normal', 'umido'):
+            bs = c._brier_score_categoria(linhas, cat)
+            bs_ref = c._brier_score_referencia_nominal_categoria(linhas, cat)
+            esperado = 1 - bs / bs_ref
+            self.assertAlmostEqual(ic[1]['bss_por_categoria'][cat]['estimativa'], esperado, places=9)
+
+
+class BootstrapRmsessAnomaliaCorrigidaTestCase(unittest.TestCase):
+    """Item 2 da segunda revisão — IC do RMSESS de anomalia CORRIGIDA,
+    sempre INDEPENDENTE do IC do RMSESS absoluto/diagnóstico (nunca
+    reaproveitado), calculado só sobre a amostra elegível (com
+    climatologia do modelo disponível)."""
+
+    def test_a_amostra_elegivel_bate_com_n_com_climatologia_modelo_disponivel(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+        det = c.metricas_deterministicas_por_horizonte(base_enr)
+        for lead in c.LEADS_ESPERADOS:
+            linhas = c.construir_linhas_anomalia_corrigida_por_lead(base_enr, lead)
+            self.assertEqual(len(linhas), det[lead]['n_com_climatologia_modelo_disponivel'],
+                              f"lead={lead}: amostra elegível da anomalia corrigida não bate "
+                              "com n_com_climatologia_modelo_disponivel")
+
+    def test_b_ic_independente_do_ic_do_rmsess_absoluto(self):
+        """Com os dados REAIS, confirma que o IC da anomalia corrigida
+        é estruturalmente DIFERENTE do IC absoluto/diagnóstico — nunca
+        reaproveitado (amostra e métrica são diferentes)."""
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+        ic_absoluto = c.bootstrap_skill_scores_por_horizonte(base_enr, chirps, n_resamples=5, seed=1)
+        ic_corrigido = c.bootstrap_rmsess_anomalia_corrigida_por_horizonte(base_enr, n_resamples=5, seed=1)
+        for lead in c.LEADS_ESPERADOS:
+            est_abs = ic_absoluto[lead]['rmsess']['estimativa']
+            est_corr = ic_corrigido[lead]['rmsess_anomalia_corrigida']['estimativa']
+            self.assertNotAlmostEqual(est_abs, est_corr, places=2,
+                                       msg=f"lead={lead}: RMSESS absoluto e de anomalia "
+                                       "corrigida bateram quase exatamente — verificar "
+                                       "reaproveitamento indevido")
+
+    def test_c_rmsess_perfeito_quando_anomalia_do_modelo_e_exatamente_a_observada(self):
+        """Caso sintético determinístico: anomalia do modelo IDÊNTICA
+        à observada em todos os anos -> RMSE_modelo=0 -> RMSESS=1."""
+        linhas = [{'target_ano': 1990 + i, 'anom_modelo': v, 'anom_obs': v}
+                  for i, v in enumerate([10.0, -5.0, 20.0, -15.0, 8.0])]
+        rm, rb = c._rmse_anomalia_modelo_e_benchmark_zero(linhas)
+        self.assertAlmostEqual(rm, 0.0, places=9)
+        self.assertGreater(rb, 0.0)
+        self.assertAlmostEqual(c.rmsess(rm, rb), 1.0, places=9)
+
+    def test_d_rmsess_negativo_quando_modelo_erra_mais_que_a_variabilidade_observada(self):
+        """Caso sintético oposto: anomalia do modelo com viés fixo
+        grande em relação à variabilidade observada -> RMSESS < 0."""
+        linhas = [{'target_ano': 1990 + i, 'anom_modelo': v + 500.0, 'anom_obs': v}
+                  for i, v in enumerate([10.0, -5.0, 20.0, -15.0, 8.0])]
+        rm, rb = c._rmse_anomalia_modelo_e_benchmark_zero(linhas)
+        self.assertLess(c.rmsess(rm, rb), 0.0)
+
+
 class RelatorioTestCase(unittest.TestCase):
     """Smoke test do gerador de relatório (scripts/cfsv2_relatorio_2c3c.py)
     — nunca recalcula métrica, só formata o que já foi calculado."""
@@ -733,6 +893,9 @@ class RelatorioTestCase(unittest.TestCase):
                 'intervalos_confianca_skill_scores_por_horizonte': {
                     str(h): {'amostra_suficiente': False, 'nota': 'amostra insuficiente'}
                     for h in c.LEADS_ESPERADOS},
+                'intervalos_confianca_rmsess_anomalia_corrigida_por_horizonte': {
+                    str(h): {'amostra_suficiente': False, 'nota': 'amostra insuficiente'}
+                    for h in c.LEADS_ESPERADOS},
             },
             'loyo_retrospective': {
                 'rotulo': 'loyo_retrospective', 'aviso': 'não simula expanding operational',
@@ -769,10 +932,19 @@ class RelatorioTestCase(unittest.TestCase):
                       'climatologia própria do modelo', 'Avaliação sazonal',
                       'Matriz mês-alvo', 'visao_agregada_descritiva_H1_a_H6_combinados',
                       'probabilística', 'sensibilidade do Brier/BSS',
+                      'BS_ref_nominal', 'RMSESS absoluto/bruto', 'RMSESS anomalia corrigida',
                       'Intervalos de confiança', 'skill scores',
+                      'ANOMALIA CORRIGIDA — INDEPENDENTE da seção 6.2',
                       'LOYO retrospectivo', 'Interpretação'):
             self.assertIn(secao, relatorio)
         _assert_nunca_declara_conclusao_isolada(self, relatorio)
+        # Segunda revisão, item 3 — nunca uma correlação de anomalia ao
+        # lado de um RMSESS absoluto sem rotulagem explícita: os dois
+        # campos de RMSESS da matriz sazonal precisam estar rotulados
+        # com as palavras 'absoluto' e 'corrigida' na MESMA seção 4.
+        secao_4 = relatorio[relatorio.index('## 4. Avaliação sazonal'):relatorio.index('## 5. Avaliação probabilística')]
+        self.assertIn('RMSESS absoluto/bruto', secao_4)
+        self.assertIn('RMSESS anomalia corrigida', secao_4)
 
 
 if __name__ == '__main__':
