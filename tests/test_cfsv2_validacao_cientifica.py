@@ -116,6 +116,163 @@ class TargetNuncaNaPropriaClimatologiaTestCase(unittest.TestCase):
                               f"lead={lead}: climatologia incluiu o próprio ano do target")
 
 
+def _indice_previsoes_sintetico(inits, leads=c.LEADS_ESPERADOS, seed=7):
+    """índice (init_date, lead) -> ensemble_mean sintético determinístico."""
+    rng = np.random.default_rng(seed)
+    linhas = []
+    for init_date in inits:
+        for lead in leads:
+            linhas.append({'init_date': init_date, 'lead': lead,
+                            'ensemble_mean': float(rng.uniform(0, 300))})
+    return pd.DataFrame(linhas)
+
+
+class ClimatologiaDoModeloSemLeakageTestCase(unittest.TestCase):
+    """Item 1 da revisão — climatologia PRÓPRIA do modelo, item 8 dos
+    testes pedidos: nunca usa uma inicialização >= init_date."""
+
+    def _inits_mensais(self, ano_inicio=1991, ano_fim=2005, mes=6):
+        return [f'{a}-{mes:02d}' for a in range(ano_inicio, ano_fim + 1)]
+
+    def test_a_nunca_usa_inicializacao_igual_ou_posterior(self):
+        inits = self._inits_mensais()
+        indice = _indice_previsoes_sintetico(inits)
+        for init_date in inits:
+            for lead in c.LEADS_ESPERADOS:
+                clim = c.climatologia_modelo_expansivel(lead, init_date, indice)
+                init_p = c._periodo(init_date)
+                for usado in clim['inits_usados']:
+                    self.assertLess(c._periodo(usado), init_p,
+                                     f"climatologia do modelo (lead={lead}, init={init_date}) "
+                                     f"usou {usado}, que não é < init_date")
+
+    def test_b_primeira_inicializacao_de_cada_mes_nao_tem_climatologia(self):
+        inits = self._inits_mensais()
+        indice = _indice_previsoes_sintetico(inits)
+        clim = c.climatologia_modelo_expansivel(lead=1, init_date=inits[0], indice_previsoes=indice)
+        self.assertEqual(clim['n_inits'], 0)
+        self.assertIsNone(clim['media'])
+
+    def test_c_climatologia_cresce_com_inicializacoes_mais_tardias(self):
+        inits = self._inits_mensais()
+        indice = _indice_previsoes_sintetico(inits)
+        clim_cedo = c.climatologia_modelo_expansivel(1, inits[2], indice)
+        clim_tarde = c.climatologia_modelo_expansivel(1, inits[-1], indice)
+        self.assertGreater(clim_tarde['n_inits'], clim_cedo['n_inits'])
+
+    def test_d_nunca_mistura_leads_diferentes(self):
+        inits = self._inits_mensais()
+        indice = _indice_previsoes_sintetico(inits)
+        clim_h1 = c.climatologia_modelo_expansivel(1, inits[-1], indice)
+        clim_h6 = c.climatologia_modelo_expansivel(6, inits[-1], indice)
+        # mesmas inicializações usadas (mesmos anos), mas médias de
+        # ensemble_mean DIFERENTES, porque vêm de linhas com lead
+        # diferente no índice sintético — confirma que o filtro por
+        # lead está sendo aplicado, não ignorado.
+        self.assertEqual(clim_h1['n_inits'], clim_h6['n_inits'])
+        self.assertNotEqual(clim_h1['media'], clim_h6['media'])
+
+    def test_e_previsao_atual_nunca_entra_na_propria_climatologia_do_modelo(self):
+        """Garantia estrutural análoga à da climatologia observada:
+        como a climatologia do modelo só usa init_date < init_date
+        avaliado, a PRÓPRIA previsão (do init_date atual) nunca entra
+        no cálculo da climatologia que a avalia."""
+        inits = self._inits_mensais()
+        indice = _indice_previsoes_sintetico(inits)
+        init_atual = inits[-1]
+        for lead in c.LEADS_ESPERADOS:
+            clim = c.climatologia_modelo_expansivel(lead, init_atual, indice)
+            self.assertNotIn(init_atual, clim['inits_usados'])
+
+
+def _base_enriquecida_determinista(linhas):
+    """Monta um 'base_enriquecida' mínimo (mesmas colunas que
+    metricas_deterministicas_por_horizonte espera) a partir de valores
+    EXATOS e controlados — evita ruído de estimação estatística,
+    testando a FÓRMULA diretamente, não a convergência de uma
+    climatologia amostrada."""
+    linhas_expandidas = []
+    for linha in linhas:
+        for member in range(1, 25):   # 24 membros idênticos — só a média importa aqui
+            linhas_expandidas.append({**linha, 'member': member})
+    return pd.DataFrame(linhas_expandidas)
+
+
+class AnomaliaModeloVsObservadaNaoEquivalentesTestCase(unittest.TestCase):
+    """Item 8, último ponto pedido: caso sintético em que a
+    climatologia do modelo difere SISTEMATICAMENTE da observada,
+    demonstrando que as duas definições de anomalia NÃO são
+    equivalentes. Usa BIAS/RMSE (não correlação) como evidência: um
+    viés aditivo CONSTANTE não muda a correlação por definição
+    (invariante a deslocamento) — o efeito real aparece no bias/RMSE
+    da anomalia, que é exatamente onde a correção importa na prática.
+    Climatologias fornecidas como valores EXATOS (não estimadas de uma
+    amostra sintética ruidosa), para isolar o efeito da FÓRMULA."""
+
+    def test_a_bias_diagnostico_carrega_o_vies_do_modelo_corrigida_nao(self):
+        vies_modelo_fixo = 150.0
+        linhas = []
+        for i, (obs, clim_obs) in enumerate([(100.0, 80.0), (200.0, 80.0), (50.0, 80.0)]):
+            previsto = obs + vies_modelo_fixo
+            clim_modelo = clim_obs + vies_modelo_fixo   # climatologia do modelo carrega o MESMO viés
+            linhas.append({'init_date': f'{1991+i}-06', 'target_month': f'{1991+i}-06', 'lead': 1,
+                            'forecast_prec_mm': previsto, 'obs_prec_mm': obs,
+                            'clim_media': clim_obs, 'clim_n_anos': 10,
+                            'clim_modelo_media': clim_modelo, 'clim_modelo_n_inits': 5})
+        base_enr = _base_enriquecida_determinista(linhas)
+        det = c.metricas_deterministicas_por_horizonte(base_enr)
+        d = det[1]
+        bias_diag = d['anomalia_diagnostico_climatologia_observada']['bias']
+        bias_corrigido = d['anomalia_corrigida_climatologia_propria_modelo']['bias']
+        # diagnóstico: climatologia OBSERVADA (sem o viés do modelo)
+        # subtraída da previsão — o viés fixo (150mm) sobra inteiro.
+        self.assertAlmostEqual(bias_diag, vies_modelo_fixo, places=6)
+        # corrigida: climatologia PRÓPRIA do modelo (que também carrega
+        # o mesmo viés fixo) subtraída da previsão — o viés se cancela
+        # EXATAMENTE.
+        self.assertAlmostEqual(bias_corrigido, 0.0, places=6)
+        self.assertGreater(abs(bias_diag - bias_corrigido), 100.0,
+                            "as duas definições de anomalia não podem ser equivalentes aqui")
+
+    def test_b_rmse_diagnostico_maior_que_corrigido_com_vies_do_modelo(self):
+        vies_modelo_fixo = 150.0
+        linhas = []
+        for i, (obs, clim_obs) in enumerate([(100.0, 80.0), (200.0, 80.0), (50.0, 80.0), (300.0, 80.0)]):
+            previsto = obs + vies_modelo_fixo
+            clim_modelo = clim_obs + vies_modelo_fixo
+            linhas.append({'init_date': f'{1991+i}-06', 'target_month': f'{1991+i}-06', 'lead': 1,
+                            'forecast_prec_mm': previsto, 'obs_prec_mm': obs,
+                            'clim_media': clim_obs, 'clim_n_anos': 10,
+                            'clim_modelo_media': clim_modelo, 'clim_modelo_n_inits': 5})
+        base_enr = _base_enriquecida_determinista(linhas)
+        det = c.metricas_deterministicas_por_horizonte(base_enr)
+        d = det[1]
+        rmse_diag = d['anomalia_diagnostico_climatologia_observada']['rmse']
+        rmse_corrigido = d['anomalia_corrigida_climatologia_propria_modelo']['rmse']
+        self.assertAlmostEqual(rmse_diag, vies_modelo_fixo, places=6)   # erro = só o viés, constante
+        self.assertAlmostEqual(rmse_corrigido, 0.0, places=6)           # viés cancelado, erro zero
+        self.assertGreater(rmse_diag, rmse_corrigido + 50.0)
+
+    def test_c_amostra_real_mostra_diferenca_consistente_entre_as_duas_definicoes(self):
+        """Confirma com os dados REAIS já aprovados (sem rede) que as
+        duas definições produzem valores DIFERENTES de fato — não só
+        no caso sintético extremo."""
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+        det = c.metricas_deterministicas_por_horizonte(base_enr)
+        for lead in c.LEADS_ESPERADOS:
+            d = det[lead]
+            rmse_diag = d['anomalia_diagnostico_climatologia_observada']['rmse']
+            rmse_corrigida = d['anomalia_corrigida_climatologia_propria_modelo']['rmse']
+            self.assertNotAlmostEqual(rmse_diag, rmse_corrigida, delta=0.5,
+                                       msg=f"H{lead}: as duas definições bateram quase exatamente "
+                                       "— verificar se a climatologia do modelo está mesmo sendo usada")
+
+
 class TercisNuncaUsamSerieCompletaTestCase(unittest.TestCase):
     """Item 8/11 — os limites de tercil usam SÓ os anos elegíveis da
     climatologia expansível, nunca 1981-2011 completo."""
@@ -198,7 +355,8 @@ class MembrosNuncaMisturadosEntreInicializacoesTestCase(unittest.TestCase):
                 linhas.append({'init_date': init_date, 'target_month': init_date, 'lead': 1,
                                 'member': member, 'forecast_prec_mm': valor_base + member,
                                 'obs_prec_mm': 50.0, 'target_ano': int(init_date[:4]), 'target_mes': 1,
-                                'clim_media': 40.0, 'clim_n_anos': 10})
+                                'clim_media': 40.0, 'clim_n_anos': 10,
+                                'clim_modelo_media': 40.0, 'clim_modelo_n_inits': 5})
         base = pd.DataFrame(linhas)
         resultado = c.metricas_deterministicas_por_horizonte(base)
         # média de 1995-01 (100+1..100+24) e 1996-01 (500+1..500+24) não
@@ -400,6 +558,132 @@ class ComDadosReaisAprovadosTestCase(unittest.TestCase):
         self.assertEqual(len(base), 34560)
 
 
+class MatrizMesLeadTestCase(unittest.TestCase):
+    """Item 3/8 da revisão — matriz target_month × lead (visão sazonal
+    PRINCIPAL): confirma N≈20/célula (240 inits / 12 meses) e que cada
+    célula usa SÓ as linhas daquele mês e lead (nunca agregado/misturado
+    com outro mês)."""
+
+    def setUp(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        self.base_enr = c._enriquecer_com_climatologia(base, chirps)
+
+    def test_a_cada_celula_tem_aproximadamente_20_inicializacoes(self):
+        matriz = c.metricas_matriz_mes_lead(self.base_enr)
+        for mes in range(1, 13):
+            for lead in c.LEADS_ESPERADOS:
+                n = matriz[mes][lead]['n']
+                self.assertGreaterEqual(n, 15, f"mes={mes} lead={lead}: N={n} muito abaixo do esperado (~20)")
+                self.assertLessEqual(n, 25, f"mes={mes} lead={lead}: N={n} muito acima do esperado (~20)")
+
+    def test_b_soma_dos_12_meses_bate_com_total_do_horizonte(self):
+        """Se uma célula estivesse vazando linhas de outro mês, a soma
+        das 12 células ultrapassaria o N total do horizonte (ou ficaria
+        abaixo, se alguma linha fosse perdida)."""
+        matriz = c.metricas_matriz_mes_lead(self.base_enr)
+        det = c.metricas_deterministicas_por_horizonte(self.base_enr)
+        for lead in c.LEADS_ESPERADOS:
+            soma_meses = sum(matriz[mes][lead]['n'] for mes in range(1, 13))
+            self.assertEqual(soma_meses, det[lead]['n'],
+                              f"lead={lead}: soma das 12 células do mês não bate com N total do "
+                              "horizonte — sinal de mistura/duplicação entre meses")
+
+
+class MatrizGrupoSazonalLeadTestCase(unittest.TestCase):
+    """Item 3/8 da revisão — resumo grupo_sazonal × lead: confirma que o
+    N de cada grupo é exatamente a soma dos meses que o compõem (nunca
+    um mês pertencendo a dois grupos, nem um mês esquecido)."""
+
+    def setUp(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        self.base_enr = c._enriquecer_com_climatologia(base, chirps)
+
+    def test_a_grupo_sazonal_e_soma_exata_dos_meses_que_o_compoem(self):
+        matriz_mes = c.metricas_matriz_mes_lead(self.base_enr)
+        matriz_grupo = c.metricas_matriz_grupo_sazonal_lead(self.base_enr)
+        for grupo in ('chuvosa', 'transicao', 'seca'):
+            meses_grupo = [m for m, g in c.GRUPO_SAZONAL_POR_MES.items() if g == grupo]
+            for lead in c.LEADS_ESPERADOS:
+                soma = sum(matriz_mes[mes][lead]['n'] for mes in meses_grupo)
+                self.assertEqual(soma, matriz_grupo[grupo][lead]['n'],
+                                  f"grupo={grupo} lead={lead}: N do grupo não é a soma exata dos "
+                                  "meses que o compõem")
+
+    def test_b_nenhum_mes_pertence_a_mais_de_um_grupo_e_todos_os_12_estao_cobertos(self):
+        self.assertEqual(set(c.GRUPO_SAZONAL_POR_MES.keys()), set(range(1, 13)))
+        self.assertEqual(len(c.GRUPO_SAZONAL_POR_MES), 12)
+
+
+class BootstrapSkillScoresMesmosBlocosTestCase(unittest.TestCase):
+    """Item 2/8 da revisão — garante ESTRUTURALMENTE que o bootstrap de
+    skill scores recalcula RMSE/CRPS/Brier do modelo e do benchmark
+    usando a MESMA lista de linhas reamostradas em cada iteração — nunca
+    bootstraps independentes, que invalidariam RMSESS/CRPSS como razão
+    (numerador e denominador precisam vir do mesmo sorteio de anos)."""
+
+    def test_a_mesmo_objeto_de_linhas_reamostradas_alimenta_rmse_crps_e_brier(self):
+        if not c.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        import unittest.mock as mock
+        df_raw = c.carregar_cfsv2_raw()
+        chirps = c.carregar_chirps_v3_historico()
+        base = c.construir_base_pareada(df_raw, chirps)
+        base_enr = c._enriquecer_com_climatologia(base, chirps)
+
+        ids_rmse, ids_crps, ids_brier = [], [], []
+        orig_rmse = c._rmse_modelo_e_climatologia
+        orig_crps = c._crps_medio_modelo_e_climatologia
+        orig_brier = c._brier_score_categoria
+
+        def fake_rmse(linhas):
+            ids_rmse.append(id(linhas))
+            return orig_rmse(linhas)
+
+        def fake_crps(linhas):
+            ids_crps.append(id(linhas))
+            return orig_crps(linhas)
+
+        def fake_brier(linhas, categoria):
+            ids_brier.append(id(linhas))
+            return orig_brier(linhas, categoria)
+
+        n_resamples = 5
+        with mock.patch.object(c, 'LEADS_ESPERADOS', (1,)), \
+             mock.patch.object(c, '_rmse_modelo_e_climatologia', side_effect=fake_rmse), \
+             mock.patch.object(c, '_crps_medio_modelo_e_climatologia', side_effect=fake_crps), \
+             mock.patch.object(c, '_brier_score_categoria', side_effect=fake_brier):
+            resultado = c.bootstrap_skill_scores_por_horizonte(base_enr, chirps,
+                                                                n_resamples=n_resamples, seed=1)
+
+        self.assertTrue(resultado[1]['amostra_suficiente'])
+        # A última chamada de cada lista é o cálculo PONTUAL (fora do
+        # laço, sobre `linhas` completo, não reamostrado) — as
+        # n_resamples anteriores são as reamostras do laço, na ordem.
+        self.assertEqual(len(ids_rmse), n_resamples + 1)
+        self.assertEqual(len(ids_crps), n_resamples + 1)
+        self.assertEqual(len(ids_brier), 3 * (n_resamples + 1))
+
+        for i in range(n_resamples):
+            grupo_brier = {ids_brier[3 * i], ids_brier[3 * i + 1], ids_brier[3 * i + 2]}
+            self.assertEqual(len(grupo_brier), 1,
+                              f"reamostra {i}: Brier das 3 categorias usou listas DIFERENTES de "
+                              "linhas reamostradas entre si")
+            self.assertEqual(ids_rmse[i], ids_crps[i],
+                              f"reamostra {i}: RMSE e CRPS usaram listas DIFERENTES de linhas "
+                              "reamostradas")
+            self.assertEqual(ids_rmse[i], grupo_brier.pop(),
+                              f"reamostra {i}: RMSE e Brier usaram listas DIFERENTES de linhas "
+                              "reamostradas")
+
+
 class RelatorioTestCase(unittest.TestCase):
     """Smoke test do gerador de relatório (scripts/cfsv2_relatorio_2c3c.py)
     — nunca recalcula métrica, só formata o que já foi calculado."""
@@ -420,13 +704,25 @@ class RelatorioTestCase(unittest.TestCase):
                 'n_registros_pareados': 100, 'n_meses_alvo_distintos': 15,
                 'deterministico_por_horizonte': {
                     str(h): {'n': 10, 'rotulo': c.ROTULO_HORIZONTE[h],
+                              'n_com_climatologia_modelo_disponivel': 8,
                               'absoluto': {'bias': 1.0, 'mae': 2.0, 'rmse': 3.0, 'corr': 0.5},
-                              'anomalia': {'bias': 1.0, 'mae': 2.0, 'rmse': 3.0, 'corr': 0.2},
+                              'anomalia_diagnostico_climatologia_observada': {
+                                  'nota': 'DIAGNÓSTICO — não é a anomaly correlation principal.',
+                                  'bias': 1.0, 'mae': 2.0, 'rmse': 3.0, 'corr': 0.2},
+                              'anomalia_corrigida_climatologia_propria_modelo': {
+                                  'bias': 0.3, 'mae': 1.2, 'rmse': 2.1, 'corr': 0.35},
                               'benchmark_climatologico': {'bias': 0.5, 'mae': 1.5, 'rmse': 2.5},
-                              'rmsess_absoluto': 0.1, 'rmsess_anomalia': 0.1,
+                              'rmsess_absoluto': 0.1, 'rmsess_anomalia_diagnostico': 0.1,
+                              'rmsess_anomalia_corrigida': 0.15,
                               'formula_rmsess': 'RMSESS = 1 - RMSE_modelo / RMSE_climatologia'}
                     for h in c.LEADS_ESPERADOS},
+                'matriz_mes_lead': {
+                    str(m): {str(h): {'n': 0} for h in c.LEADS_ESPERADOS} for m in range(1, 13)},
+                'matriz_grupo_sazonal_lead': {
+                    g: {str(h): {'n': 0} for h in c.LEADS_ESPERADOS}
+                    for g in ('chuvosa', 'transicao', 'seca')},
                 'por_mes_do_ano': {
+                    'rotulo': 'visao_agregada_descritiva_H1_a_H6_combinados',
                     'por_mes': {str(m): {'n': 0} for m in range(1, 13)},
                     'por_grupo_sazonal': {g: {'n': 0} for g in ('chuvosa', 'transicao', 'seca')},
                 },
@@ -434,6 +730,9 @@ class RelatorioTestCase(unittest.TestCase):
                     str(h): {'n': 5, 'amostra_suficiente': False} for h in c.LEADS_ESPERADOS},
                 'intervalos_confianca_por_horizonte': {
                     str(h): {'nota': 'amostra insuficiente'} for h in c.LEADS_ESPERADOS},
+                'intervalos_confianca_skill_scores_por_horizonte': {
+                    str(h): {'amostra_suficiente': False, 'nota': 'amostra insuficiente'}
+                    for h in c.LEADS_ESPERADOS},
             },
             'loyo_retrospective': {
                 'rotulo': 'loyo_retrospective', 'aviso': 'não simula expanding operational',
@@ -467,7 +766,10 @@ class RelatorioTestCase(unittest.TestCase):
         resultados = json.loads(c.CAMINHO_METRICAS_JSON.read_text())
         relatorio = rel.gerar_relatorio_markdown(resultados)
         for secao in ('Auditoria da base RAW', 'Base pareada', 'Métricas determinísticas',
-                      'por mês do ano', 'probabilística', 'Intervalos de confiança',
+                      'climatologia própria do modelo', 'Avaliação sazonal',
+                      'Matriz mês-alvo', 'visao_agregada_descritiva_H1_a_H6_combinados',
+                      'probabilística', 'sensibilidade do Brier/BSS',
+                      'Intervalos de confiança', 'skill scores',
                       'LOYO retrospectivo', 'Interpretação'):
             self.assertIn(secao, relatorio)
         _assert_nunca_declara_conclusao_isolada(self, relatorio)
