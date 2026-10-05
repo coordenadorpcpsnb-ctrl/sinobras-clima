@@ -1,0 +1,3013 @@
+{
+  "auditoria": {
+    "n_raw_total": 34560,
+    "n_raw_esperado": 34560,
+    "unicidade_init_lead_member_ok": true,
+    "vinte_quatro_membros_por_init_lead_ok": true,
+    "target_month_corresponde_a_init_mais_lead_ok": true,
+    "h1_igual_mes_corrente_ok": true,
+    "sem_valores_faltantes_ok": true,
+    "valores_faltantes_por_coluna": {
+      "init_date": 0,
+      "target_month": 0,
+      "lead": 0,
+      "member": 0,
+      "forecast_prec_mm": 0
+    },
+    "unidades_ok": true,
+    "periodo_cobertura_ok": true,
+    "n_inicializacoes_distintas": 240,
+    "localizacao_unica_ok": true,
+    "n_meses_alvo_distintos": 245,
+    "problemas": [],
+    "auditoria_aprovada": true
+  },
+  "STOP_ON_FAILURE": false,
+  "expanding_operational_simulation": {
+    "rotulo": "expanding_operational_simulation",
+    "n_registros_pareados": 34560,
+    "n_meses_alvo_distintos": 245,
+    "deterministico_por_horizonte": {
+      "1": {
+        "n": 240,
+        "rotulo": "H1 — previsão do mês corrente",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 228,
+        "absoluto": {
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.8333162950399576
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.40860020549740955
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "bias": 9.315336505362524,
+          "mae": 40.04507138862237,
+          "rmse": 56.21279857784512,
+          "corr": 0.40321448224520146
+        },
+        "benchmark_climatologico": {
+          "bias": 7.326612982533047,
+          "mae": 40.79580612334468,
+          "rmse": 58.63469015628005
+        },
+        "rmsess_absoluto": -0.22467082681090722,
+        "rmsess_anomalia_diagnostico": -0.22467082681090722,
+        "rmsess_anomalia_corrigida": 0.044815248181959255,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "2": {
+        "n": 240,
+        "rotulo": "H2 — horizonte futuro (+1 mês)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 228,
+        "absoluto": {
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.8008073106791047
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.1697080703554077
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "bias": 6.284494774923904,
+          "mae": 42.552636057731064,
+          "rmse": 61.44626443200745,
+          "corr": 0.13557173971852698
+        },
+        "benchmark_climatologico": {
+          "bias": 7.516763010310824,
+          "mae": 40.6056560955669,
+          "rmse": 58.54423205572158
+        },
+        "rmsess_absoluto": -0.2777337158892277,
+        "rmsess_anomalia_diagnostico": -0.2777337158892277,
+        "rmsess_anomalia_corrigida": -0.0441728577038869,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "3": {
+        "n": 240,
+        "rotulo": "H3 — horizonte futuro (+2 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 228,
+        "absoluto": {
+          "bias": -5.718504548611112,
+          "mae": 55.743752673611105,
+          "rmse": 77.33356897598601,
+          "corr": 0.8110125881846395
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": -5.718504548611111,
+          "mae": 55.743752673611105,
+          "rmse": 77.333568975986,
+          "corr": 0.1390584362469991
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "bias": 6.285887514420302,
+          "mae": 41.09574816975218,
+          "rmse": 59.596714011096864,
+          "corr": 0.1650784907911645
+        },
+        "benchmark_climatologico": {
+          "bias": 6.948504635310825,
+          "mae": 40.8089157205669,
+          "rmse": 58.78050751059848
+        },
+        "rmsess_absoluto": -0.31563289007061224,
+        "rmsess_anomalia_diagnostico": -0.315632890070612,
+        "rmsess_anomalia_corrigida": -0.01076964236269462,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "4": {
+        "n": 240,
+        "rotulo": "H4 — horizonte futuro (+3 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 228,
+        "absoluto": {
+          "bias": 0.6995977083333302,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.8113816628303042
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": 0.6995977083333305,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.13395230955783594
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "bias": 4.960088135991244,
+          "mae": 39.553577132925916,
+          "rmse": 57.71847782070839,
+          "corr": 0.2135977375657486
+        },
+        "benchmark_climatologico": {
+          "bias": 7.310570010310826,
+          "mae": 40.6745050955669,
+          "rmse": 58.68107326217558
+        },
+        "rmsess_absoluto": -0.37893911502500477,
+        "rmsess_anomalia_diagnostico": -0.37893911502500477,
+        "rmsess_anomalia_corrigida": 0.008416556725930002,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "5": {
+        "n": 240,
+        "rotulo": "H5 — horizonte futuro (+4 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 228,
+        "absoluto": {
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.808356142647537
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.10529458730979825
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "bias": 5.779768387847509,
+          "mae": 40.23923731812323,
+          "rmse": 58.94699154109632,
+          "corr": 0.15364617326506588
+        },
+        "benchmark_climatologico": {
+          "bias": 7.283656690866381,
+          "mae": 40.70141841501134,
+          "rmse": 58.686300565503615
+        },
+        "rmsess_absoluto": -0.4471199300234603,
+        "rmsess_anomalia_diagnostico": -0.4471199300234603,
+        "rmsess_anomalia_corrigida": -0.019745022250230893,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "6": {
+        "n": 240,
+        "rotulo": "H6 — horizonte futuro (+5 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 228,
+        "absoluto": {
+          "bias": 7.854337604166668,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.8067463971029689
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": 7.854337604166667,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.09611617382291765
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "bias": 3.72958442755888,
+          "mae": 39.86066235587341,
+          "rmse": 58.831532520678344,
+          "corr": 0.15693514808929493
+        },
+        "benchmark_climatologico": {
+          "bias": 7.5431670103108255,
+          "mae": 40.441908095566895,
+          "rmse": 58.47156931895882
+        },
+        "rmsess_absoluto": -0.49054855492951965,
+        "rmsess_anomalia_diagnostico": -0.49054855492951965,
+        "rmsess_anomalia_corrigida": -0.018201409118048018,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      }
+    },
+    "por_mes_do_ano": {
+      "rotulo": "visao_agregada_descritiva_H1_a_H6_combinados",
+      "por_mes": {
+        "1": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": 30.338309374999994,
+          "mae": 77.88063631944445,
+          "rmse": 93.33939279158515,
+          "corr_absoluta": 0.10654775257672346,
+          "corr_anomalia_climatologia_propria_modelo": 0.14420994553958486,
+          "rmsess_absoluto": -0.15703245408612498,
+          "rmsess_anomalia_corrigida": -0.06662826836854663,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        },
+        "2": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": 61.73393125,
+          "mae": 81.92229999999999,
+          "rmse": 98.51031846995517,
+          "corr_absoluta": 0.2704879246888762,
+          "corr_anomalia_climatologia_propria_modelo": 0.3394149129515377,
+          "rmsess_absoluto": -0.3526342518881873,
+          "rmsess_anomalia_corrigida": 0.027339948284203608,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        },
+        "3": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": 85.63257006944445,
+          "mae": 106.67804854166666,
+          "rmse": 123.48147917622256,
+          "corr_absoluta": 0.18275196741741503,
+          "corr_anomalia_climatologia_propria_modelo": 0.2800850937763461,
+          "rmsess_absoluto": -0.4228483909413041,
+          "rmsess_anomalia_corrigida": 0.021028686041743128,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        },
+        "4": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -8.401968680555557,
+          "mae": 62.036248680555566,
+          "rmse": 81.07410253165104,
+          "corr_absoluta": 0.2575003502709997,
+          "corr_anomalia_climatologia_propria_modelo": 0.3234284883864166,
+          "rmsess_absoluto": 0.03721556203887688,
+          "rmsess_anomalia_corrigida": 0.04916161535516839,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        },
+        "5": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -78.14552847222221,
+          "mae": 78.24875722222221,
+          "rmse": 98.58006750873648,
+          "corr_absoluta": 0.31223091368920847,
+          "corr_anomalia_climatologia_propria_modelo": 0.3096460776675892,
+          "rmsess_absoluto": -0.3732414917160205,
+          "rmsess_anomalia_corrigida": 0.03322821109931062,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "transicao"
+        },
+        "6": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -4.910236041666667,
+          "mae": 5.638200208333334,
+          "rmse": 10.412359161452228,
+          "corr_absoluta": 0.22214349915082993,
+          "corr_anomalia_climatologia_propria_modelo": 0.22987201848573383,
+          "rmsess_absoluto": -0.05904320972209409,
+          "rmsess_anomalia_corrigida": 0.015643641475398984,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "seca"
+        },
+        "7": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -2.4251002083333333,
+          "mae": 2.701258263888889,
+          "rmse": 5.574238699504829,
+          "corr_absoluta": 0.09923380361792422,
+          "corr_anomalia_climatologia_propria_modelo": 0.10581822700808298,
+          "rmsess_absoluto": -0.03212700084892672,
+          "rmsess_anomalia_corrigida": -0.003187895420257103,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "seca"
+        },
+        "8": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -8.468687777777777,
+          "mae": 8.956708194444444,
+          "rmse": 15.679048059471887,
+          "corr_absoluta": 0.15739613307051142,
+          "corr_anomalia_climatologia_propria_modelo": 0.1991009212118666,
+          "rmsess_absoluto": -0.1069514821386528,
+          "rmsess_anomalia_corrigida": 0.013024678225584396,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "seca"
+        },
+        "9": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -45.780768055555555,
+          "mae": 45.78660652777778,
+          "rmse": 56.81962467908323,
+          "corr_absoluta": 0.1356299668588306,
+          "corr_anomalia_climatologia_propria_modelo": 0.1368297952474845,
+          "rmsess_absoluto": -0.5256095697051852,
+          "rmsess_anomalia_corrigida": 0.0038210967155865028,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "transicao"
+        },
+        "10": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -81.91155375,
+          "mae": 81.91155375,
+          "rmse": 87.70501143974344,
+          "corr_absoluta": 0.2669929971967971,
+          "corr_anomalia_climatologia_propria_modelo": 0.30143746718972386,
+          "rmsess_absoluto": -0.7201585974429134,
+          "rmsess_anomalia_corrigida": 0.023063656546777556,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        },
+        "11": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": -78.95436833333333,
+          "mae": 80.59501583333333,
+          "rmse": 96.38687260055248,
+          "corr_absoluta": 0.3383319220657587,
+          "corr_anomalia_climatologia_propria_modelo": 0.41085608243473615,
+          "rmsess_absoluto": -0.5767189379605231,
+          "rmsess_anomalia_corrigida": 0.08802209717943443,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        },
+        "12": {
+          "n": 120,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 114,
+          "bias": 38.418499791666676,
+          "mae": 61.17427229166666,
+          "rmse": 75.00350935644295,
+          "corr_absoluta": -0.12744328404343122,
+          "corr_anomalia_climatologia_propria_modelo": -0.2033828617972968,
+          "rmsess_absoluto": -0.8656600962976315,
+          "rmsess_anomalia_corrigida": -0.5373263496283152,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada",
+          "grupo_sazonal": "chuvosa"
+        }
+      },
+      "por_grupo_sazonal": {
+        "chuvosa": {
+          "n": 840,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 798,
+          "bias": 6.693631388888887,
+          "mae": 78.8854393452381,
+          "rmse": 94.75180778505876,
+          "corr_absoluta": 0.5629691728018875,
+          "corr_anomalia_climatologia_propria_modelo": 0.22554082235190445,
+          "rmsess_absoluto": -0.35187791617820574,
+          "rmsess_anomalia_corrigida": -0.013463675543898157,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "transicao": {
+          "n": 240,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 228,
+          "bias": -61.96314826388889,
+          "mae": 62.017681875,
+          "rmse": 80.45650830945539,
+          "corr_absoluta": 0.5145065583900519,
+          "corr_anomalia_climatologia_propria_modelo": 0.24907860962955158,
+          "rmsess_absoluto": -0.40693555631505385,
+          "rmsess_anomalia_corrigida": 0.026644134622501925,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "seca": {
+          "n": 360,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 342,
+          "bias": -5.268008009259258,
+          "mae": 5.7653888888888885,
+          "rmse": 11.33316531891193,
+          "corr_absoluta": 0.2025133438298376,
+          "corr_anomalia_climatologia_propria_modelo": 0.18628216548193582,
+          "rmsess_absoluto": -0.08642287214063193,
+          "rmsess_anomalia_corrigida": 0.012324510667449995,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      }
+    },
+    "matriz_mes_lead": {
+      "1": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -46.76971458333334,
+          "mae": 73.79815208333335,
+          "rmse": 96.98581522156262,
+          "corr_absoluta": 0.31525355215497386,
+          "corr_anomalia_climatologia_propria_modelo": 0.21367190420602264,
+          "rmsess_absoluto": -0.19256063240875188,
+          "rmsess_anomalia_corrigida": -0.18480671683693273,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -0.5370225000000033,
+          "mae": 69.73411166666668,
+          "rmse": 82.2052541611547,
+          "corr_absoluta": -0.05213785416305234,
+          "corr_anomalia_climatologia_propria_modelo": 0.010265228978169992,
+          "rmsess_absoluto": -0.0206777878838571,
+          "rmsess_anomalia_corrigida": -0.09312078417929337,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 49.507235833333326,
+          "mae": 77.23940416666667,
+          "rmse": 90.40889133290008,
+          "corr_absoluta": 0.1614919558531391,
+          "corr_anomalia_climatologia_propria_modelo": 0.10781369944942075,
+          "rmsess_absoluto": -0.12253587866530458,
+          "rmsess_anomalia_corrigida": -0.07844994088121093,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 48.996081666666655,
+          "mae": 78.33616333333333,
+          "rmse": 89.27194024759095,
+          "corr_absoluta": 0.22007669984644898,
+          "corr_anomalia_climatologia_propria_modelo": 0.2571216440013344,
+          "rmsess_absoluto": -0.10841925399785302,
+          "rmsess_anomalia_corrigida": 0.03631221248541183,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 58.44136083333333,
+          "mae": 83.52649,
+          "rmse": 96.84767310837596,
+          "corr_absoluta": 0.06413156253506822,
+          "corr_anomalia_climatologia_propria_modelo": 0.10471727019436568,
+          "rmsess_absoluto": -0.2024811523138239,
+          "rmsess_anomalia_corrigida": -0.05755111058233675,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 72.391915,
+          "mae": 84.64949666666666,
+          "rmse": 102.8920919225542,
+          "corr_absoluta": 0.19181079056650222,
+          "corr_anomalia_climatologia_propria_modelo": 0.1811956793292267,
+          "rmsess_absoluto": -0.2775299321911364,
+          "rmsess_anomalia_corrigida": -0.008537417636948152,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "2": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -1.6635641666666714,
+          "mae": 57.439184999999995,
+          "rmse": 63.86111701972595,
+          "corr_absoluta": 0.44657903748632244,
+          "corr_anomalia_climatologia_propria_modelo": 0.38619755064750627,
+          "rmsess_absoluto": 0.10420283049900991,
+          "rmsess_anomalia_corrigida": 0.033087669659733976,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 36.65644833333332,
+          "mae": 60.80818916666666,
+          "rmse": 74.48590273240173,
+          "corr_absoluta": 0.41664475309520904,
+          "corr_anomalia_climatologia_propria_modelo": 0.41582637670386163,
+          "rmsess_absoluto": -0.044833913800806036,
+          "rmsess_anomalia_corrigida": 0.05568600466211571,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 63.78228208333333,
+          "mae": 75.38017958333333,
+          "rmse": 94.08041760275808,
+          "corr_absoluta": 0.30870217179445875,
+          "corr_anomalia_climatologia_propria_modelo": 0.3330502391200619,
+          "rmsess_absoluto": -0.27851277383376716,
+          "rmsess_anomalia_corrigida": 0.04211612387459007,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 87.92543208333333,
+          "mae": 95.09719125000001,
+          "rmse": 111.13815351259395,
+          "corr_absoluta": 0.3430216386794252,
+          "corr_anomalia_climatologia_propria_modelo": 0.3511543280770677,
+          "rmsess_absoluto": -0.5103201340592685,
+          "rmsess_anomalia_corrigida": 0.06637906685449901,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 87.36626541666666,
+          "mae": 96.12600458333334,
+          "rmse": 111.78979739960748,
+          "corr_absoluta": 0.2886489957268653,
+          "corr_anomalia_climatologia_propria_modelo": 0.32143347396069216,
+          "rmsess_absoluto": -0.5191756967232788,
+          "rmsess_anomalia_corrigida": 0.023126792923641726,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 96.33672374999999,
+          "mae": 106.68305041666665,
+          "rmse": 122.0636397634466,
+          "corr_absoluta": 0.1862253331174684,
+          "corr_anomalia_climatologia_propria_modelo": 0.2498557747781027,
+          "rmsess_absoluto": -0.6587928352651653,
+          "rmsess_anomalia_corrigida": -0.05086663477319964,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "3": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 1.3039620833333303,
+          "mae": 46.09586958333334,
+          "rmse": 59.330078585360674,
+          "corr_absoluta": 0.6984389464744838,
+          "corr_anomalia_climatologia_propria_modelo": 0.8121862206627528,
+          "rmsess_absoluto": 0.3195117889033118,
+          "rmsess_anomalia_corrigida": 0.23723757172009763,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 59.247797500000004,
+          "mae": 87.65813250000001,
+          "rmse": 106.6506133201547,
+          "corr_absoluta": -0.0007197367613077275,
+          "corr_anomalia_climatologia_propria_modelo": -0.010300129070100464,
+          "rmsess_absoluto": -0.22323257951160036,
+          "rmsess_anomalia_corrigida": -0.08704275532063899,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 85.25228291666666,
+          "mae": 98.49928791666665,
+          "rmse": 112.750834616243,
+          "corr_absoluta": 0.42845931703584755,
+          "corr_anomalia_climatologia_propria_modelo": 0.38775595738186963,
+          "rmsess_absoluto": -0.2931992604270257,
+          "rmsess_anomalia_corrigida": 0.10473547270251993,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 111.93011833333335,
+          "mae": 125.5409525,
+          "rmse": 135.11432874727507,
+          "corr_absoluta": 0.27301311518081267,
+          "corr_anomalia_climatologia_propria_modelo": 0.09206983037431651,
+          "rmsess_absoluto": -0.5641850612513208,
+          "rmsess_anomalia_corrigida": -0.05628283317962701,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 129.15666833333336,
+          "mae": 142.2742275,
+          "rmse": 152.35914768288123,
+          "corr_absoluta": 0.17607211735406764,
+          "corr_anomalia_climatologia_propria_modelo": 0.15369997721973996,
+          "rmsess_absoluto": -0.7638240515283095,
+          "rmsess_anomalia_corrigida": -0.04372982610163101,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 126.90459125000002,
+          "mae": 139.99982125000002,
+          "rmse": 149.69869815277949,
+          "corr_absoluta": 0.23588725054121729,
+          "corr_anomalia_climatologia_propria_modelo": 0.19578959255633965,
+          "rmsess_absoluto": -0.7330246873914235,
+          "rmsess_anomalia_corrigida": -0.01433216339088994,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "4": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -52.423514583333336,
+          "mae": 67.02828291666665,
+          "rmse": 85.81434708967322,
+          "corr_absoluta": 0.5665294192867155,
+          "corr_anomalia_climatologia_propria_modelo": 0.5756344044671308,
+          "rmsess_absoluto": -0.019252952933344725,
+          "rmsess_anomalia_corrigida": 0.17842013026816972,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -12.6001125,
+          "mae": 59.69048416666668,
+          "rmse": 82.56010470912562,
+          "corr_absoluta": 0.19634995326790886,
+          "corr_anomalia_climatologia_propria_modelo": 0.16673572429545783,
+          "rmsess_absoluto": 0.01939904720910146,
+          "rmsess_anomalia_corrigida": -0.013415912114989048,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -10.438495833333336,
+          "mae": 63.476636666666664,
+          "rmse": 83.54842497657076,
+          "corr_absoluta": 0.06735092658634768,
+          "corr_anomalia_climatologia_propria_modelo": 0.10985712297821043,
+          "rmsess_absoluto": 0.007660353328640124,
+          "rmsess_anomalia_corrigida": -0.005913231860337209,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 4.933104166666666,
+          "mae": 64.81710833333334,
+          "rmse": 81.40093864373658,
+          "corr_absoluta": 0.17605012408577808,
+          "corr_anomalia_climatologia_propria_modelo": 0.2264215388537528,
+          "rmsess_absoluto": 0.03316694820884103,
+          "rmsess_anomalia_corrigida": 0.0169324363485287,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 17.97634708333333,
+          "mae": 59.42358875,
+          "rmse": 73.54097993145336,
+          "corr_absoluta": 0.5372869920578691,
+          "corr_anomalia_climatologia_propria_modelo": 0.48810815484127457,
+          "rmsess_absoluto": 0.12697621668081327,
+          "rmsess_anomalia_corrigida": 0.11935586003391341,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 2.1408595833333295,
+          "mae": 57.78139125000003,
+          "rmse": 79.0130349653893,
+          "corr_absoluta": 0.2743522531457091,
+          "corr_anomalia_climatologia_propria_modelo": 0.2483354033329741,
+          "rmsess_absoluto": 0.06201605171278657,
+          "rmsess_anomalia_corrigida": 0.018397645259953577,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "5": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -71.90791916666669,
+          "mae": 71.90791916666669,
+          "rmse": 86.17235315305346,
+          "corr_absoluta": 0.829133313525984,
+          "corr_anomalia_climatologia_propria_modelo": 0.819975246768444,
+          "rmsess_absoluto": -0.1945817934197871,
+          "rmsess_anomalia_corrigida": 0.19620608853264743,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -78.80928791666666,
+          "mae": 78.80928791666666,
+          "rmse": 99.57633036398089,
+          "corr_absoluta": 0.2723086637713732,
+          "corr_anomalia_climatologia_propria_modelo": 0.309553518323245,
+          "rmsess_absoluto": -0.38039715704514787,
+          "rmsess_anomalia_corrigida": 0.014614447500588379,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -79.30034833333335,
+          "mae": 79.30034833333335,
+          "rmse": 99.73753503804642,
+          "corr_absoluta": 0.30046717420296115,
+          "corr_anomalia_climatologia_propria_modelo": 0.2686768262138998,
+          "rmsess_absoluto": -0.3826318896665353,
+          "rmsess_anomalia_corrigida": 0.026793198896695403,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -79.65018375,
+          "mae": 79.65018375,
+          "rmse": 101.01285315045186,
+          "corr_absoluta": 0.1362872187105043,
+          "corr_anomalia_climatologia_propria_modelo": 0.11554038872226134,
+          "rmsess_absoluto": -0.40031124670106055,
+          "rmsess_anomalia_corrigida": 0.008981387066139379,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -79.35722958333334,
+          "mae": 79.47991208333333,
+          "rmse": 101.89695980535106,
+          "corr_absoluta": -0.16319665593395566,
+          "corr_anomalia_climatologia_propria_modelo": -0.20644882617737773,
+          "rmsess_absoluto": -0.41256735524097743,
+          "rmsess_anomalia_corrigida": -0.015929133093970815,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -79.84820208333335,
+          "mae": 80.34489208333333,
+          "rmse": 102.1415460468335,
+          "corr_absoluta": -0.1620115983462568,
+          "corr_anomalia_climatologia_propria_modelo": -0.2288682301403904,
+          "rmsess_absoluto": -0.458909933509805,
+          "rmsess_anomalia_corrigida": -0.014947585958229537,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "6": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -4.16152875,
+          "mae": 5.165015416666668,
+          "rmse": 9.883019704846914,
+          "corr_absoluta": 0.3890671281314817,
+          "corr_anomalia_climatologia_propria_modelo": 0.405939826578478,
+          "rmsess_absoluto": -0.005203983811483681,
+          "rmsess_anomalia_corrigida": 0.029309785655788678,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -4.565982916666667,
+          "mae": 5.586245416666666,
+          "rmse": 10.23568186754962,
+          "corr_absoluta": 0.22717135177701114,
+          "corr_anomalia_climatologia_propria_modelo": 0.23178708333365397,
+          "rmsess_absoluto": -0.04107332551829779,
+          "rmsess_anomalia_corrigida": 0.014994147441917183,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -4.987722499999999,
+          "mae": 5.7299050000000005,
+          "rmse": 10.210322938489751,
+          "corr_absoluta": 0.5504909272111198,
+          "corr_anomalia_climatologia_propria_modelo": 0.4927779044306312,
+          "rmsess_absoluto": -0.038494063584450844,
+          "rmsess_anomalia_corrigida": 0.044700069898968575,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -4.954789166666666,
+          "mae": 5.868236666666667,
+          "rmse": 10.589660544453583,
+          "corr_absoluta": 0.025111230836760742,
+          "corr_anomalia_climatologia_propria_modelo": -0.015257855711036595,
+          "rmsess_absoluto": -0.07707657015755309,
+          "rmsess_anomalia_corrigida": -0.004722192006568093,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -5.40946,
+          "mae": 5.731725,
+          "rmse": 10.724170310649974,
+          "corr_absoluta": 0.18169775824211382,
+          "corr_anomalia_climatologia_propria_modelo": 0.14079028405114372,
+          "rmsess_absoluto": -0.09075758637326015,
+          "rmsess_anomalia_corrigida": 0.007530859722109762,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -5.381932916666667,
+          "mae": 5.74807375,
+          "rmse": 10.800955710285965,
+          "corr_absoluta": -0.030306633514270667,
+          "corr_anomalia_climatologia_propria_modelo": 0.05187258691608514,
+          "rmsess_absoluto": -0.09856744529469896,
+          "rmsess_anomalia_corrigida": 0.0028997103379516664,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "7": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -3.1252137500000003,
+          "mae": 3.1252137500000003,
+          "rmse": 5.72962595449356,
+          "corr_absoluta": 0.5613899226512654,
+          "corr_anomalia_climatologia_propria_modelo": 0.5657459348203542,
+          "rmsess_absoluto": -0.06089853183411997,
+          "rmsess_anomalia_corrigida": 0.036809626067895174,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -2.7100470833333334,
+          "mae": 2.7100470833333334,
+          "rmse": 5.708570300124349,
+          "corr_absoluta": 0.0432692292098472,
+          "corr_anomalia_climatologia_propria_modelo": 0.025684875852535816,
+          "rmsess_absoluto": -0.056999863232623627,
+          "rmsess_anomalia_corrigida": -0.007301643611977937,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -2.321109583333333,
+          "mae": 2.7396937499999994,
+          "rmse": 5.766910535438665,
+          "corr_absoluta": -0.1453772520136432,
+          "corr_anomalia_climatologia_propria_modelo": -0.13810326689993643,
+          "rmsess_absoluto": -0.06780215128482614,
+          "rmsess_anomalia_corrigida": -0.0563546990694439,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -1.632555416666667,
+          "mae": 2.3212870833333334,
+          "rmse": 5.0498888425579205,
+          "corr_absoluta": 0.3147859541825001,
+          "corr_anomalia_climatologia_propria_modelo": 0.2509481698046053,
+          "rmsess_absoluto": 0.064961709272915,
+          "rmsess_anomalia_corrigida": 0.027193431871751383,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -2.2240324999999994,
+          "mae": 2.6531525,
+          "rmse": 5.514009482400261,
+          "corr_absoluta": 0.1024062934739009,
+          "corr_anomalia_climatologia_propria_modelo": 0.14036735022062652,
+          "rmsess_absoluto": -0.020974948602018317,
+          "rmsess_anomalia_corrigida": -0.0033804776507821988,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -2.537642916666667,
+          "mae": 2.658155416666667,
+          "rmse": 5.643890414114297,
+          "corr_absoluta": 0.03190592348518258,
+          "corr_anomalia_climatologia_propria_modelo": 0.03270134133392731,
+          "rmsess_absoluto": -0.04502372436208413,
+          "rmsess_anomalia_corrigida": -0.013367244032101988,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "8": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -9.748568333333333,
+          "mae": 9.748568333333333,
+          "rmse": 16.451873257639402,
+          "corr_absoluta": 0.26163493223082496,
+          "corr_anomalia_climatologia_propria_modelo": 0.2761835773252902,
+          "rmsess_absoluto": -0.1615134680003405,
+          "rmsess_anomalia_corrigida": 0.007717358678535735,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -9.012549583333334,
+          "mae": 9.424427083333333,
+          "rmse": 16.15804209855182,
+          "corr_absoluta": -0.002290621378985869,
+          "corr_anomalia_climatologia_propria_modelo": 0.009778895537628316,
+          "rmsess_absoluto": -0.14076878785032187,
+          "rmsess_anomalia_corrigida": -0.004987447694098313,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -8.441722500000001,
+          "mae": 8.944158333333332,
+          "rmse": 15.396534795758203,
+          "corr_absoluta": 0.38122638830100875,
+          "corr_anomalia_climatologia_propria_modelo": 0.4084506243982472,
+          "rmsess_absoluto": -0.0870058531179696,
+          "rmsess_anomalia_corrigida": 0.032518058147895657,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -8.306674583333333,
+          "mae": 8.95851875,
+          "rmse": 15.687112927861824,
+          "corr_absoluta": 0.08798718111706431,
+          "corr_anomalia_climatologia_propria_modelo": 0.10609423759566221,
+          "rmsess_absoluto": -0.10752086734517996,
+          "rmsess_anomalia_corrigida": 0.004103422238637355,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -7.3692245833333345,
+          "mae": 8.143455416666667,
+          "rmse": 15.08851400859725,
+          "corr_absoluta": 0.16703195167501225,
+          "corr_anomalia_climatologia_propria_modelo": 0.18867307055922014,
+          "rmsess_absoluto": -0.06525937555223793,
+          "rmsess_anomalia_corrigida": 0.012708831143679045,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -7.933387083333334,
+          "mae": 8.521121249999998,
+          "rmse": 15.246205411421343,
+          "corr_absoluta": 0.2927251919371316,
+          "corr_anomalia_climatologia_propria_modelo": 0.33730058022007253,
+          "rmsess_absoluto": -0.0763924960972191,
+          "rmsess_anomalia_corrigida": 0.026592607922419242,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "9": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -48.36361041666667,
+          "mae": 48.36361041666667,
+          "rmse": 58.52997043487046,
+          "corr_absoluta": 0.44747660884186397,
+          "corr_anomalia_climatologia_propria_modelo": 0.26334972801738626,
+          "rmsess_absoluto": -0.5715324329284297,
+          "rmsess_anomalia_corrigida": 0.024445432115692944,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -45.155966666666664,
+          "mae": 45.155966666666664,
+          "rmse": 56.00249045212328,
+          "corr_absoluta": 0.25810034360590467,
+          "corr_anomalia_climatologia_propria_modelo": 0.3059044314358648,
+          "rmsess_absoluto": -0.5036694776432489,
+          "rmsess_anomalia_corrigida": 0.017594261580454296,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -44.606275000000004,
+          "mae": 44.606275000000004,
+          "rmse": 56.13486969117034,
+          "corr_absoluta": 0.04873986746097569,
+          "corr_anomalia_climatologia_propria_modelo": 0.07153155980426021,
+          "rmsess_absoluto": -0.5072238663788511,
+          "rmsess_anomalia_corrigida": -0.011560637964545206,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -46.356960416666666,
+          "mae": 46.356960416666666,
+          "rmse": 57.405781851841226,
+          "corr_absoluta": 0.07529806288100122,
+          "corr_anomalia_climatologia_propria_modelo": 0.130348515666756,
+          "rmsess_absoluto": -0.5413479171012059,
+          "rmsess_anomalia_corrigida": -0.0001607182204284019,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -45.733772916666666,
+          "mae": 45.733772916666666,
+          "rmse": 56.943559259547165,
+          "corr_absoluta": 0.05222834283065437,
+          "corr_anomalia_climatologia_propria_modelo": -0.04486670389192318,
+          "rmsess_absoluto": -0.5289372189644168,
+          "rmsess_anomalia_corrigida": -0.00806689454155407,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -44.46802291666667,
+          "mae": 44.50305375000001,
+          "rmse": 55.85396843262724,
+          "corr_absoluta": 0.09668537836683827,
+          "corr_anomalia_climatologia_propria_modelo": 0.14538874642852057,
+          "rmsess_absoluto": -0.49968165450054314,
+          "rmsess_anomalia_corrigida": 0.0011849801525117831,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "10": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -88.61964958333333,
+          "mae": 88.61964958333333,
+          "rmse": 93.8767771855626,
+          "corr_absoluta": 0.3379346837906028,
+          "corr_anomalia_climatologia_propria_modelo": 0.37560782001739235,
+          "rmsess_absoluto": -0.8412054536578333,
+          "rmsess_anomalia_corrigida": 0.06328107409799144,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -83.83759125,
+          "mae": 83.83759125,
+          "rmse": 89.40566334530445,
+          "corr_absoluta": 0.3004606959252322,
+          "corr_anomalia_climatologia_propria_modelo": 0.2869517154849152,
+          "rmsess_absoluto": -0.7535134873013829,
+          "rmsess_anomalia_corrigida": 0.02091871336647788,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -78.46291833333332,
+          "mae": 78.46291833333332,
+          "rmse": 83.92802557294219,
+          "corr_absoluta": 0.4427006128534116,
+          "corr_anomalia_climatologia_propria_modelo": 0.37828717623413044,
+          "rmsess_absoluto": -0.6460805646766532,
+          "rmsess_anomalia_corrigida": 0.00637872904383241,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -79.49633708333332,
+          "mae": 79.49633708333332,
+          "rmse": 85.43216957892406,
+          "corr_absoluta": 0.2738465951606653,
+          "corr_anomalia_climatologia_propria_modelo": 0.15071766651792626,
+          "rmsess_absoluto": -0.6755813446344732,
+          "rmsess_anomalia_corrigida": -0.005255673064821442,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -80.94435374999998,
+          "mae": 80.94435374999998,
+          "rmse": 86.95363672481922,
+          "corr_absoluta": 0.2157743798193094,
+          "corr_anomalia_climatologia_propria_modelo": 0.2374222951845566,
+          "rmsess_absoluto": -0.7054218833765105,
+          "rmsess_anomalia_corrigida": -0.003405613394995566,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -80.1084725,
+          "mae": 80.1084725,
+          "rmse": 86.2744935754779,
+          "corr_absoluta": 0.18262484268776288,
+          "corr_anomalia_climatologia_propria_modelo": 0.4281101565913894,
+          "rmsess_absoluto": -0.6921018471772502,
+          "rmsess_anomalia_corrigida": 0.05886229505910956,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "11": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -103.10344749999999,
+          "mae": 103.10344749999999,
+          "rmse": 114.10523741871657,
+          "corr_absoluta": 0.5445907553841093,
+          "corr_anomalia_climatologia_propria_modelo": 0.6037418423864717,
+          "rmsess_absoluto": -0.8665600813107084,
+          "rmsess_anomalia_corrigida": 0.15494602388474898,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -92.77703083333334,
+          "mae": 92.77703083333334,
+          "rmse": 103.19612408975392,
+          "corr_absoluta": 0.6641374773913062,
+          "corr_anomalia_climatologia_propria_modelo": 0.632613751446069,
+          "rmsess_absoluto": -0.6881062616353266,
+          "rmsess_anomalia_corrigida": 0.21268004800899776,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -79.33155166666667,
+          "mae": 79.7920875,
+          "rmse": 99.39093007399303,
+          "corr_absoluta": 0.14488974697035611,
+          "corr_anomalia_climatologia_propria_modelo": 0.15686430775397972,
+          "rmsess_absoluto": -0.6258600106118253,
+          "rmsess_anomalia_corrigida": -0.013402845184319334,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -71.33741625000002,
+          "mae": 74.00688041666669,
+          "rmse": 89.68513235434828,
+          "corr_absoluta": 0.37708972336664837,
+          "corr_anomalia_climatologia_propria_modelo": 0.3839700962895129,
+          "rmsess_absoluto": -0.46709030826866393,
+          "rmsess_anomalia_corrigida": 0.06689877621442297,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -64.78610166666665,
+          "mae": 67.40913666666665,
+          "rmse": 85.87923122837567,
+          "corr_absoluta": 0.25754834853579883,
+          "corr_anomalia_climatologia_propria_modelo": 0.2649229639803217,
+          "rmsess_absoluto": -0.4048324901714315,
+          "rmsess_anomalia_corrigida": 0.04874183267420795,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -62.390662083333346,
+          "mae": 66.48151208333334,
+          "rmse": 82.31590199951698,
+          "corr_absoluta": 0.42791763321690673,
+          "corr_anomalia_climatologia_propria_modelo": 0.40089944880703304,
+          "rmsess_absoluto": -0.34654271973128603,
+          "rmsess_anomalia_corrigida": 0.07605307474680623,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "12": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": -25.436884583333335,
+          "mae": 55.232607083333335,
+          "rmse": 66.5048667093197,
+          "corr_absoluta": 0.06452754455767676,
+          "corr_anomalia_climatologia_propria_modelo": 0.06001454687990023,
+          "rmsess_absoluto": -0.6542622751092941,
+          "rmsess_anomalia_corrigida": -0.7188038634014597,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 26.8298675,
+          "mae": 52.41189083333334,
+          "rmse": 67.51442511859982,
+          "corr_absoluta": -0.3760679223525671,
+          "corr_anomalia_climatologia_propria_modelo": -0.4035753770387297,
+          "rmsess_absoluto": -0.6793743379345762,
+          "rmsess_anomalia_corrigida": -0.7609754631396151,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 40.72628833333334,
+          "mae": 54.7541375,
+          "rmse": 68.2059885353146,
+          "corr_absoluta": -0.31478039225443966,
+          "corr_anomalia_climatologia_propria_modelo": -0.34388035984548704,
+          "rmsess_absoluto": -0.6965764966294772,
+          "rmsess_anomalia_corrigida": -0.5120071427079789,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 46.34535291666667,
+          "mae": 53.792349583333326,
+          "rmse": 64.37358916135429,
+          "corr_absoluta": -0.012857110556558818,
+          "corr_anomalia_climatologia_propria_modelo": 0.006868667103511032,
+          "rmsess_absoluto": -0.601248229373412,
+          "rmsess_anomalia_corrigida": -0.1647924207616165,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 62.90009041666667,
+          "mae": 67.80810208333334,
+          "rmse": 84.3594227661615,
+          "corr_absoluta": -0.40719990274538653,
+          "corr_anomalia_climatologia_propria_modelo": -0.4694878091225786,
+          "rmsess_absoluto": -1.0983819310850644,
+          "rmsess_anomalia_corrigida": -0.5694618779142144,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 19,
+          "bias": 79.14628416666667,
+          "mae": 83.04654666666667,
+          "rmse": 94.12510577172539,
+          "corr_absoluta": -0.16906929170141552,
+          "corr_anomalia_climatologia_propria_modelo": -0.2163341034139792,
+          "rmsess_absoluto": -1.3412964993886258,
+          "rmsess_anomalia_corrigida": -0.420843045398013,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      }
+    },
+    "matriz_grupo_sazonal_lead": {
+      "chuvosa": {
+        "1": {
+          "n": 140,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 133,
+          "bias": -45.24468755952381,
+          "mae": 70.18817053571429,
+          "rmse": 85.04150483291255,
+          "corr_absoluta": 0.6503653466840857,
+          "corr_anomalia_climatologia_propria_modelo": 0.41095476536713277,
+          "rmsess_absoluto": -0.21418579124734083,
+          "rmsess_anomalia_corrigida": 0.025442862356742868,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 140,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 133,
+          "bias": -9.573949107142859,
+          "mae": 72.41677577380953,
+          "rmse": 87.58456158247837,
+          "corr_absoluta": 0.5560117791626271,
+          "corr_anomalia_climatologia_propria_modelo": 0.13850803012734336,
+          "rmsess_absoluto": -0.2528169183244886,
+          "rmsess_anomalia_corrigida": -0.05554138324959368,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 140,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 133,
+          "bias": 10.147874761904763,
+          "mae": 75.3720930952381,
+          "rmse": 91.25514463830348,
+          "corr_absoluta": 0.5788291305717254,
+          "corr_anomalia_climatologia_propria_modelo": 0.16820281843355073,
+          "rmsess_absoluto": -0.29902116897871966,
+          "rmsess_anomalia_corrigida": -0.016526165626475464,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 140,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 133,
+          "bias": 21.328047976190472,
+          "mae": 81.58385464285713,
+          "rmse": 96.13175532462894,
+          "corr_absoluta": 0.5822603325878629,
+          "corr_anomalia_climatologia_propria_modelo": 0.22674686123440796,
+          "rmsess_absoluto": -0.3712244797715447,
+          "rmsess_anomalia_corrigida": 0.00875098165492727,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 140,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 133,
+          "bias": 30.01575380952381,
+          "mae": 85.35884333333333,
+          "rmse": 101.80563112868785,
+          "corr_absoluta": 0.5735222290311441,
+          "corr_anomalia_climatologia_propria_modelo": 0.1756700733589768,
+          "rmsess_absoluto": -0.4520013625255521,
+          "rmsess_anomalia_corrigida": -0.021131991373874337,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 140,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 133,
+          "bias": 33.488748452380946,
+          "mae": 88.3928986904762,
+          "rmse": 105.02911579708089,
+          "corr_absoluta": 0.5700771406354576,
+          "corr_anomalia_climatologia_propria_modelo": 0.16936266796410485,
+          "rmsess_absoluto": -0.49797626665114514,
+          "rmsess_anomalia_corrigida": -0.019875192891541715,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "transicao": {
+        "1": {
+          "n": 40,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 38,
+          "bias": -60.135764791666666,
+          "mae": 60.135764791666666,
+          "rmse": 73.65945929424602,
+          "corr_absoluta": 0.7947433166075986,
+          "corr_anomalia_climatologia_propria_modelo": 0.6782168307878454,
+          "rmsess_absoluto": -0.2831500388660009,
+          "rmsess_anomalia_corrigida": 0.15521895232629346,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 40,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 38,
+          "bias": -61.98262729166667,
+          "mae": 61.98262729166667,
+          "rmse": 80.78280914153959,
+          "corr_absoluta": 0.5147299218766451,
+          "corr_anomalia_climatologia_propria_modelo": 0.19617514300444,
+          "rmsess_absoluto": -0.4072390115653275,
+          "rmsess_anomalia_corrigida": 0.015272481935632132,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 40,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 38,
+          "bias": -61.95331166666667,
+          "mae": 61.95331166666667,
+          "rmse": 80.92805289487141,
+          "corr_absoluta": 0.492971973902615,
+          "corr_anomalia_climatologia_propria_modelo": 0.18858691693884677,
+          "rmsess_absoluto": -0.4097691622006763,
+          "rmsess_anomalia_corrigida": 0.018184484593657624,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 40,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 38,
+          "bias": -63.00357208333334,
+          "mae": 63.00357208333334,
+          "rmse": 82.1554024140103,
+          "corr_absoluta": 0.4662697517542764,
+          "corr_anomalia_climatologia_propria_modelo": 0.11079908572983135,
+          "rmsess_absoluto": -0.4311496284473004,
+          "rmsess_anomalia_corrigida": 0.0069529006048347775,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 40,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 38,
+          "bias": -62.54550125000001,
+          "mae": 62.60684249999999,
+          "rmse": 82.5395643274148,
+          "corr_absoluta": 0.3654696145248316,
+          "corr_anomalia_climatologia_propria_modelo": -0.12600388903299453,
+          "rmsess_absoluto": -0.43784174075492266,
+          "rmsess_anomalia_corrigida": -0.014196108952064135,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 40,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 38,
+          "bias": -62.158112499999994,
+          "mae": 62.42397291666666,
+          "rmse": 82.31816694542684,
+          "corr_absoluta": 0.3371407949203035,
+          "corr_anomalia_climatologia_propria_modelo": -0.10435297519484249,
+          "rmsess_absoluto": -0.4680001751308014,
+          "rmsess_anomalia_corrigida": -0.011383657504584699,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      },
+      "seca": {
+        "1": {
+          "n": 60,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 57,
+          "bias": -5.678436944444444,
+          "mae": 6.012932500000001,
+          "rmse": 11.563834798633037,
+          "corr_absoluta": 0.17944759206316638,
+          "corr_anomalia_climatologia_propria_modelo": 0.3209632855125463,
+          "rmsess_absoluto": -0.10853537042525518,
+          "rmsess_anomalia_corrigida": 0.016743930738542967,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "2": {
+          "n": 60,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 57,
+          "bias": -5.429526527777777,
+          "mae": 5.906906527777777,
+          "rmse": 11.5244563519459,
+          "corr_absoluta": 0.09701888617903215,
+          "corr_anomalia_climatologia_propria_modelo": 0.08648300481958428,
+          "rmsess_absoluto": -0.10476046342033518,
+          "rmsess_anomalia_corrigida": 0.0007336898062654251,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "3": {
+          "n": 60,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 57,
+          "bias": -5.250184861111111,
+          "mae": 5.8045856944444445,
+          "rmse": 11.173797255916726,
+          "corr_absoluta": 0.3528812781804635,
+          "corr_anomalia_climatologia_propria_modelo": 0.31086049812412614,
+          "rmsess_absoluto": -0.07114548900409434,
+          "rmsess_anomalia_corrigida": 0.027719109460112024,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "4": {
+          "n": 60,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 57,
+          "bias": -4.964673055555554,
+          "mae": 5.716014166666667,
+          "rmse": 11.309697900186334,
+          "corr_absoluta": 0.10214414028085325,
+          "corr_anomalia_climatologia_propria_modelo": 0.09852670754494257,
+          "rmsess_absoluto": -0.08417323227955587,
+          "rmsess_anomalia_corrigida": 0.003522905157460232,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "5": {
+          "n": 60,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 57,
+          "bias": -5.0009056944444445,
+          "mae": 5.509444305555556,
+          "rmse": 11.15161250539523,
+          "corr_absoluta": 0.22848824595721823,
+          "corr_anomalia_climatologia_propria_modelo": 0.15648220113276384,
+          "rmsess_absoluto": -0.06901880861948295,
+          "rmsess_anomalia_corrigida": 0.009690142539355961,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        },
+        "6": {
+          "n": 60,
+          "amostra_suficiente": true,
+          "n_com_climatologia_modelo_disponivel": 57,
+          "bias": -5.284320972222223,
+          "mae": 5.64245013888889,
+          "rmse": 11.268849729961257,
+          "corr_absoluta": 0.2900655545406969,
+          "corr_anomalia_climatologia_propria_modelo": 0.23379798423663475,
+          "rmsess_absoluto": -0.08025743425060083,
+          "rmsess_anomalia_corrigida": 0.01578395029166879,
+          "formula_rmsess_absoluto": "RMSESS_absoluto = 1 - RMSE(previsto,observado) / RMSE(climatologia_observada,observado)",
+          "formula_rmsess_anomalia_corrigida": "RMSESS_anomalia_corrigida = 1 - RMSE(anomalia_modelo,anomalia_observada) / RMSE(0,anomalia_observada), onde anomalia_modelo=previsto-climatologia_propria_do_modelo e anomalia_observada=observado-climatologia_observada"
+        }
+      }
+    },
+    "probabilistico_por_horizonte": {
+      "1": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 42.3400025830314,
+        "crps_medio_climatologia": 27.868659216155812,
+        "crpss": -0.5192694508419826,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 1,
+          "2": 0,
+          "3": 4,
+          "4": 3,
+          "5": 4,
+          "6": 1,
+          "7": 3,
+          "8": 4,
+          "9": 1,
+          "10": 3,
+          "11": 2,
+          "12": 8,
+          "13": 3,
+          "14": 3,
+          "15": 9,
+          "16": 3,
+          "17": 6,
+          "18": 9,
+          "19": 5,
+          "20": 11,
+          "21": 12,
+          "22": 11,
+          "23": 18,
+          "24": 33,
+          "25": 83
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.330078125,
+          "normal": 0.234375,
+          "umido": 0.22983217592592595
+        },
+        "brier_referencia_nominal_por_categoria": {
+          "seco": 0.25000000000000006,
+          "normal": 0.20555555555555563,
+          "umido": 0.21111111111111117
+        },
+        "bss_por_categoria": {
+          "seco": -0.3203124999999998,
+          "normal": -0.1402027027027022,
+          "umido": -0.0886787280701753
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.",
+        "frequencia_observada_por_categoria": {
+          "seco": 0.4166666666666667,
+          "normal": 0.2833333333333333,
+          "umido": 0.3
+        },
+        "nota_frequencia_observada": "frequência OBSERVADA efetiva de cada categoria nesta amostra — pode não ser exatamente 1/3 por tamanho de amostra finito e empates nos limiares de tercil.",
+        "bss_sensibilidade_climatologia_empirica_por_categoria": {
+          "seco": -0.33269644845880464,
+          "normal": -0.148974461917323,
+          "umido": -0.0725211625953801
+        },
+        "brier_referencia_empirica_por_categoria": {
+          "seco": 0.24767690000353682,
+          "normal": 0.20398625710870236,
+          "umido": 0.21429150672398672
+        },
+        "nota_sensibilidade": "BSS de SENSIBILIDADE usando probabilidade climatológica EMPÍRICA causal (fração dos anos elegíveis de cada climatologia em cada categoria) em vez do nominal 1/3 — NUNCA substitui a referência nominal, só complementa."
+      },
+      "2": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 41.37890265247585,
+        "crps_medio_climatologia": 27.768966461047253,
+        "crpss": -0.49011317041705005,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 7,
+          "2": 6,
+          "3": 2,
+          "4": 5,
+          "5": 3,
+          "6": 5,
+          "7": 2,
+          "8": 6,
+          "9": 5,
+          "10": 2,
+          "11": 7,
+          "12": 8,
+          "13": 4,
+          "14": 7,
+          "15": 7,
+          "16": 8,
+          "17": 6,
+          "18": 5,
+          "19": 7,
+          "20": 10,
+          "21": 13,
+          "22": 14,
+          "23": 22,
+          "24": 21,
+          "25": 58
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.32437789351851853,
+          "normal": 0.2191840277777778,
+          "umido": 0.25198206018518515
+        },
+        "brier_referencia_nominal_por_categoria": {
+          "seco": 0.25000000000000006,
+          "normal": 0.20694444444444451,
+          "umido": 0.20972222222222228
+        },
+        "bss_por_categoria": {
+          "seco": -0.2975115740740739,
+          "normal": -0.05914429530201315,
+          "umido": -0.2015038631346573
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.",
+        "frequencia_observada_por_categoria": {
+          "seco": 0.4166666666666667,
+          "normal": 0.2875,
+          "umido": 0.29583333333333334
+        },
+        "nota_frequencia_observada": "frequência OBSERVADA efetiva de cada categoria nesta amostra — pode não ser exatamente 1/3 por tamanho de amostra finito e empates nos limiares de tercil.",
+        "bss_sensibilidade_climatologia_empirica_por_categoria": {
+          "seco": -0.31075970395399666,
+          "normal": -0.06678044971984609,
+          "umido": -0.1846116294239124
+        },
+        "brier_referencia_empirica_por_categoria": {
+          "seco": 0.2474731962998331,
+          "normal": 0.20546310896055422,
+          "umido": 0.212712803020283
+        },
+        "nota_sensibilidade": "BSS de SENSIBILIDADE usando probabilidade climatológica EMPÍRICA causal (fração dos anos elegíveis de cada climatologia em cada categoria) em vez do nominal 1/3 — NUNCA substitui a referência nominal, só complementa."
+      },
+      "3": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 41.551138771135264,
+        "crps_medio_climatologia": 27.940242093231163,
+        "crpss": -0.4871431189639368,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 9,
+          "2": 7,
+          "3": 7,
+          "4": 3,
+          "5": 5,
+          "6": 7,
+          "7": 7,
+          "8": 7,
+          "9": 2,
+          "10": 4,
+          "11": 7,
+          "12": 7,
+          "13": 5,
+          "14": 5,
+          "15": 7,
+          "16": 7,
+          "17": 6,
+          "18": 3,
+          "19": 8,
+          "20": 8,
+          "21": 12,
+          "22": 15,
+          "23": 17,
+          "24": 20,
+          "25": 55
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.31783854166666664,
+          "normal": 0.22162181712962964,
+          "umido": 0.262232349537037
+        },
+        "brier_referencia_nominal_por_categoria": {
+          "seco": 0.25000000000000006,
+          "normal": 0.20555555555555563,
+          "umido": 0.21111111111111117
+        },
+        "bss_por_categoria": {
+          "seco": -0.27135416666666634,
+          "normal": -0.07816019144144115,
+          "umido": -0.24215323464912242
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.",
+        "frequencia_observada_por_categoria": {
+          "seco": 0.4166666666666667,
+          "normal": 0.2833333333333333,
+          "umido": 0.3
+        },
+        "nota_frequencia_observada": "frequência OBSERVADA efetiva de cada categoria nesta amostra — pode não ser exatamente 1/3 por tamanho de amostra finito e empates nos limiares de tercil.",
+        "bss_sensibilidade_climatologia_empirica_por_categoria": {
+          "seco": -0.2853932700294701,
+          "normal": -0.09033978944086418,
+          "umido": -0.22596921895842836
+        },
+        "brier_referencia_empirica_por_categoria": {
+          "seco": 0.2472694925961294,
+          "normal": 0.2032594052568505,
+          "umido": 0.2138979882054682
+        },
+        "nota_sensibilidade": "BSS de SENSIBILIDADE usando probabilidade climatológica EMPÍRICA causal (fração dos anos elegíveis de cada climatologia em cada categoria) em vez do nominal 1/3 — NUNCA substitui a referência nominal, só complementa."
+      },
+      "4": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 43.694812901570046,
+        "crps_medio_climatologia": 27.851650534163475,
+        "crpss": -0.5688410583772399,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 16,
+          "2": 11,
+          "3": 4,
+          "4": 8,
+          "5": 9,
+          "6": 1,
+          "7": 5,
+          "8": 7,
+          "9": 1,
+          "10": 4,
+          "11": 7,
+          "12": 8,
+          "13": 5,
+          "14": 3,
+          "15": 5,
+          "16": 1,
+          "17": 7,
+          "18": 11,
+          "19": 11,
+          "20": 7,
+          "21": 10,
+          "22": 14,
+          "23": 15,
+          "24": 26,
+          "25": 44
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.3183449074074074,
+          "normal": 0.21955295138888886,
+          "umido": 0.2740234375
+        },
+        "brier_referencia_nominal_por_categoria": {
+          "seco": 0.25000000000000006,
+          "normal": 0.20694444444444451,
+          "umido": 0.20972222222222228
+        },
+        "bss_por_categoria": {
+          "seco": -0.27337962962962936,
+          "normal": -0.060927013422818366,
+          "umido": -0.3066018211920527
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.",
+        "frequencia_observada_por_categoria": {
+          "seco": 0.4166666666666667,
+          "normal": 0.2875,
+          "umido": 0.29583333333333334
+        },
+        "nota_frequencia_observada": "frequência OBSERVADA efetiva de cada categoria nesta amostra — pode não ser exatamente 1/3 por tamanho de amostra finito e empates nos limiares de tercil.",
+        "bss_sensibilidade_climatologia_empirica_por_categoria": {
+          "seco": -0.2885025840061459,
+          "normal": -0.07127956349247899,
+          "umido": -0.2873353989815286
+        },
+        "brier_referencia_empirica_por_categoria": {
+          "seco": 0.24706578889242567,
+          "normal": 0.2049445904420357,
+          "umido": 0.21286095116843118
+        },
+        "nota_sensibilidade": "BSS de SENSIBILIDADE usando probabilidade climatológica EMPÍRICA causal (fração dos anos elegíveis de cada climatologia em cada categoria) em vez do nominal 1/3 — NUNCA substitui a referência nominal, só complementa."
+      },
+      "5": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 46.13776588466183,
+        "crps_medio_climatologia": 27.85478123052363,
+        "crpss": -0.656367914105298,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 19,
+          "2": 11,
+          "3": 7,
+          "4": 7,
+          "5": 5,
+          "6": 3,
+          "7": 1,
+          "8": 6,
+          "9": 8,
+          "10": 7,
+          "11": 4,
+          "12": 3,
+          "13": 4,
+          "14": 2,
+          "15": 6,
+          "16": 7,
+          "17": 11,
+          "18": 6,
+          "19": 8,
+          "20": 5,
+          "21": 13,
+          "22": 9,
+          "23": 15,
+          "24": 16,
+          "25": 57
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.32837818287037035,
+          "normal": 0.2302589699074074,
+          "umido": 0.2979890046296296
+        },
+        "brier_referencia_nominal_por_categoria": {
+          "seco": 0.2500000000000001,
+          "normal": 0.20694444444444451,
+          "umido": 0.20972222222222225
+        },
+        "bss_por_categoria": {
+          "seco": -0.31351273148148073,
+          "normal": -0.11266079418344477,
+          "umido": -0.4208747240618096
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.",
+        "frequencia_observada_por_categoria": {
+          "seco": 0.4166666666666667,
+          "normal": 0.2875,
+          "umido": 0.29583333333333334
+        },
+        "nota_frequencia_observada": "frequência OBSERVADA efetiva de cada categoria nesta amostra — pode não ser exatamente 1/3 por tamanho de amostra finito e empates nos limiares de tercil.",
+        "bss_sensibilidade_climatologia_empirica_por_categoria": {
+          "seco": -0.3302090623569458,
+          "normal": -0.12455970417324869,
+          "umido": -0.3993450299810586
+        },
+        "brier_referencia_empirica_por_categoria": {
+          "seco": 0.246862085188722,
+          "normal": 0.20475477562722086,
+          "umido": 0.21294891413139413
+        },
+        "nota_sensibilidade": "BSS de SENSIBILIDADE usando probabilidade climatológica EMPÍRICA causal (fração dos anos elegíveis de cada climatologia em cada categoria) em vez do nominal 1/3 — NUNCA substitui a referência nominal, só complementa."
+      },
+      "6": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "crps_medio_modelo": 47.275789984903376,
+        "crps_medio_climatologia": 27.694068667943807,
+        "crpss": -0.7070727509109425,
+        "formula_crpss": "CRPSS = 1 - CRPS_modelo / CRPS_climatologia_probabilistica",
+        "rank_histogram": {
+          "1": 26,
+          "2": 7,
+          "3": 8,
+          "4": 5,
+          "5": 1,
+          "6": 4,
+          "7": 8,
+          "8": 7,
+          "9": 6,
+          "10": 3,
+          "11": 1,
+          "12": 5,
+          "13": 5,
+          "14": 4,
+          "15": 3,
+          "16": 8,
+          "17": 6,
+          "18": 6,
+          "19": 14,
+          "20": 3,
+          "21": 12,
+          "22": 15,
+          "23": 21,
+          "24": 17,
+          "25": 45
+        },
+        "brier_score_por_categoria": {
+          "seco": 0.3398220486111111,
+          "normal": 0.22994791666666667,
+          "umido": 0.30713975694444445
+        },
+        "brier_referencia_nominal_por_categoria": {
+          "seco": 0.25000000000000006,
+          "normal": 0.20694444444444451,
+          "umido": 0.20972222222222228
+        },
+        "bss_por_categoria": {
+          "seco": -0.35928819444444415,
+          "normal": -0.111157718120805,
+          "umido": -0.4645074503311255
+        },
+        "formula_bss": "BSS = 1 - BS_modelo / BS_referencia_nominal, onde BS_referencia_nominal = mean((1/3 - o_i)^2) calculado sobre as MESMAS observações o_i da amostra avaliada (NUNCA a constante 2/9 — essa só é exata quando a frequência observada da categoria é exatamente 1/3). A previsão nominal em si continua sendo p=1/3 — REFERÊNCIA PRINCIPAL, nunca alterada silenciosamente.",
+        "frequencia_observada_por_categoria": {
+          "seco": 0.4166666666666667,
+          "normal": 0.2875,
+          "umido": 0.29583333333333334
+        },
+        "nota_frequencia_observada": "frequência OBSERVADA efetiva de cada categoria nesta amostra — pode não ser exatamente 1/3 por tamanho de amostra finito e empates nos limiares de tercil.",
+        "bss_sensibilidade_climatologia_empirica_por_categoria": {
+          "seco": -0.37770322891602803,
+          "normal": -0.12141777416523758,
+          "umido": -0.43993743073838365
+        },
+        "brier_referencia_empirica_por_categoria": {
+          "seco": 0.24665838148501829,
+          "normal": 0.20505107192351715,
+          "umido": 0.213300765983246
+        },
+        "nota_sensibilidade": "BSS de SENSIBILIDADE usando probabilidade climatológica EMPÍRICA causal (fração dos anos elegíveis de cada climatologia em cada categoria) em vez do nominal 1/3 — NUNCA substitui a referência nominal, só complementa."
+      }
+    },
+    "intervalos_confianca_por_horizonte": {
+      "1": {
+        "bias": {
+          "estimativa": -37.834971111111116,
+          "ic95_lo": -44.042918847222225,
+          "ic95_hi": -30.91593036024306,
+          "n_anos_distintos": 20,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 52.468960069444435,
+          "ic95_lo": 48.270055125000006,
+          "ic95_hi": 56.5999527109375,
+          "n_anos_distintos": 20,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 71.80819447349285,
+          "ic95_lo": 65.12208209847027,
+          "ic95_hi": 78.33783895093902,
+          "n_anos_distintos": 20,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "2": {
+        "bias": {
+          "estimativa": -17.272623159722222,
+          "ic95_lo": -23.78268689738058,
+          "ic95_hi": -11.024063371173023,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 54.05028371527778,
+          "ic95_lo": 49.48333911151906,
+          "ic95_hi": 58.329333363224634,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 74.80393916843838,
+          "ic95_lo": 68.07556970238402,
+          "ic95_hi": 80.79310771554086,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "3": {
+        "bias": {
+          "estimativa": -5.718504548611112,
+          "ic95_lo": -9.66443356770833,
+          "ic95_hi": -1.4747833234731935,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 55.743752673611105,
+          "ic95_lo": 49.151218143212375,
+          "ic95_hi": 63.05426516364584,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 77.33356897598601,
+          "ic95_lo": 68.12948069000987,
+          "ic95_hi": 86.59576648987284,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "4": {
+        "bias": {
+          "estimativa": 0.6995977083333302,
+          "ic95_lo": -3.1691133817039003,
+          "ic95_hi": 4.491245576989024,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 59.52018076388889,
+          "ic95_lo": 53.82039366323946,
+          "ic95_hi": 65.55626123190277,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 80.91762723286186,
+          "ic95_lo": 73.04125094261263,
+          "ic95_hi": 88.88855408136104,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "5": {
+        "bias": {
+          "estimativa": 5.834713090277777,
+          "ic95_lo": 1.6717478385416658,
+          "ic95_hi": 10.396955342361922,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 61.6044934375,
+          "ic95_lo": 55.579028275284784,
+          "ic95_hi": 68.17494437035532,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 84.92611516768734,
+          "ic95_lo": 76.67260839065335,
+          "ic95_hi": 93.5291801221777,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      },
+      "6": {
+        "bias": {
+          "estimativa": 7.854337604166668,
+          "ic95_lo": 4.096345149346578,
+          "ic95_hi": 11.832528332218768,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "mae": {
+          "estimativa": 63.37713225694445,
+          "ic95_lo": 56.85466414060907,
+          "ic95_hi": 70.62484324487434,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        },
+        "rmse": {
+          "estimativa": 87.15471315283531,
+          "ic95_lo": 78.32738648724059,
+          "ic95_hi": 95.88071154051032,
+          "n_anos_distintos": 21,
+          "n_resamples": 1000,
+          "metodo": "bootstrap em blocos por ano do target_month (nunca linhas independentes)"
+        }
+      }
+    },
+    "intervalos_confianca_skill_scores_por_horizonte": {
+      "1": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra",
+        "rmse_modelo": {
+          "estimativa": 71.80819447349285,
+          "ic95_lo": 65.37098956748963,
+          "ic95_hi": 78.56419069913565
+        },
+        "rmse_climatologia": {
+          "estimativa": 58.63469015628005,
+          "ic95_lo": 51.844885373770275,
+          "ic95_hi": 64.16515314643095
+        },
+        "rmsess": {
+          "estimativa": -0.22467082681090722,
+          "ic95_lo": -0.3288537095535768,
+          "ic95_hi": -0.14316431413590716
+        },
+        "rmsess_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "crps_modelo": {
+          "estimativa": 42.3400025830314,
+          "ic95_lo": 38.77694330740489,
+          "ic95_hi": 46.07233865274004
+        },
+        "crps_climatologia": {
+          "estimativa": 27.868659216155812,
+          "ic95_lo": 25.080471446521305,
+          "ic95_hi": 30.46924720982222
+        },
+        "crpss": {
+          "estimativa": -0.5192694508419826,
+          "ic95_lo": -0.6524021266020944,
+          "ic95_hi": -0.4163300133792567
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "bss_por_categoria": {
+          "seco": {
+            "estimativa": -0.3203124999999998,
+            "ic95_lo": -0.586842216777613,
+            "ic95_hi": -0.11259389763248483
+          },
+          "normal": {
+            "estimativa": -0.1402027027027022,
+            "ic95_lo": -0.23721317744755227,
+            "ic95_hi": -0.03430543794313299
+          },
+          "umido": {
+            "estimativa": -0.0886787280701753,
+            "ic95_lo": -0.1808640044067939,
+            "ic95_hi": 0.03092684284893217
+          }
+        },
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero)."
+      },
+      "2": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra",
+        "rmse_modelo": {
+          "estimativa": 74.80393916843838,
+          "ic95_lo": 68.08489166495313,
+          "ic95_hi": 80.63235906667848
+        },
+        "rmse_climatologia": {
+          "estimativa": 58.54423205572158,
+          "ic95_lo": 51.69878431736062,
+          "ic95_hi": 64.93387730491749
+        },
+        "rmsess": {
+          "estimativa": -0.2777337158892277,
+          "ic95_lo": -0.38741471243070047,
+          "ic95_hi": -0.19359706324149323
+        },
+        "rmsess_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "crps_modelo": {
+          "estimativa": 41.37890265247585,
+          "ic95_lo": 38.14605634974944,
+          "ic95_hi": 44.86515683777916
+        },
+        "crps_climatologia": {
+          "estimativa": 27.768966461047253,
+          "ic95_lo": 24.85744022014013,
+          "ic95_hi": 30.494655596642012
+        },
+        "crpss": {
+          "estimativa": -0.49011317041705005,
+          "ic95_lo": -0.6163659078140391,
+          "ic95_hi": -0.3795565258124841
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "bss_por_categoria": {
+          "seco": {
+            "estimativa": -0.2975115740740739,
+            "ic95_lo": -0.5263952020202016,
+            "ic95_hi": -0.11453336712309749
+          },
+          "normal": {
+            "estimativa": -0.05914429530201315,
+            "ic95_lo": -0.134534254807692,
+            "ic95_hi": 0.022348147793232055
+          },
+          "umido": {
+            "estimativa": -0.2015038631346573,
+            "ic95_lo": -0.3252573552947062,
+            "ic95_hi": -0.049151836808320096
+          }
+        },
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero)."
+      },
+      "3": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra",
+        "rmse_modelo": {
+          "estimativa": 77.33356897598601,
+          "ic95_lo": 67.56901870656313,
+          "ic95_hi": 85.93495525618694
+        },
+        "rmse_climatologia": {
+          "estimativa": 58.78050751059848,
+          "ic95_lo": 51.56474850479195,
+          "ic95_hi": 65.01346876305689
+        },
+        "rmsess": {
+          "estimativa": -0.31563289007061224,
+          "ic95_lo": -0.47918119590263414,
+          "ic95_hi": -0.1588870128888983
+        },
+        "rmsess_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "crps_modelo": {
+          "estimativa": 41.551138771135264,
+          "ic95_lo": 36.63658501040327,
+          "ic95_hi": 46.19064214421864
+        },
+        "crps_climatologia": {
+          "estimativa": 27.940242093231163,
+          "ic95_lo": 24.89939544896462,
+          "ic95_hi": 30.768964893432138
+        },
+        "crpss": {
+          "estimativa": -0.4871431189639368,
+          "ic95_lo": -0.6723243505728678,
+          "ic95_hi": -0.3040324531377689
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "bss_por_categoria": {
+          "seco": {
+            "estimativa": -0.27135416666666634,
+            "ic95_lo": -0.5356889131772382,
+            "ic95_hi": -0.05722028429474997
+          },
+          "normal": {
+            "estimativa": -0.07816019144144115,
+            "ic95_lo": -0.16344386366971253,
+            "ic95_hi": 0.021287603008566434
+          },
+          "umido": {
+            "estimativa": -0.24215323464912242,
+            "ic95_lo": -0.4067886872964995,
+            "ic95_hi": -0.042703551782387515
+          }
+        },
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero)."
+      },
+      "4": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra",
+        "rmse_modelo": {
+          "estimativa": 80.91762723286186,
+          "ic95_lo": 73.00018680527566,
+          "ic95_hi": 88.89134792961833
+        },
+        "rmse_climatologia": {
+          "estimativa": 58.68107326217558,
+          "ic95_lo": 52.23694386864119,
+          "ic95_hi": 64.66972597948674
+        },
+        "rmsess": {
+          "estimativa": -0.37893911502500477,
+          "ic95_lo": -0.5176432633307237,
+          "ic95_hi": -0.24392471315213243
+        },
+        "rmsess_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "crps_modelo": {
+          "estimativa": 43.694812901570046,
+          "ic95_lo": 39.37019234430718,
+          "ic95_hi": 48.60646885665949
+        },
+        "crps_climatologia": {
+          "estimativa": 27.851650534163475,
+          "ic95_lo": 25.174407389254643,
+          "ic95_hi": 30.59111693321234
+        },
+        "crpss": {
+          "estimativa": -0.5688410583772399,
+          "ic95_lo": -0.7387608268631481,
+          "ic95_hi": -0.3995624453337833
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "bss_por_categoria": {
+          "seco": {
+            "estimativa": -0.27337962962962936,
+            "ic95_lo": -0.5066484365080621,
+            "ic95_hi": -0.04474801580550987
+          },
+          "normal": {
+            "estimativa": -0.060927013422818366,
+            "ic95_lo": -0.14037014254253327,
+            "ic95_hi": 0.035724081423570066
+          },
+          "umido": {
+            "estimativa": -0.3066018211920527,
+            "ic95_lo": -0.469288932007988,
+            "ic95_hi": -0.1418287933912931
+          }
+        },
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero)."
+      },
+      "5": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra",
+        "rmse_modelo": {
+          "estimativa": 84.92611516768734,
+          "ic95_lo": 76.3035471506802,
+          "ic95_hi": 93.22453945064004
+        },
+        "rmse_climatologia": {
+          "estimativa": 58.686300565503615,
+          "ic95_lo": 52.58871402714356,
+          "ic95_hi": 64.80827258172098
+        },
+        "rmsess": {
+          "estimativa": -0.4471199300234603,
+          "ic95_lo": -0.5919077025865161,
+          "ic95_hi": -0.3071649570206794
+        },
+        "rmsess_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "crps_modelo": {
+          "estimativa": 46.13776588466183,
+          "ic95_lo": 41.041061611612704,
+          "ic95_hi": 51.29188758400897
+        },
+        "crps_climatologia": {
+          "estimativa": 27.85478123052363,
+          "ic95_lo": 25.14980218704444,
+          "ic95_hi": 30.40940024805711
+        },
+        "crpss": {
+          "estimativa": -0.656367914105298,
+          "ic95_lo": -0.830613280142152,
+          "ic95_hi": -0.4794106485938135
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "bss_por_categoria": {
+          "seco": {
+            "estimativa": -0.31351273148148073,
+            "ic95_lo": -0.5711401528239411,
+            "ic95_hi": -0.09726917625440396
+          },
+          "normal": {
+            "estimativa": -0.11266079418344477,
+            "ic95_lo": -0.21161713720616768,
+            "ic95_hi": 0.002433222695189617
+          },
+          "umido": {
+            "estimativa": -0.4208747240618096,
+            "ic95_lo": -0.6000392425097938,
+            "ic95_hi": -0.22829786345411346
+          }
+        },
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero)."
+      },
+      "6": {
+        "n": 240,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra",
+        "rmse_modelo": {
+          "estimativa": 87.15471315283531,
+          "ic95_lo": 77.98540583767914,
+          "ic95_hi": 95.43680181353477
+        },
+        "rmse_climatologia": {
+          "estimativa": 58.47156931895882,
+          "ic95_lo": 51.464033957966635,
+          "ic95_hi": 65.02837333871574
+        },
+        "rmsess": {
+          "estimativa": -0.49054855492951965,
+          "ic95_lo": -0.6264798421055934,
+          "ic95_hi": -0.3400549828178135
+        },
+        "rmsess_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "crps_modelo": {
+          "estimativa": 47.275789984903376,
+          "ic95_lo": 41.741574001562796,
+          "ic95_hi": 52.685307761867996
+        },
+        "crps_climatologia": {
+          "estimativa": 27.694068667943807,
+          "ic95_lo": 24.60830146301076,
+          "ic95_hi": 30.715860895133677
+        },
+        "crpss": {
+          "estimativa": -0.7070727509109425,
+          "ic95_lo": -0.8965565506424936,
+          "ic95_hi": -0.5082888957824103
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "bss_por_categoria": {
+          "seco": {
+            "estimativa": -0.35928819444444415,
+            "ic95_lo": -0.6070240084845056,
+            "ic95_hi": -0.14444582038332038
+          },
+          "normal": {
+            "estimativa": -0.111157718120805,
+            "ic95_lo": -0.21548642549100683,
+            "ic95_hi": 0.00618555583577483
+          },
+          "umido": {
+            "estimativa": -0.4645074503311255,
+            "ic95_lo": -0.6270060780392438,
+            "ic95_hi": -0.2850718428795738
+          }
+        },
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero)."
+      }
+    },
+    "intervalos_confianca_rmsess_anomalia_corrigida_por_horizonte": {
+      "1": {
+        "n": 228,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 19,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS absoluto/diagnóstico — nunca reaproveitado dali.",
+        "rmse_anomalia_modelo": {
+          "estimativa": 56.21279857784512,
+          "ic95_lo": 49.542486385253824,
+          "ic95_hi": 61.877572907215445
+        },
+        "rmse_anomalia_benchmark_zero": {
+          "estimativa": 58.85018418777424,
+          "ic95_lo": 51.44862216424404,
+          "ic95_hi": 64.66349797290938
+        },
+        "rmsess_anomalia_corrigida": {
+          "estimativa": 0.044815248181959255,
+          "ic95_lo": -0.043262429791122034,
+          "ic95_hi": 0.13254545657862074
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "nota": "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do RMSESS absoluto/diagnóstico."
+      },
+      "2": {
+        "n": 228,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS absoluto/diagnóstico — nunca reaproveitado dali.",
+        "rmse_anomalia_modelo": {
+          "estimativa": 61.44626443200745,
+          "ic95_lo": 55.15682385512404,
+          "ic95_hi": 67.89856913020171
+        },
+        "rmse_anomalia_benchmark_zero": {
+          "estimativa": 58.84683170861808,
+          "ic95_lo": 52.150432309132086,
+          "ic95_hi": 65.13988998166215
+        },
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.0441728577038869,
+          "ic95_lo": -0.11058301058079446,
+          "ic95_hi": 0.008118683220779079
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "nota": "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do RMSESS absoluto/diagnóstico."
+      },
+      "3": {
+        "n": 228,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS absoluto/diagnóstico — nunca reaproveitado dali.",
+        "rmse_anomalia_modelo": {
+          "estimativa": 59.596714011096864,
+          "ic95_lo": 52.01848223817814,
+          "ic95_hi": 66.77885895234735
+        },
+        "rmse_anomalia_benchmark_zero": {
+          "estimativa": 58.96171740159146,
+          "ic95_lo": 52.818834966166094,
+          "ic95_hi": 64.94618784091392
+        },
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.01076964236269462,
+          "ic95_lo": -0.07560595342858133,
+          "ic95_hi": 0.056007365437825106
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "nota": "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do RMSESS absoluto/diagnóstico."
+      },
+      "4": {
+        "n": 228,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS absoluto/diagnóstico — nunca reaproveitado dali.",
+        "rmse_anomalia_modelo": {
+          "estimativa": 57.71847782070839,
+          "ic95_lo": 51.309861223700054,
+          "ic95_hi": 63.82774684944298
+        },
+        "rmse_anomalia_benchmark_zero": {
+          "estimativa": 58.208392054359074,
+          "ic95_lo": 51.62996653037399,
+          "ic95_hi": 64.4276791308881
+        },
+        "rmsess_anomalia_corrigida": {
+          "estimativa": 0.008416556725930002,
+          "ic95_lo": -0.035156717016528186,
+          "ic95_hi": 0.049963224880323814
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "nota": "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do RMSESS absoluto/diagnóstico."
+      },
+      "5": {
+        "n": 228,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS absoluto/diagnóstico — nunca reaproveitado dali.",
+        "rmse_anomalia_modelo": {
+          "estimativa": 58.94699154109632,
+          "ic95_lo": 51.01483208103783,
+          "ic95_hi": 65.88834746772766
+        },
+        "rmse_anomalia_benchmark_zero": {
+          "estimativa": 57.80561832115672,
+          "ic95_lo": 50.07774467851356,
+          "ic95_hi": 64.28328635904545
+        },
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.019745022250230893,
+          "ic95_lo": -0.07602859280866471,
+          "ic95_hi": 0.027935983312524934
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "nota": "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do RMSESS absoluto/diagnóstico."
+      },
+      "6": {
+        "n": 228,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano do target_month SOBRE AS ANOMALIAS (modelo: previsto - climatologia própria do modelo; benchmark: climatologia observada prevendo anomalia zero) — modelo e benchmark usam os MESMOS blocos sorteados em cada reamostra. IC INDEPENDENTE do RMSESS absoluto/diagnóstico — nunca reaproveitado dali.",
+        "rmse_anomalia_modelo": {
+          "estimativa": 58.831532520678344,
+          "ic95_lo": 50.09054777755407,
+          "ic95_hi": 67.4050392312463
+        },
+        "rmse_anomalia_benchmark_zero": {
+          "estimativa": 57.77985769204288,
+          "ic95_lo": 50.517872657933914,
+          "ic95_hi": 64.8665034693699
+        },
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.018201409118048018,
+          "ic95_lo": -0.05974145954348204,
+          "ic95_hi": 0.03096682537143401
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "nota": "Indicação meramente DESCRITIVA da posição do IC em relação a zero — ver rmsess_anomalia_corrigida_ic_classificacao (ic_totalmente_acima_de_zero / ic_inclui_zero / ic_totalmente_abaixo_de_zero). NUNCA convertida automaticamente em rótulo 'bom'/'ruim', e NUNCA a mesma coisa que o IC do RMSESS absoluto/diagnóstico."
+      }
+    }
+  },
+  "loyo_retrospective": {
+    "rotulo": "loyo_retrospective",
+    "aviso": "NÃO simula uso em tempo real — usa anos futuros na climatologia. Análise complementar apenas, nunca misturada com expanding_operational_simulation.",
+    "deterministico_por_horizonte": {
+      "1": {
+        "n": 240,
+        "rotulo": "H1 — previsão do mês corrente",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 0,
+        "absoluto": {
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.8333162950399576
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": -37.834971111111116,
+          "mae": 52.468960069444435,
+          "rmse": 71.80819447349285,
+          "corr": 0.3652543854369203
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "nota": "sem inicializações históricas suficientes para climatologia própria do modelo"
+        },
+        "benchmark_climatologico": {
+          "bias": 4.604504625478924,
+          "mae": 39.49055790996169,
+          "rmse": 57.007328815132254
+        },
+        "rmsess_absoluto": -0.25963092756648853,
+        "rmsess_anomalia_diagnostico": -0.25963092756648853,
+        "rmsess_anomalia_corrigida": null,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "2": {
+        "n": 240,
+        "rotulo": "H2 — horizonte futuro (+1 mês)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 0,
+        "absoluto": {
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.8008073106791047
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": -17.272623159722222,
+          "mae": 54.05028371527778,
+          "rmse": 74.80393916843838,
+          "corr": 0.11750494608981615
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "nota": "sem inicializações históricas suficientes para climatologia própria do modelo"
+        },
+        "benchmark_climatologico": {
+          "bias": 4.8995957782567015,
+          "mae": 39.19546675718391,
+          "rmse": 56.79748020416273
+        },
+        "rmsess_absoluto": -0.31702918685036896,
+        "rmsess_anomalia_diagnostico": -0.31702918685036896,
+        "rmsess_anomalia_corrigida": null,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "3": {
+        "n": 240,
+        "rotulo": "H3 — horizonte futuro (+2 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 0,
+        "absoluto": {
+          "bias": -5.718504548611112,
+          "mae": 55.743752673611105,
+          "rmse": 77.33356897598601,
+          "corr": 0.8110125881846395
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": -5.718504548611112,
+          "mae": 55.743752673611105,
+          "rmse": 77.33356897598601,
+          "corr": 0.10165347396122716
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "nota": "sem inicializações históricas suficientes para climatologia própria do modelo"
+        },
+        "benchmark_climatologico": {
+          "bias": 4.306549847701147,
+          "mae": 39.373938826628354,
+          "rmse": 57.020661779943445
+        },
+        "rmsess_absoluto": -0.35623766126101786,
+        "rmsess_anomalia_diagnostico": -0.35623766126101786,
+        "rmsess_anomalia_corrigida": null,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "4": {
+        "n": 240,
+        "rotulo": "H4 — horizonte futuro (+3 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 0,
+        "absoluto": {
+          "bias": 0.6995977083333302,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.8113816628303042
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": 0.6995977083333305,
+          "mae": 59.52018076388889,
+          "rmse": 80.91762723286186,
+          "corr": 0.09367999734822974
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "nota": "sem inicializações históricas suficientes para climatologia própria do modelo"
+        },
+        "benchmark_climatologico": {
+          "bias": 4.7973681115900355,
+          "mae": 39.11077531273947,
+          "rmse": 56.74818199432736
+        },
+        "rmsess_absoluto": -0.42590695224299013,
+        "rmsess_anomalia_diagnostico": -0.42590695224299013,
+        "rmsess_anomalia_corrigida": null,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "5": {
+        "n": 240,
+        "rotulo": "H5 — horizonte futuro (+4 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 0,
+        "absoluto": {
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.808356142647537
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": 5.834713090277777,
+          "mae": 61.6044934375,
+          "rmse": 84.92611516768734,
+          "corr": 0.06880576486054078
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "nota": "sem inicializações históricas suficientes para climatologia própria do modelo"
+        },
+        "benchmark_climatologico": {
+          "bias": 4.7736117782567025,
+          "mae": 39.134531646072794,
+          "rmse": 56.753111876142775
+        },
+        "rmsess_absoluto": -0.4964133658966392,
+        "rmsess_anomalia_diagnostico": -0.4964133658966392,
+        "rmsess_anomalia_corrigida": null,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      },
+      "6": {
+        "n": 240,
+        "rotulo": "H6 — horizonte futuro (+5 meses)",
+        "amostra_suficiente": true,
+        "n_com_climatologia_modelo_disponivel": 0,
+        "absoluto": {
+          "bias": 7.854337604166668,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.8067463971029689
+        },
+        "anomalia_diagnostico_climatologia_observada": {
+          "nota": "DIAGNÓSTICO — mesma climatologia OBSERVADA subtraída dos dois lados; não remove o viés sazonal sistemático do próprio CFSv2. NÃO é a anomaly correlation principal (ver anomalia_corrigida_... abaixo).",
+          "bias": 7.854337604166668,
+          "mae": 63.37713225694445,
+          "rmse": 87.15471315283531,
+          "corr": 0.06592533298419478
+        },
+        "anomalia_corrigida_climatologia_propria_modelo": {
+          "nota": "sem inicializações históricas suficientes para climatologia própria do modelo"
+        },
+        "benchmark_climatologico": {
+          "bias": 4.882259458812259,
+          "mae": 39.025883965517245,
+          "rmse": 56.69494679276023
+        },
+        "rmsess_absoluto": -0.5372571645832236,
+        "rmsess_anomalia_diagnostico": -0.5372571645832236,
+        "rmsess_anomalia_corrigida": null,
+        "formula_rmsess": "RMSESS = 1 - RMSE_modelo / RMSE_climatologia"
+      }
+    }
+  },
+  "nenhuma_skill_apresentada_no_dashboard": true,
+  "nenhum_dado_operacional_alterado": true,
+  "data_geracao_utc": "2026-10-03T11:08:37.211381+00:00"
+}
