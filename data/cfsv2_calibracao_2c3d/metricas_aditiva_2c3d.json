@@ -1,0 +1,1939 @@
+{
+  "STOP_ON_FAILURE": false,
+  "metodo": "correcao_aditiva_causal_por_lead_x_mes_alvo",
+  "n_treino_minimo": 10,
+  "identidade_benchmark3": {
+    "identidade_ok": true,
+    "max_diff_absoluto": 2.842170943040401e-14,
+    "n_verificado": 1368
+  },
+  "leakage_check": {
+    "ok": true,
+    "n_problemas": 0,
+    "problemas": []
+  },
+  "primeira_inicializacao_elegivel_por_lead_e_mes": {
+    "1": {
+      "1": "2001-01",
+      "2": "2001-02",
+      "3": "2001-03",
+      "4": "2001-04",
+      "5": "2001-05",
+      "6": "2001-06",
+      "7": "2001-07",
+      "8": "2001-08",
+      "9": "2001-09",
+      "10": "2001-10",
+      "11": "2001-11",
+      "12": "2001-12"
+    },
+    "2": {
+      "1": "2001-12",
+      "2": "2001-01",
+      "3": "2001-02",
+      "4": "2001-03",
+      "5": "2001-04",
+      "6": "2001-05",
+      "7": "2001-06",
+      "8": "2001-07",
+      "9": "2001-08",
+      "10": "2001-09",
+      "11": "2001-10",
+      "12": "2001-11"
+    },
+    "3": {
+      "1": "2001-11",
+      "2": "2001-12",
+      "3": "2001-01",
+      "4": "2001-02",
+      "5": "2001-03",
+      "6": "2001-04",
+      "7": "2001-05",
+      "8": "2001-06",
+      "9": "2001-07",
+      "10": "2001-08",
+      "11": "2001-09",
+      "12": "2001-10"
+    },
+    "4": {
+      "1": "2001-10",
+      "2": "2001-11",
+      "3": "2001-12",
+      "4": "2001-01",
+      "5": "2001-02",
+      "6": "2001-03",
+      "7": "2001-04",
+      "8": "2001-05",
+      "9": "2001-06",
+      "10": "2001-07",
+      "11": "2001-08",
+      "12": "2001-09"
+    },
+    "5": {
+      "1": "2001-09",
+      "2": "2001-10",
+      "3": "2001-11",
+      "4": "2001-12",
+      "5": "2001-01",
+      "6": "2001-02",
+      "7": "2001-03",
+      "8": "2001-04",
+      "9": "2001-05",
+      "10": "2001-06",
+      "11": "2001-07",
+      "12": "2001-08"
+    },
+    "6": {
+      "1": "2001-08",
+      "2": "2001-09",
+      "3": "2001-10",
+      "4": "2001-11",
+      "5": "2001-12",
+      "6": "2001-01",
+      "7": "2001-02",
+      "8": "2001-03",
+      "9": "2001-04",
+      "10": "2001-05",
+      "11": "2001-06",
+      "12": "2001-07"
+    }
+  },
+  "expanding_operational_simulation": {
+    "rotulo": "aditiva_expanding_operational_simulation",
+    "n_total_combinacoes": 1440,
+    "deterministico_por_horizonte": {
+      "1": {
+        "n_elegivel": 120,
+        "amostra_suficiente": true,
+        "rotulo": "H1 — previsão do mês corrente",
+        "bias": 5.409589424122345,
+        "mae": 33.664908597080355,
+        "rmse": 46.745833552517794,
+        "corr_absoluta": 0.9031636059684754,
+        "n_anomalia_disponivel": 108,
+        "corr_anomalia_modelo_calibrado": 0.5557058053229187,
+        "rmse_raw": 65.87626219646049,
+        "rmse_climatologia": 55.74988571554793,
+        "rmse_benchmark_anomalia_reconstruida": 48.70849850216822,
+        "skill_vs_raw": 0.2903994247106899,
+        "RMSESS_climatologia": 0.16150799319968867,
+        "skill_vs_anomalia_reconstruida": 0.040294096718318184,
+        "formula_skill": "skill_vs_X = 1 - RMSE_calibrado / RMSE_X — numerador e denominador sempre sobre os MESMOS casos elegíveis."
+      },
+      "2": {
+        "n_elegivel": 120,
+        "amostra_suficiente": true,
+        "rotulo": "H2 — horizonte futuro (+1 mês)",
+        "bias": 2.318821466593777,
+        "mae": 35.65614796499275,
+        "rmse": 52.351303555063794,
+        "corr_absoluta": 0.8720642916175564,
+        "n_anomalia_disponivel": 108,
+        "corr_anomalia_modelo_calibrado": 0.31105018582316746,
+        "rmse_raw": 71.47451068601991,
+        "rmse_climatologia": 55.15541300440077,
+        "rmse_benchmark_anomalia_reconstruida": 54.32547447853659,
+        "skill_vs_raw": 0.2675528233409302,
+        "RMSESS_climatologia": 0.05084014961710537,
+        "skill_vs_anomalia_reconstruida": 0.03633969040165075,
+        "formula_skill": "skill_vs_X = 1 - RMSE_calibrado / RMSE_X — numerador e denominador sempre sobre os MESMOS casos elegíveis."
+      },
+      "3": {
+        "n_elegivel": 120,
+        "amostra_suficiente": true,
+        "rotulo": "H3 — horizonte futuro (+2 meses)",
+        "bias": -0.4057611256347123,
+        "mae": 34.64334266242499,
+        "rmse": 51.62509176817765,
+        "corr_absoluta": 0.8762746063147951,
+        "n_anomalia_disponivel": 108,
+        "corr_anomalia_modelo_calibrado": 0.34396710931421337,
+        "rmse_raw": 71.45980714841676,
+        "rmse_climatologia": 55.495715781591656,
+        "rmse_benchmark_anomalia_reconstruida": 53.06635852397885,
+        "skill_vs_raw": 0.27756463628629546,
+        "RMSESS_climatologia": 0.06974635715389621,
+        "skill_vs_anomalia_reconstruida": 0.02715970712687854,
+        "formula_skill": "skill_vs_X = 1 - RMSE_calibrado / RMSE_X — numerador e denominador sempre sobre os MESMOS casos elegíveis."
+      },
+      "4": {
+        "n_elegivel": 120,
+        "amostra_suficiente": true,
+        "rotulo": "H4 — horizonte futuro (+3 meses)",
+        "bias": -2.393741256770868,
+        "mae": 34.69086501944182,
+        "rmse": 53.35016456110512,
+        "corr_absoluta": 0.8671569620991636,
+        "n_anomalia_disponivel": 108,
+        "corr_anomalia_modelo_calibrado": 0.25074356325810787,
+        "rmse_raw": 76.01873326875346,
+        "rmse_climatologia": 55.47956213730697,
+        "rmse_benchmark_anomalia_reconstruida": 54.53938402111283,
+        "skill_vs_raw": 0.29819713816470517,
+        "RMSESS_climatologia": 0.03838165793255155,
+        "skill_vs_anomalia_reconstruida": 0.02180478348540482,
+        "formula_skill": "skill_vs_X = 1 - RMSE_calibrado / RMSE_X — numerador e denominador sempre sobre os MESMOS casos elegíveis."
+      },
+      "5": {
+        "n_elegivel": 120,
+        "amostra_suficiente": true,
+        "rotulo": "H5 — horizonte futuro (+4 meses)",
+        "bias": -1.7325685202702734,
+        "mae": 33.8830962777807,
+        "rmse": 52.248903401540005,
+        "corr_absoluta": 0.8731977671337842,
+        "n_anomalia_disponivel": 108,
+        "corr_anomalia_modelo_calibrado": 0.30280842370806976,
+        "rmse_raw": 79.15623443045666,
+        "rmse_climatologia": 55.49201363588178,
+        "rmse_benchmark_anomalia_reconstruida": 53.874962611553514,
+        "skill_vs_raw": 0.3399268702272126,
+        "RMSESS_climatologia": 0.05844282846936999,
+        "skill_vs_anomalia_reconstruida": 0.030182094449654362,
+        "formula_skill": "skill_vs_X = 1 - RMSE_calibrado / RMSE_X — numerador e denominador sempre sobre os MESMOS casos elegíveis."
+      },
+      "6": {
+        "n_elegivel": 120,
+        "amostra_suficiente": true,
+        "rotulo": "H6 — horizonte futuro (+5 meses)",
+        "bias": -4.547118107392417,
+        "mae": 33.764282018035416,
+        "rmse": 54.73598682969854,
+        "corr_absoluta": 0.8607240441493811,
+        "n_anomalia_disponivel": 108,
+        "corr_anomalia_modelo_calibrado": 0.16379962413909813,
+        "rmse_raw": 81.23341576953075,
+        "rmse_climatologia": 55.1666889010131,
+        "rmse_benchmark_anomalia_reconstruida": 55.46551409594477,
+        "skill_vs_raw": 0.32618878190483447,
+        "RMSESS_climatologia": 0.007807285155130184,
+        "skill_vs_anomalia_reconstruida": 0.01315280815723241,
+        "formula_skill": "skill_vs_X = 1 - RMSE_calibrado / RMSE_X — numerador e denominador sempre sobre os MESMOS casos elegíveis."
+      }
+    },
+    "intervalos_confianca_skills_por_horizonte": {
+      "1": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 10,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.2903994247106899,
+          "ic95_lo": 0.1856638798166649,
+          "ic95_hi": 0.3489700775944052
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.16150799319968867,
+          "ic95_lo": -0.019910840288901322,
+          "ic95_hi": 0.26080090249097315
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.040294096718318184,
+          "ic95_lo": 0.0024606180095468446,
+          "ic95_hi": 0.08819627993612777
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao. Critério pré-registrado: skill_vs_anomalia_reconstruida é o ponto PRINCIPAL de aprovação (protocolo, Seção 6.2) — não RMSESS_climatologia nem skill_vs_raw isoladamente."
+      },
+      "2": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.2675528233409302,
+          "ic95_lo": 0.1989862926660531,
+          "ic95_hi": 0.3330882211819873
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.05084014961710537,
+          "ic95_lo": -0.046902048023462005,
+          "ic95_hi": 0.12028526796740342
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.03633969040165075,
+          "ic95_lo": -0.0011411551303811213,
+          "ic95_hi": 0.07504485090101203
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao. Critério pré-registrado: skill_vs_anomalia_reconstruida é o ponto PRINCIPAL de aprovação (protocolo, Seção 6.2) — não RMSESS_climatologia nem skill_vs_raw isoladamente."
+      },
+      "3": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.27756463628629546,
+          "ic95_lo": 0.21076491961548177,
+          "ic95_hi": 0.35163213218417294
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.06974635715389621,
+          "ic95_lo": 0.004589556237127491,
+          "ic95_hi": 0.1524483751783075
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02715970712687854,
+          "ic95_lo": -0.010179102016816493,
+          "ic95_hi": 0.06003140176259085
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao. Critério pré-registrado: skill_vs_anomalia_reconstruida é o ponto PRINCIPAL de aprovação (protocolo, Seção 6.2) — não RMSESS_climatologia nem skill_vs_raw isoladamente."
+      },
+      "4": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.29819713816470517,
+          "ic95_lo": 0.20166020115826122,
+          "ic95_hi": 0.39823546505637414
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.03838165793255155,
+          "ic95_lo": -0.03169685542040764,
+          "ic95_hi": 0.1295049735759905
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02180478348540482,
+          "ic95_lo": -0.01682487349142069,
+          "ic95_hi": 0.06366349578996497
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao. Critério pré-registrado: skill_vs_anomalia_reconstruida é o ponto PRINCIPAL de aprovação (protocolo, Seção 6.2) — não RMSESS_climatologia nem skill_vs_raw isoladamente."
+      },
+      "5": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.3399268702272126,
+          "ic95_lo": 0.22060488168838324,
+          "ic95_hi": 0.4553579002038754
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.05844282846936999,
+          "ic95_lo": 0.002763970636902455,
+          "ic95_hi": 0.11937184258536501
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.030182094449654362,
+          "ic95_lo": -0.0102083502904093,
+          "ic95_hi": 0.0723453177332607
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao. Critério pré-registrado: skill_vs_anomalia_reconstruida é o ponto PRINCIPAL de aprovação (protocolo, Seção 6.2) — não RMSESS_climatologia nem skill_vs_raw isoladamente."
+      },
+      "6": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.32618878190483447,
+          "ic95_lo": 0.18207895882832345,
+          "ic95_hi": 0.45531249502602467
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.007807285155130184,
+          "ic95_lo": -0.07934762660380275,
+          "ic95_hi": 0.11884576977462952
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.01315280815723241,
+          "ic95_lo": -0.02532146316170436,
+          "ic95_hi": 0.0534017671138621
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "nota": "IC nunca convertido automaticamente em rótulo 'bom'/'ruim' — ver *_ic_classificacao. Critério pré-registrado: skill_vs_anomalia_reconstruida é o ponto PRINCIPAL de aprovação (protocolo, Seção 6.2) — não RMSESS_climatologia nem skill_vs_raw isoladamente."
+      }
+    },
+    "matriz_mes_lead": {
+      "1": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 9.976536301335262,
+          "mae": 52.88136373766814,
+          "rmse": 58.12412863087995,
+          "skill_vs_raw": 0.13505136662714468,
+          "RMSESS_climatologia": 0.18112620763544385,
+          "skill_vs_anomalia_reconstruida": 0.05270859264780803,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.7155530074869605
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 13.646714579900983,
+          "mae": 53.32473503983688,
+          "rmse": 60.89651616976224,
+          "skill_vs_raw": -0.04022181423095872,
+          "RMSESS_climatologia": 0.06556894090678067,
+          "skill_vs_anomalia_reconstruida": 0.06281109529971551,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.13709301189630224
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 11.500458322142133,
+          "mae": 46.51208891263033,
+          "rmse": 60.217822592113905,
+          "skill_vs_raw": 0.2335477729133707,
+          "RMSESS_climatologia": 0.07598320429080996,
+          "skill_vs_anomalia_reconstruida": 0.05143024824144793,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.33807310380521216
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 1.5260422886259761,
+          "mae": 56.71942017814617,
+          "rmse": 69.35780193227056,
+          "skill_vs_raw": 0.13462872018094152,
+          "RMSESS_climatologia": -0.06426587910673165,
+          "skill_vs_anomalia_reconstruida": 0.0030241370953040247,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.23574322500451
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 18.982724799675303,
+          "mae": 45.822202452453084,
+          "rmse": 58.896354082633344,
+          "skill_vs_raw": 0.3229129604602906,
+          "RMSESS_climatologia": 0.09626057476353,
+          "skill_vs_anomalia_reconstruida": 0.0795059753321572,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.5407936305783619
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 13.080508281999906,
+          "mae": 51.04114215919287,
+          "rmse": 57.756209593778976,
+          "skill_vs_raw": 0.39763116050063496,
+          "RMSESS_climatologia": 0.11375560550173336,
+          "skill_vs_anomalia_reconstruida": 0.06335610155206983,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.09456270436577102
+        }
+      },
+      "2": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 5.092518028450039,
+          "mae": 43.00685270609877,
+          "rmse": 47.80913058789784,
+          "skill_vs_raw": -0.03327368363349614,
+          "RMSESS_climatologia": 0.35756958313457365,
+          "skill_vs_anomalia_reconstruida": -0.03914843664735668,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.8744038295549512
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -5.365753109104159,
+          "mae": 44.71819153611939,
+          "rmse": 55.426206013610845,
+          "skill_vs_raw": 0.11463853360369469,
+          "RMSESS_climatologia": 0.25521589293224856,
+          "skill_vs_anomalia_reconstruida": -0.02873026687121616,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.6671579830557605
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -32.87025637988037,
+          "mae": 53.26316744430615,
+          "rmse": 72.54934539904893,
+          "skill_vs_raw": 0.009270925589274448,
+          "RMSESS_climatologia": 0.06261594750609145,
+          "skill_vs_anomalia_reconstruida": -0.01805771134176548,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.39039413036441745
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -30.33131588372466,
+          "mae": 59.17996827343054,
+          "rmse": 74.12922590795377,
+          "skill_vs_raw": 0.18879554840337875,
+          "RMSESS_climatologia": 0.042202878501160446,
+          "skill_vs_anomalia_reconstruida": -0.023539515080202467,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.35328097682278187
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -39.638700601158476,
+          "mae": 56.98445569622152,
+          "rmse": 76.57193220865962,
+          "skill_vs_raw": 0.12275746904950635,
+          "RMSESS_climatologia": 0.010641547125756046,
+          "skill_vs_anomalia_reconstruida": -0.009098798218446058,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.3307450696546834
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -47.90721939710697,
+          "mae": 67.40576220347953,
+          "rmse": 88.79774634967725,
+          "skill_vs_raw": 0.07109849884269626,
+          "RMSESS_climatologia": -0.1473238093017697,
+          "skill_vs_anomalia_reconstruida": -0.010128775966126824,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.11348042210442129
+        }
+      },
+      "3": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 32.25407503463626,
+          "mae": 45.38595566650439,
+          "rmse": 54.65076268044867,
+          "skill_vs_raw": -0.11955316878211852,
+          "RMSESS_climatologia": 0.3024187671892089,
+          "skill_vs_anomalia_reconstruida": 0.1394716419901959,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.8061256151614086
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 31.985111767852384,
+          "mae": 76.45604572910354,
+          "rmse": 86.1305290759879,
+          "skill_vs_raw": 0.23550737394325583,
+          "RMSESS_climatologia": -0.09939985662758288,
+          "skill_vs_anomalia_reconstruida": 0.061758683130619496,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.17455712051447844
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 8.39180247139657,
+          "mae": 52.2198274638551,
+          "rmse": 58.41788384788145,
+          "skill_vs_raw": 0.4534271877631906,
+          "RMSESS_climatologia": 0.2543339299566353,
+          "skill_vs_anomalia_reconstruida": 0.04284727566077995,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.6659102646493918
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 9.814653691064729,
+          "mae": 46.041184261240154,
+          "rmse": 64.1168807233965,
+          "skill_vs_raw": 0.5212073774700255,
+          "RMSESS_climatologia": 0.18015196101615638,
+          "skill_vs_anomalia_reconstruida": 0.08087779789241889,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.4953992741943481
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 5.216803758406661,
+          "mae": 51.160855075065925,
+          "rmse": 70.51339026024894,
+          "skill_vs_raw": 0.5244825721274743,
+          "RMSESS_climatologia": 0.09836124161491921,
+          "skill_vs_anomalia_reconstruida": 0.04131136936347923,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.4157555112036272
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -4.707319430719673,
+          "mae": 43.80179051950372,
+          "rmse": 66.59374562207768,
+          "skill_vs_raw": 0.5182237142184316,
+          "RMSESS_climatologia": 0.14848085027120272,
+          "skill_vs_anomalia_reconstruida": 0.004469401721381772,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.42096713943330294
+        }
+      },
+      "4": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -2.8410688035552925,
+          "mae": 54.115483856523056,
+          "rmse": 74.59360246631451,
+          "skill_vs_raw": 0.17978181168479712,
+          "RMSESS_climatologia": 0.14291253797225678,
+          "skill_vs_anomalia_reconstruida": -0.0198431030110231,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.5267744787017673
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -15.772568144946153,
+          "mae": 56.81613296847978,
+          "rmse": 88.01347667557442,
+          "skill_vs_raw": -0.013485128855154072,
+          "RMSESS_climatologia": -0.011283070584660715,
+          "skill_vs_anomalia_reconstruida": -0.015729008196201155,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.1719547292978358
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -19.4674219511474,
+          "mae": 58.790275022242966,
+          "rmse": 89.99185753334044,
+          "skill_vs_raw": -0.018756039632453092,
+          "RMSESS_climatologia": -0.03401485149137673,
+          "skill_vs_anomalia_reconstruida": -0.013558280049454918,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.1377749482033155
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -14.037978099135211,
+          "mae": 57.882123365777055,
+          "rmse": 90.18340638952917,
+          "skill_vs_raw": -0.03744278155315306,
+          "RMSESS_climatologia": -0.03621576574644658,
+          "skill_vs_anomalia_reconstruida": -0.014381125681906637,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.006170349659247365
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -22.703753617375636,
+          "mae": 53.21133514826397,
+          "rmse": 83.60126440092817,
+          "skill_vs_raw": -0.05370084338142922,
+          "RMSESS_climatologia": 0.040463338088372214,
+          "skill_vs_anomalia_reconstruida": -0.022437033439000942,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.35937684179832896
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -33.18744556273343,
+          "mae": 49.839057509751704,
+          "rmse": 91.99142055624488,
+          "skill_vs_raw": -0.06641940337336205,
+          "RMSESS_climatologia": -0.055834995290668266,
+          "skill_vs_anomalia_reconstruida": -0.028060799853474316,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.22383522936467262
+        }
+      },
+      "5": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -9.90748987338967,
+          "mae": 44.99868130129839,
+          "rmse": 56.15141576253985,
+          "skill_vs_raw": 0.4105803600191844,
+          "RMSESS_climatologia": 0.2968246182449841,
+          "skill_vs_anomalia_reconstruida": 0.10384894355657981,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.8417035708228471
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -17.425642115099194,
+          "mae": 55.81907745085446,
+          "rmse": 72.65144560863875,
+          "skill_vs_raw": 0.35634549475793453,
+          "RMSESS_climatologia": 0.09019732971738037,
+          "skill_vs_anomalia_reconstruida": 0.08331462976277404,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.20420717998882285
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -12.607219428718409,
+          "mae": 53.90372350473376,
+          "rmse": 70.91664441073327,
+          "skill_vs_raw": 0.35715110977784514,
+          "RMSESS_climatologia": 0.11192197330900389,
+          "skill_vs_anomalia_reconstruida": 0.07146666289559289,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.29280661506018524
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -12.197354751959065,
+          "mae": 53.83081731448974,
+          "rmse": 73.72156995938404,
+          "skill_vs_raw": 0.3387513405774212,
+          "RMSESS_climatologia": 0.07679633014075604,
+          "skill_vs_anomalia_reconstruida": 0.06284473852309935,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.002905216896024565
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -11.872433700815112,
+          "mae": 54.342651663811544,
+          "rmse": 74.49918663665731,
+          "skill_vs_raw": 0.33447161411323856,
+          "RMSESS_climatologia": 0.06705835832873475,
+          "skill_vs_anomalia_reconstruida": 0.06179569905136828,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.09269666681557709
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -10.13311077560455,
+          "mae": 50.0887879836465,
+          "rmse": 74.42936155886753,
+          "skill_vs_raw": 0.32714632180514236,
+          "RMSESS_climatologia": 0.034659924577395196,
+          "skill_vs_anomalia_reconstruida": 0.043031210124547026,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.2595120609694009
+        }
+      },
+      "6": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.9271489341124026,
+          "mae": 3.9477917303950667,
+          "rmse": 4.407922786915254,
+          "skill_vs_raw": 0.19463323550394285,
+          "RMSESS_climatologia": 0.20104095266699518,
+          "skill_vs_anomalia_reconstruida": 0.07078152561360951,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.8083316951532931
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.5044905859825626,
+          "mae": 4.525725938171796,
+          "rmse": 4.8968691815516925,
+          "skill_vs_raw": 0.22785984825181615,
+          "RMSESS_climatologia": 0.11241686269535145,
+          "skill_vs_anomalia_reconstruida": 0.04245618592764966,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.29190537300678304
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.08609194262111872,
+          "mae": 4.510150727313521,
+          "rmse": 5.098694886531246,
+          "skill_vs_raw": 0.27429029071459887,
+          "RMSESS_climatologia": 0.07583489863363013,
+          "skill_vs_anomalia_reconstruida": 0.017382507265468083,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.43105236066805014
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.4609172676438556,
+          "mae": 4.894548847085369,
+          "rmse": 5.458194869809483,
+          "skill_vs_raw": 0.2232489414534624,
+          "RMSESS_climatologia": 0.010673647395557206,
+          "skill_vs_anomalia_reconstruida": 0.029265194874226186,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.11252468763216862
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.4195841537184865,
+          "mae": 4.914127342079832,
+          "rmse": 5.474232427790478,
+          "skill_vs_raw": 0.25416086913640334,
+          "RMSESS_climatologia": 0.007766756175937917,
+          "skill_vs_anomalia_reconstruida": 0.027599385619566763,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.1284995421386724
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.2522945569466871,
+          "mae": 4.651449878277402,
+          "rmse": 5.236007854803547,
+          "skill_vs_raw": 0.28124116565675705,
+          "RMSESS_climatologia": 0.0509462053373303,
+          "skill_vs_anomalia_reconstruida": 0.023130947090383547,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.13347374183894337
+        }
+      },
+      "7": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -0.5798228755647016,
+          "mae": 3.4731195603327345,
+          "rmse": 6.611701474718114,
+          "skill_vs_raw": 0.09516168566625671,
+          "RMSESS_climatologia": 0.019516754908197154,
+          "skill_vs_anomalia_reconstruida": -0.01991075490942218,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.21797733985622222
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -0.5956753497182282,
+          "mae": 3.6236549066920274,
+          "rmse": 6.9018266806256365,
+          "skill_vs_raw": 0.061508809873281,
+          "RMSESS_climatologia": -0.023507405280956517,
+          "skill_vs_anomalia_reconstruida": -0.017751472936426538,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.19037497866273417
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -0.4156547900709042,
+          "mae": 3.959384440698327,
+          "rmse": 7.244752998275774,
+          "skill_vs_raw": 0.029933152071533686,
+          "RMSESS_climatologia": -0.07436171412152981,
+          "skill_vs_anomalia_reconstruida": -0.011673411055005634,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.3710360224458872
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -0.942795231085338,
+          "mae": 3.1478748660397584,
+          "rmse": 6.414299138086939,
+          "skill_vs_raw": 0.020228287248230892,
+          "RMSESS_climatologia": 0.04879056352598421,
+          "skill_vs_anomalia_reconstruida": -0.03418589157409513,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.4594649473066483
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -0.4222718831867849,
+          "mae": 3.734560296300395,
+          "rmse": 7.011442275765882,
+          "skill_vs_raw": 0.033867396021327156,
+          "RMSESS_climatologia": -0.03976286612515012,
+          "skill_vs_anomalia_reconstruida": -0.017471030667282506,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.028939331047120178
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -0.4178658978261124,
+          "mae": 3.7868669226867078,
+          "rmse": 6.945574496086364,
+          "skill_vs_raw": 0.04767428826376152,
+          "RMSESS_climatologia": -0.029994994025341004,
+          "skill_vs_anomalia_reconstruida": -0.013867446318263754,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.1689868698037568
+        }
+      },
+      "8": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -3.2420786894813203,
+          "mae": 10.496908527755147,
+          "rmse": 15.255421848120685,
+          "skill_vs_raw": 0.19073037514934743,
+          "RMSESS_climatologia": -0.03699172900369674,
+          "skill_vs_anomalia_reconstruida": -0.04808722599585269,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.22867508444265655
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -3.0384932702441616,
+          "mae": 10.408875375054983,
+          "rmse": 15.497345321663925,
+          "skill_vs_raw": 0.16300264256192853,
+          "RMSESS_climatologia": -0.05343654735181014,
+          "skill_vs_anomalia_reconstruida": -0.04388301688377494,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.31537366363704883
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -2.378243655360922,
+          "mae": 10.53268199551054,
+          "rmse": 14.968484823467847,
+          "skill_vs_raw": 0.14763148793159808,
+          "RMSESS_climatologia": -0.01748710145079957,
+          "skill_vs_anomalia_reconstruida": -0.035991280766809464,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.08149711488063664
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -3.1435011052787263,
+          "mae": 10.197478836316716,
+          "rmse": 15.709194460823996,
+          "skill_vs_raw": 0.14134232745632247,
+          "RMSESS_climatologia": -0.06783705408919727,
+          "skill_vs_anomalia_reconstruida": -0.04591363514376834,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.34441675773239544
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -2.8932415619023555,
+          "mae": 10.305378737242945,
+          "rmse": 15.533421422317502,
+          "skill_vs_raw": 0.1151120766577588,
+          "RMSESS_climatologia": -0.055888830767169884,
+          "skill_vs_anomalia_reconstruida": -0.04471605179785665,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.01285758340644375
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -2.9779879924434196,
+          "mae": 9.987891177784501,
+          "rmse": 15.060087263796673,
+          "skill_vs_raw": 0.14096231000027293,
+          "RMSESS_climatologia": -0.023713803925713428,
+          "skill_vs_anomalia_reconstruida": -0.04980403694956714,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.12515645286120855
+        }
+      },
+      "9": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 14.406289149545731,
+          "mae": 22.973109591825672,
+          "rmse": 26.23607753930352,
+          "skill_vs_raw": 0.41122992019011084,
+          "RMSESS_climatologia": 0.1549521591710078,
+          "skill_vs_anomalia_reconstruida": 0.13000455363352348,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.13883343461136816
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 16.484650698597406,
+          "mae": 22.979147190660893,
+          "rmse": 25.89716340342015,
+          "skill_vs_raw": 0.3442117468167404,
+          "RMSESS_climatologia": 0.16586837400249765,
+          "skill_vs_anomalia_reconstruida": 0.14640442534551512,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.4171569474855747
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 16.845830883837973,
+          "mae": 24.839848487012574,
+          "rmse": 27.504666709162695,
+          "skill_vs_raw": 0.30767981612392903,
+          "RMSESS_climatologia": 0.11409168613411491,
+          "skill_vs_anomalia_reconstruida": 0.1342475148503821,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.13157813013809866
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 16.790529363912263,
+          "mae": 23.21830939132929,
+          "rmse": 26.72065636388642,
+          "skill_vs_raw": 0.34594234665809986,
+          "RMSESS_climatologia": 0.1393441747529185,
+          "skill_vs_anomalia_reconstruida": 0.1406056847999103,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.4014355271403609
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 15.950712497979277,
+          "mae": 23.4990619193357,
+          "rmse": 26.521409422075745,
+          "skill_vs_raw": 0.35262875387799975,
+          "RMSESS_climatologia": 0.14576179559264402,
+          "skill_vs_anomalia_reconstruida": 0.13714911368673843,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.2421589471426772
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 15.962416681007582,
+          "mae": 23.96757384406674,
+          "rmse": 26.335906842075378,
+          "skill_vs_raw": 0.3456012662623248,
+          "RMSESS_climatologia": 0.15173671903395047,
+          "skill_vs_anomalia_reconstruida": 0.13914484189662002,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.33227609440984834
+        }
+      },
+      "10": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -13.586768104785255,
+          "mae": 32.8486204599546,
+          "rmse": 37.552478381320064,
+          "skill_vs_raw": 0.6358583743520265,
+          "RMSESS_climatologia": 0.08297778294607172,
+          "skill_vs_anomalia_reconstruida": 0.013216828049106621,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.41011733569269915
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -12.130987583157863,
+          "mae": 34.47757857548661,
+          "rmse": 39.58968938235207,
+          "skill_vs_raw": 0.6002459484113707,
+          "RMSESS_climatologia": 0.03322959509537804,
+          "skill_vs_anomalia_reconstruida": 0.02653250959213893,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.14561807892015888
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -10.224465399150622,
+          "mae": 31.802545638598666,
+          "rmse": 35.35397963414662,
+          "skill_vs_raw": 0.6132364336821159,
+          "RMSESS_climatologia": 0.13666457759252415,
+          "skill_vs_anomalia_reconstruida": 0.0725870476702134,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.400909434285749
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -11.131788250051509,
+          "mae": 32.67197143385912,
+          "rmse": 38.36462154133739,
+          "skill_vs_raw": 0.5892310168638252,
+          "RMSESS_climatologia": 0.06314544821700785,
+          "skill_vs_anomalia_reconstruida": 0.06031921937788198,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.1384588694206252
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -9.401563849447607,
+          "mae": 33.09307697818773,
+          "rmse": 37.58526438663783,
+          "skill_vs_raw": 0.5994390922418301,
+          "RMSESS_climatologia": 0.08217715682015936,
+          "skill_vs_anomalia_reconstruida": 0.08414189842140496,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.0942959575746793
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -11.191631505856206,
+          "mae": 31.884721141392248,
+          "rmse": 36.572125238684855,
+          "skill_vs_raw": 0.6103828014204972,
+          "RMSESS_climatologia": 0.10691776377040851,
+          "skill_vs_anomalia_reconstruida": 0.05176729322920948,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.27913248780823385
+        }
+      },
+      "11": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 27.860847629490856,
+          "mae": 34.728811845177134,
+          "rmse": 41.006800742867206,
+          "skill_vs_raw": 0.5291288610730318,
+          "RMSESS_climatologia": 0.14275952672113168,
+          "skill_vs_anomalia_reconstruida": 0.04093669576109016,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.531611808404305
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 20.655617784381185,
+          "mae": 29.47864327457727,
+          "rmse": 32.73045566521891,
+          "skill_vs_raw": 0.5985133870209935,
+          "RMSESS_climatologia": 0.31577516907446834,
+          "skill_vs_anomalia_reconstruida": 0.04957767469106822,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.47718452994581356
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 33.70372585185007,
+          "mae": 37.92295555773243,
+          "rmse": 45.54562644772243,
+          "skill_vs_raw": 0.29851472992932104,
+          "RMSESS_climatologia": 0.04787611653368451,
+          "skill_vs_anomalia_reconstruida": 0.05376994677612523,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.481877327603162
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 32.03690158207169,
+          "mae": 32.2303940820717,
+          "rmse": 37.883810464424755,
+          "skill_vs_raw": 0.31407537104712,
+          "RMSESS_climatologia": 0.20804512851982793,
+          "skill_vs_anomalia_reconstruida": 0.08211950300704407,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.8052816524236935
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 28.635855680636006,
+          "mae": 35.68742381789091,
+          "rmse": 38.30595706213423,
+          "skill_vs_raw": 0.26497784601424157,
+          "RMSESS_climatologia": 0.19922022282960572,
+          "skill_vs_anomalia_reconstruida": 0.06421631533808858,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.5833828456570991
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 26.57019423448451,
+          "mae": 33.66348027206621,
+          "rmse": 39.812133973725814,
+          "skill_vs_raw": 0.27067321555061596,
+          "RMSESS_climatologia": 0.16773384044560424,
+          "skill_vs_anomalia_reconstruida": 0.06309953492927645,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": 0.215152476730981
+        }
+      },
+      "12": {
+        "1": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 4.554886358673841,
+          "mae": 55.12220418143115,
+          "rmse": 69.12383738717313,
+          "skill_vs_raw": 0.02699079594279108,
+          "RMSESS_climatologia": -0.840923119980699,
+          "skill_vs_anomalia_reconstruida": 0.0040732183666587485,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.0524317766909099
+        },
+        "2": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -1.1216082453194418,
+          "mae": 35.245967594875225,
+          "rmse": 45.20302634473102,
+          "skill_vs_raw": 0.10155089529283923,
+          "RMSESS_climatologia": -0.20385816870973805,
+          "skill_vs_anomalia_reconstruida": -0.005662096148152385,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.2813188664679212
+        },
+        "3": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 2.566218624864206,
+          "mae": 37.46346275446554,
+          "rmse": 46.56715759558177,
+          "skill_vs_raw": 0.24294310215843962,
+          "RMSESS_climatologia": -0.24018804930235294,
+          "skill_vs_anomalia_reconstruida": 0.001778579752456877,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.0906742117094467
+        },
+        "4": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -17.569205953334436,
+          "mae": 36.27628938351622,
+          "rmse": 47.23989997526227,
+          "skill_vs_raw": 0.10458725053205009,
+          "RMSESS_climatologia": -0.25810469061391417,
+          "skill_vs_anomalia_reconstruida": -0.051551199399694214,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.00555989937112552
+        },
+        "5": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": -3.064537919773039,
+          "mae": 33.8420262065149,
+          "rmse": 44.856402005503796,
+          "skill_vs_raw": 0.3992363331701635,
+          "RMSESS_climatologia": -0.19462678364560615,
+          "skill_vs_anomalia_reconstruida": -0.009999829448186892,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.27343938043502564
+        },
+        "6": {
+          "n": 10,
+          "amostra_suficiente": false,
+          "bias": 0.09174951914266102,
+          "mae": 35.05286060457685,
+          "rmse": 48.74496811256184,
+          "skill_vs_raw": 0.46324422006297794,
+          "RMSESS_climatologia": -0.29818803719639453,
+          "skill_vs_anomalia_reconstruida": -0.006406751594897564,
+          "n_anomalia_disponivel": 9,
+          "corr_anomalia_modelo_calibrado": -0.23151208174781618
+        }
+      }
+    },
+    "matriz_grupo_sazonal_lead": {
+      "chuvosa": {
+        "1": {
+          "n": 70,
+          "amostra_suficiente": true,
+          "bias": 9.044432349177958,
+          "mae": 45.44132749333675,
+          "rmse": 56.16924669756079,
+          "skill_vs_raw": 0.26224610041146557,
+          "RMSESS_climatologia": 0.13715049243701727,
+          "skill_vs_anomalia_reconstruida": 0.02764075434695845,
+          "n_anomalia_disponivel": 63,
+          "corr_anomalia_modelo_calibrado": 0.5666663438386313
+        },
+        "2": {
+          "n": 70,
+          "amostra_suficiente": true,
+          "bias": 4.556646721372419,
+          "mae": 47.2167563883541,
+          "rmse": 61.675683949274124,
+          "skill_vs_raw": 0.24381644365739574,
+          "RMSESS_climatologia": 0.03966974152008129,
+          "skill_vs_anomalia_reconstruida": 0.023440034362279816,
+          "n_anomalia_disponivel": 63,
+          "corr_anomalia_modelo_calibrado": 0.31872615005852206
+        },
+        "3": {
+          "n": 70,
+          "amostra_suficiente": true,
+          "bias": -0.9142769228464841,
+          "mae": 45.4249032562616,
+          "rmse": 60.820092288827304,
+          "skill_vs_raw": 0.2586735868570875,
+          "RMSESS_climatologia": 0.06031639359517371,
+          "skill_vs_anomalia_reconstruida": 0.014535206930547773,
+          "n_anomalia_disponivel": 63,
+          "corr_anomalia_modelo_calibrado": 0.35851460022862264
+        },
+        "4": {
+          "n": 70,
+          "amostra_suficiente": true,
+          "bias": -4.241812946354773,
+          "mae": 45.85733585400586,
+          "rmse": 62.89254263684667,
+          "skill_vs_raw": 0.28931600556103343,
+          "RMSESS_climatologia": 0.027939977943046923,
+          "skill_vs_anomalia_reconstruida": 0.009884506180021013,
+          "n_anomalia_disponivel": 63,
+          "corr_anomalia_modelo_calibrado": 0.30413353325993125
+        },
+        "5": {
+          "n": 70,
+          "amostra_suficiente": true,
+          "bias": -3.139024535576682,
+          "mae": 44.257339339228295,
+          "rmse": 61.16190012483432,
+          "skill_vs_raw": 0.34246418220526664,
+          "RMSESS_climatologia": 0.05495593346896044,
+          "skill_vs_anomalia_reconstruida": 0.02026306863506333,
+          "n_anomalia_disponivel": 63,
+          "corr_anomalia_modelo_calibrado": 0.3484319220105044
+        },
+        "6": {
+          "n": 70,
+          "amostra_suficiente": true,
+          "bias": -8.178737694398459,
+          "mae": 44.669830629994735,
+          "rmse": 64.82566311452662,
+          "skill_vs_raw": 0.3268422232059929,
+          "RMSESS_climatologia": -0.0016547582773354108,
+          "skill_vs_anomalia_reconstruida": 0.003953939546911811,
+          "n_anomalia_disponivel": 63,
+          "corr_anomalia_modelo_calibrado": 0.20973645648348746
+        }
+      },
+      "transicao": {
+        "1": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "bias": 2.24939963807803,
+          "mae": 33.985895446562026,
+          "rmse": 43.8252966720475,
+          "skill_vs_raw": 0.41069691397368335,
+          "RMSESS_climatologia": 0.2766063594495607,
+          "skill_vs_anomalia_reconstruida": 0.10870946027173833,
+          "n_anomalia_disponivel": 18,
+          "corr_anomalia_modelo_calibrado": 0.8402705269759436
+        },
+        "2": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "bias": -0.47049570825089404,
+          "mae": 39.39911232075767,
+          "rmse": 54.538498427113105,
+          "skill_vs_raw": 0.35501116071711203,
+          "RMSESS_climatologia": 0.09977100160721997,
+          "skill_vs_anomalia_reconstruida": 0.0911339809691597,
+          "n_anomalia_disponivel": 18,
+          "corr_anomalia_modelo_calibrado": 0.3675202539563291
+        },
+        "3": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "bias": 2.1193057275597824,
+          "mae": 39.37178599587317,
+          "rmse": 53.78511478680932,
+          "skill_vs_raw": 0.35127985032441167,
+          "RMSESS_climatologia": 0.11220658050058785,
+          "skill_vs_anomalia_reconstruida": 0.08045777767810458,
+          "n_anomalia_disponivel": 18,
+          "corr_anomalia_modelo_calibrado": 0.4179755691471868
+        },
+        "4": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "bias": 2.2965873059765998,
+          "mae": 38.52456335290951,
+          "rmse": 55.44755789840189,
+          "skill_vs_raw": 0.3395985357119009,
+          "RMSESS_climatologia": 0.08476579022591557,
+          "skill_vs_anomalia_reconstruida": 0.07297017093809055,
+          "n_anomalia_disponivel": 18,
+          "corr_anomalia_modelo_calibrado": 0.034570097982350154
+        },
+        "5": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "bias": 2.039139398582081,
+          "mae": 38.92085679157362,
+          "rmse": 55.917412168558315,
+          "skill_vs_raw": 0.3365904628508537,
+          "RMSESS_climatologia": 0.07701023312016264,
+          "skill_vs_anomalia_reconstruida": 0.07126850194401946,
+          "n_anomalia_disponivel": 18,
+          "corr_anomalia_modelo_calibrado": 0.04872131105516431
+        },
+        "6": {
+          "n": 20,
+          "amostra_suficiente": true,
+          "bias": 2.9146529527015153,
+          "mae": 37.02818091385662,
+          "rmse": 55.82700892603462,
+          "skill_vs_raw": 0.32927731879224065,
+          "RMSESS_climatologia": 0.05012823140569511,
+          "skill_vs_anomalia_reconstruida": 0.05534179101757053,
+          "n_anomalia_disponivel": 18,
+          "corr_anomalia_modelo_calibrado": -0.1758149217609506
+        }
+      },
+      "seca": {
+        "1": {
+          "n": 30,
+          "amostra_suficiente": true,
+          "bias": -0.9649175436445394,
+          "mae": 5.972606606160983,
+          "rmse": 9.930966308309149,
+          "skill_vs_raw": 0.1787665537575498,
+          "RMSESS_climatologia": -0.0060393404833705144,
+          "skill_vs_anomalia_reconstruida": -0.034645397474020845,
+          "n_anomalia_disponivel": 27,
+          "corr_anomalia_modelo_calibrado": 0.13319562026670756
+        },
+        "2": {
+          "n": 30,
+          "amostra_suficiente": true,
+          "bias": -1.0432260113266094,
+          "mae": 6.186085406639603,
+          "rmse": 10.194479737085253,
+          "skill_vs_raw": 0.15545421641052248,
+          "RMSESS_climatologia": -0.03273411195516718,
+          "skill_vs_anomalia_reconstruida": -0.03236348719884763,
+          "n_anomalia_disponivel": 27,
+          "corr_anomalia_modelo_calibrado": -0.13668629690144854
+        },
+        "3": {
+          "n": 30,
+          "amostra_suficiente": true,
+          "bias": -0.9026021676035686,
+          "mae": 6.334072387840795,
+          "rmse": 10.042222089132016,
+          "skill_vs_raw": 0.14466146905062416,
+          "RMSESS_climatologia": -0.0173099146540181,
+          "skill_vs_anomalia_reconstruida": -0.026776756745313657,
+          "n_anomalia_disponivel": 27,
+          "corr_anomalia_modelo_calibrado": -0.11008958182332165
+        },
+        "4": {
+          "n": 30,
+          "amostra_suficiente": true,
+          "bias": -1.2084596895734032,
+          "mae": 6.079967516480614,
+          "rmse": 10.290997931487835,
+          "skill_vs_raw": 0.1373569403985342,
+          "RMSESS_climatologia": -0.04251172046041152,
+          "skill_vs_anomalia_reconstruida": -0.036605194214562875,
+          "n_anomalia_disponivel": 27,
+          "corr_anomalia_modelo_calibrado": -0.11160827970381855
+        },
+        "5": {
+          "n": 30,
+          "amostra_suficiente": true,
+          "bias": -0.9653097637902169,
+          "mae": 6.318022125207722,
+          "rmse": 10.334646011405553,
+          "skill_vs_raw": 0.12098372823048031,
+          "RMSESS_climatologia": -0.04693341359384262,
+          "skill_vs_anomalia_reconstruida": -0.03302903354283182,
+          "n_anomalia_disponivel": 27,
+          "corr_anomalia_modelo_calibrado": 0.0056236158100932375
+        },
+        "6": {
+          "n": 30,
+          "amostra_suficiente": true,
+          "bias": -1.0478531111076148,
+          "mae": 6.142069326249536,
+          "rmse": 10.040966283670453,
+          "skill_vs_raw": 0.14485140641199035,
+          "RMSESS_climatologia": -0.017182697456909146,
+          "skill_vs_anomalia_reconstruida": -0.03664585485929006,
+          "n_anomalia_disponivel": 27,
+          "corr_anomalia_modelo_calibrado": 0.10914756942030887
+        }
+      }
+    }
+  },
+  "loyo_retrospective": {
+    "rotulo": "aditiva_loyo_full_retrospective",
+    "aviso": "NÃO simula uso em tempo real — usa anos futuros no cálculo do bias, E usa uma amostra MAIOR (N=240, 1991-2010) que o expanding (N=120, 2001-2010) — nunca comparado diretamente ao expanding como se fosse só efeito do método de treinamento. Análise retrospectiva descritiva adicional, nunca misturada com expanding_operational_simulation nem chamada de operacional. Para a comparação pareada e justa, ver loyo_matched_evaluation_period.",
+    "deterministico_por_horizonte": {
+      "1": {
+        "n_elegivel": 240,
+        "bias": 2.3684757858670006e-16,
+        "mae": 36.84739377558479,
+        "rmse": 52.784162054353416,
+        "corr_absoluta": 0.8752682048704828,
+        "RMSESS_climatologia_loyo": 0.07408111989379551
+      },
+      "2": {
+        "n_elegivel": 240,
+        "bias": 0.0,
+        "mae": 40.09910912280702,
+        "rmse": 58.78027626036253,
+        "corr_absoluta": 0.8411627982879675,
+        "RMSESS_climatologia_loyo": -0.034909929966479014
+      },
+      "3": {
+        "n_elegivel": 240,
+        "bias": -1.3026616822268502e-15,
+        "mae": 39.24490171783626,
+        "rmse": 57.15747715380265,
+        "corr_absoluta": 0.8514017302189854,
+        "RMSESS_climatologia_loyo": -0.0023993999646516606
+      },
+      "4": {
+        "n_elegivel": 240,
+        "bias": -7.105427357601002e-16,
+        "mae": 37.6083784868421,
+        "rmse": 55.817472584814965,
+        "corr_absoluta": 0.8566186070216097,
+        "RMSESS_climatologia_loyo": 0.016400691208141804
+      },
+      "5": {
+        "n_elegivel": 240,
+        "bias": -1.6579330501069005e-15,
+        "mae": 38.43680246710526,
+        "rmse": 57.10237583648025,
+        "corr_absoluta": 0.8497519733286952,
+        "RMSESS_climatologia_loyo": -0.0061540935605381986
+      },
+      "6": {
+        "n_elegivel": 240,
+        "bias": 2.842170943040401e-15,
+        "mae": 38.4049673501462,
+        "rmse": 57.24922088819362,
+        "corr_absoluta": 0.8490691184329358,
+        "RMSESS_climatologia_loyo": -0.009776428531795833
+      }
+    }
+  },
+  "loyo_matched_evaluation_period": {
+    "rotulo": "aditiva_loyo_matched_evaluation_period",
+    "aviso": "LOYO (treino com passado+futuro, excluindo o ano avaliado) restrito ao MESMO conjunto de verificação do expanding (mesmos init_date×lead, N=120/horizonte) — isola o efeito do desenho de treinamento do efeito do período de avaliação. Esta é a comparação PRINCIPAL expanding × LOYO, nunca o loyo_retrospective (full, N=240) acima.",
+    "identidade_benchmark3_loyo": {
+      "identidade_ok": true,
+      "max_diff_absoluto": 2.842170943040401e-14,
+      "n_verificado": 1440
+    },
+    "deterministico_por_horizonte": {
+      "1": {
+        "n_elegivel": 120,
+        "bias": 3.684638523391812,
+        "mae": 33.05415838450292,
+        "rmse": 46.47754472933856,
+        "corr_absoluta": 0.9018757775981882,
+        "rmse_raw": 65.87626219646049,
+        "rmse_climatologia": 54.94452790121644,
+        "rmse_benchmark_anomalia_reconstruida": 47.96143961348691,
+        "skill_vs_raw": 0.294472042285426,
+        "RMSESS_climatologia": 0.1541005718913534,
+        "skill_vs_anomalia_reconstruida": 0.030939331598609288,
+        "rotulo": "H1 — previsão do mês corrente"
+      },
+      "2": {
+        "n_elegivel": 120,
+        "bias": 1.8381690423976618,
+        "mae": 35.504130964912285,
+        "rmse": 52.290902997337035,
+        "corr_absoluta": 0.8713198740848683,
+        "rmse_raw": 71.47451068601991,
+        "rmse_climatologia": 54.46448578058683,
+        "rmse_benchmark_anomalia_reconstruida": 53.452123973282085,
+        "skill_vs_raw": 0.2683978876463313,
+        "RMSESS_climatologia": 0.03990825860371083,
+        "skill_vs_anomalia_reconstruida": 0.02172450577502749,
+        "rotulo": "H2 — horizonte futuro (+1 mês)"
+      },
+      "3": {
+        "n_elegivel": 120,
+        "bias": -0.46795120614034785,
+        "mae": 34.45289983187135,
+        "rmse": 51.332969957763794,
+        "corr_absoluta": 0.8776639947060983,
+        "rmse_raw": 71.45980714841676,
+        "rmse_climatologia": 54.672300259642775,
+        "rmse_benchmark_anomalia_reconstruida": 52.35298819739551,
+        "skill_vs_raw": 0.2816525539853614,
+        "RMSESS_climatologia": 0.06107901599201526,
+        "skill_vs_anomalia_reconstruida": 0.01948347696574193,
+        "rotulo": "H3 — horizonte futuro (+2 meses)"
+      },
+      "4": {
+        "n_elegivel": 120,
+        "bias": -2.008932602339182,
+        "mae": 34.4515739619883,
+        "rmse": 53.03038079874473,
+        "corr_absoluta": 0.8687312727585589,
+        "rmse_raw": 76.01873326875346,
+        "rmse_climatologia": 54.70482716081539,
+        "rmse_benchmark_anomalia_reconstruida": 53.8613381100525,
+        "skill_vs_raw": 0.30240378235107745,
+        "RMSESS_climatologia": 0.030608749702257576,
+        "skill_vs_anomalia_reconstruida": 0.015427713838262136,
+        "rotulo": "H4 — horizonte futuro (+3 meses)"
+      },
+      "5": {
+        "n_elegivel": 120,
+        "bias": -1.3086254751461999,
+        "mae": 33.877106652046784,
+        "rmse": 51.82628113097738,
+        "corr_absoluta": 0.8752696556887082,
+        "rmse_raw": 79.15623443045666,
+        "rmse_climatologia": 54.714441848807255,
+        "rmse_benchmark_anomalia_reconstruida": 53.010082051165924,
+        "skill_vs_raw": 0.3452659603646284,
+        "RMSESS_climatologia": 0.052786076586703534,
+        "skill_vs_anomalia_reconstruida": 0.022331618333394143,
+        "rotulo": "H5 — horizonte futuro (+4 meses)"
+      },
+      "6": {
+        "n_elegivel": 120,
+        "bias": -3.5095460160818677,
+        "mae": 33.9347084502924,
+        "rmse": 54.01098964076913,
+        "corr_absoluta": 0.8642794256277028,
+        "rmse_raw": 81.23341576953075,
+        "rmse_climatologia": 54.49855331742405,
+        "rmse_benchmark_anomalia_reconstruida": 54.689421093016755,
+        "skill_vs_raw": 0.335113645916294,
+        "RMSESS_climatologia": 0.008946359985284813,
+        "skill_vs_anomalia_reconstruida": 0.012405167922581062,
+        "rotulo": "H6 — horizonte futuro (+5 meses)"
+      }
+    },
+    "intervalos_confianca_skills_por_horizonte": {
+      "1": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 10,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.294472042285426,
+          "ic95_lo": 0.19162633547505628,
+          "ic95_hi": 0.35980354646162643
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.1541005718913534,
+          "ic95_lo": -0.015882923251271386,
+          "ic95_hi": 0.24919549862989965
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.030939331598609288,
+          "ic95_lo": -0.005643818329272332,
+          "ic95_hi": 0.0713063571742127
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "2": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.2683978876463313,
+          "ic95_lo": 0.18753009460862446,
+          "ic95_hi": 0.3362811588911101
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.03990825860371083,
+          "ic95_lo": -0.06926085854054044,
+          "ic95_hi": 0.10061704110596165
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02172450577502749,
+          "ic95_lo": -0.015301438430770635,
+          "ic95_hi": 0.055302339633041174
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "3": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.2816525539853614,
+          "ic95_lo": 0.19825407142289844,
+          "ic95_hi": 0.3602865239929835
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.06107901599201526,
+          "ic95_lo": 0.003228253309086187,
+          "ic95_hi": 0.13199470046433537
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.01948347696574193,
+          "ic95_lo": -0.016256198694340567,
+          "ic95_hi": 0.049481593090417046
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "4": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.30240378235107745,
+          "ic95_lo": 0.19990943663770266,
+          "ic95_hi": 0.40062075516802315
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.030608749702257576,
+          "ic95_lo": -0.041735807057331535,
+          "ic95_hi": 0.1194255844553141
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.015427713838262136,
+          "ic95_lo": -0.01874048077794272,
+          "ic95_hi": 0.05206380098775508
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "5": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.3452659603646284,
+          "ic95_lo": 0.22620637165011842,
+          "ic95_hi": 0.45531711188943935
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.052786076586703534,
+          "ic95_lo": -0.001523684425626069,
+          "ic95_hi": 0.10641470597010871
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.022331618333394143,
+          "ic95_lo": -0.01659857847099289,
+          "ic95_hi": 0.05771403896348994
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "6": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.335113645916294,
+          "ic95_lo": 0.18922128831809956,
+          "ic95_hi": 0.45264112048423216
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.008946359985284813,
+          "ic95_lo": -0.07277759384966803,
+          "ic95_hi": 0.10132833672226792
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.012405167922581062,
+          "ic95_lo": -0.023916247611043617,
+          "ic95_hi": 0.048929527453489906
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      }
+    }
+  },
+  "comparacao_expanding_vs_loyo_full": {
+    "1": {
+      "n_expanding": 120,
+      "n_loyo": 240,
+      "RMSESS_climatologia_expanding": 0.16150799319968867,
+      "RMSESS_climatologia_loyo": 0.07408111989379551,
+      "divergencia_loyo_menos_expanding": -0.08742687330589316,
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    },
+    "2": {
+      "n_expanding": 120,
+      "n_loyo": 240,
+      "RMSESS_climatologia_expanding": 0.05084014961710537,
+      "RMSESS_climatologia_loyo": -0.034909929966479014,
+      "divergencia_loyo_menos_expanding": -0.08575007958358438,
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    },
+    "3": {
+      "n_expanding": 120,
+      "n_loyo": 240,
+      "RMSESS_climatologia_expanding": 0.06974635715389621,
+      "RMSESS_climatologia_loyo": -0.0023993999646516606,
+      "divergencia_loyo_menos_expanding": -0.07214575711854787,
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    },
+    "4": {
+      "n_expanding": 120,
+      "n_loyo": 240,
+      "RMSESS_climatologia_expanding": 0.03838165793255155,
+      "RMSESS_climatologia_loyo": 0.016400691208141804,
+      "divergencia_loyo_menos_expanding": -0.021980966724409745,
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    },
+    "5": {
+      "n_expanding": 120,
+      "n_loyo": 240,
+      "RMSESS_climatologia_expanding": 0.05844282846936999,
+      "RMSESS_climatologia_loyo": -0.0061540935605381986,
+      "divergencia_loyo_menos_expanding": -0.06459692202990819,
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    },
+    "6": {
+      "n_expanding": 120,
+      "n_loyo": 240,
+      "RMSESS_climatologia_expanding": 0.007807285155130184,
+      "RMSESS_climatologia_loyo": -0.009776428531795833,
+      "divergencia_loyo_menos_expanding": -0.017583713686926017,
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    }
+  },
+  "comparacao_expanding_vs_loyo_matched": {
+    "1": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 46.745833552517794,
+      "rmse_calibrado_loyo_matched": 46.47754472933856,
+      "skill_vs_raw_expanding": 0.2903994247106899,
+      "skill_vs_raw_loyo_matched": 0.294472042285426,
+      "RMSESS_climatologia_expanding": 0.16150799319968867,
+      "RMSESS_climatologia_loyo_matched": 0.1541005718913534,
+      "skill_vs_anomalia_reconstruida_expanding": 0.040294096718318184,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.030939331598609288,
+      "delta_skill_vs_raw": 0.004072617574736093,
+      "delta_RMSESS_climatologia": -0.007407421308335271,
+      "delta_skill_vs_anomalia_reconstruida": -0.009354765119708897,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "2": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 52.351303555063794,
+      "rmse_calibrado_loyo_matched": 52.290902997337035,
+      "skill_vs_raw_expanding": 0.2675528233409302,
+      "skill_vs_raw_loyo_matched": 0.2683978876463313,
+      "RMSESS_climatologia_expanding": 0.05084014961710537,
+      "RMSESS_climatologia_loyo_matched": 0.03990825860371083,
+      "skill_vs_anomalia_reconstruida_expanding": 0.03633969040165075,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.02172450577502749,
+      "delta_skill_vs_raw": 0.0008450643054010998,
+      "delta_RMSESS_climatologia": -0.010931891013394535,
+      "delta_skill_vs_anomalia_reconstruida": -0.014615184626623257,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "3": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 51.62509176817765,
+      "rmse_calibrado_loyo_matched": 51.332969957763794,
+      "skill_vs_raw_expanding": 0.27756463628629546,
+      "skill_vs_raw_loyo_matched": 0.2816525539853614,
+      "RMSESS_climatologia_expanding": 0.06974635715389621,
+      "RMSESS_climatologia_loyo_matched": 0.06107901599201526,
+      "skill_vs_anomalia_reconstruida_expanding": 0.02715970712687854,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.01948347696574193,
+      "delta_skill_vs_raw": 0.004087917699065913,
+      "delta_RMSESS_climatologia": -0.008667341161880948,
+      "delta_skill_vs_anomalia_reconstruida": -0.00767623016113661,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "4": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 53.35016456110512,
+      "rmse_calibrado_loyo_matched": 53.03038079874473,
+      "skill_vs_raw_expanding": 0.29819713816470517,
+      "skill_vs_raw_loyo_matched": 0.30240378235107745,
+      "RMSESS_climatologia_expanding": 0.03838165793255155,
+      "RMSESS_climatologia_loyo_matched": 0.030608749702257576,
+      "skill_vs_anomalia_reconstruida_expanding": 0.02180478348540482,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.015427713838262136,
+      "delta_skill_vs_raw": 0.004206644186372288,
+      "delta_RMSESS_climatologia": -0.007772908230293973,
+      "delta_skill_vs_anomalia_reconstruida": -0.006377069647142686,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "5": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 52.248903401540005,
+      "rmse_calibrado_loyo_matched": 51.82628113097738,
+      "skill_vs_raw_expanding": 0.3399268702272126,
+      "skill_vs_raw_loyo_matched": 0.3452659603646284,
+      "RMSESS_climatologia_expanding": 0.05844282846936999,
+      "RMSESS_climatologia_loyo_matched": 0.052786076586703534,
+      "skill_vs_anomalia_reconstruida_expanding": 0.030182094449654362,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.022331618333394143,
+      "delta_skill_vs_raw": 0.005339090137415847,
+      "delta_RMSESS_climatologia": -0.005656751882666455,
+      "delta_skill_vs_anomalia_reconstruida": -0.007850476116260219,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "6": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 54.73598682969854,
+      "rmse_calibrado_loyo_matched": 54.01098964076913,
+      "skill_vs_raw_expanding": 0.32618878190483447,
+      "skill_vs_raw_loyo_matched": 0.335113645916294,
+      "RMSESS_climatologia_expanding": 0.007807285155130184,
+      "RMSESS_climatologia_loyo_matched": 0.008946359985284813,
+      "skill_vs_anomalia_reconstruida_expanding": 0.01315280815723241,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.012405167922581062,
+      "delta_skill_vs_raw": 0.008924864011459532,
+      "delta_RMSESS_climatologia": 0.0011390748301546294,
+      "delta_skill_vs_anomalia_reconstruida": -0.0007476402346513478,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    }
+  },
+  "nenhuma_calibracao_aplicada_em_producao": true,
+  "nenhum_outro_metodo_de_calibracao_implementado": true,
+  "data_geracao_utc": "2026-10-06T13:59:44.390352+00:00"
+}
