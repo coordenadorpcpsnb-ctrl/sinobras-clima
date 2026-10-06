@@ -77,6 +77,21 @@ Método calibrado e os três benchmarks sempre nos MESMOS blocos de ano sorteado
 | H5 | 0.340 | [0.221, 0.455] | IC 95% totalmente ACIMA de zero | 0.058 | [0.003, 0.119] | IC 95% totalmente ACIMA de zero | 0.030 | [-0.010, 0.072] | IC 95% inclui zero (indeterminado) |
 | H6 | 0.326 | [0.182, 0.455] | IC 95% totalmente ACIMA de zero | 0.008 | [-0.079, 0.119] | IC 95% inclui zero (indeterminado) | 0.013 | [-0.025, 0.053] | IC 95% inclui zero (indeterminado) |
 
+### 6.1. Avaliação do critério de aprovação pré-registrado — NENHUM horizonte isolado
+
+O protocolo (Seção 6.2) exige, SIMULTANEAMENTE, que o IC 95% de `skill_vs_anomalia_reconstruida` E de `RMSESS_climatologia` estejam totalmente acima de zero — bater só um dos dois **não é suficiente** para aprovação. Atender só `skill_vs_anomalia_reconstruida` (como H1) não habilita a chamar aquele horizonte de aprovado.
+
+| Horizonte | skill_vs_anomalia_reconstruida acima de zero? | RMSESS_climatologia acima de zero? | Atende ao critério pré-registrado? |
+|---|---|---|---|
+| H1 | ✅ sim | ❌ não | ❌ NÃO |
+| H2 | ❌ não | ❌ não | ❌ NÃO |
+| H3 | ❌ não | ✅ sim | ❌ NÃO |
+| H4 | ❌ não | ❌ não | ❌ NÃO |
+| H5 | ❌ não | ✅ sim | ❌ NÃO |
+| H6 | ❌ não | ❌ não | ❌ NÃO |
+
+**Nenhum horizonte H1–H6 atende integralmente ao critério pré-registrado de aprovação do Método 3.1 nesta rodada.** H1 pode ser descrito como: *único horizonte com evidência de ganho sobre o benchmark de anomalia reconstruída, porém sem evidência conclusiva de ganho sobre a climatologia causal* — nunca chamado de "aprovado".
+
 ## 7. Matriz mês-alvo × lead (diagnóstico de heterogeneidade — NUNCA 72 testes de significância)
 
 Usada só para verificar direção/coerência dos efeitos, concentração do ganho, degradações relevantes e padrões sazonais — nunca como critério de aprovação célula a célula.
@@ -133,9 +148,11 @@ Usada só para verificar direção/coerência dos efeitos, concentração do gan
 
 ## 9. Comparação expanding vs. LOYO
 
-**Rótulo LOYO: `aditiva_loyo_retrospective`.** NÃO simula uso em tempo real — usa anos futuros no cálculo do bias. Análise complementar apenas, nunca misturada com expanding_operational_simulation nem chamada de operacional.
+### 9.1. LOYO full (retrospectivo descritivo — amostra DIFERENTE do expanding)
 
-| Horizonte | N expanding | N LOYO | RMSESS_climatologia expanding | RMSESS_climatologia LOYO | Divergência (LOYO − expanding) |
+**Rótulo: `aditiva_loyo_full_retrospective`.** NÃO simula uso em tempo real — usa anos futuros no cálculo do bias, E usa uma amostra MAIOR (N=240, 1991-2010) que o expanding (N=120, 2001-2010) — nunca comparado diretamente ao expanding como se fosse só efeito do método de treinamento. Análise retrospectiva descritiva adicional, nunca misturada com expanding_operational_simulation nem chamada de operacional. Para a comparação pareada e justa, ver loyo_matched_evaluation_period.
+
+| Horizonte | N expanding | N LOYO full | RMSESS_climatologia expanding | RMSESS_climatologia LOYO full | Divergência (LOYO full − expanding) |
 |---|---|---|---|---|---|
 | H1 | 120 | 240 | 0.162 | 0.074 | -0.087 |
 | H2 | 120 | 240 | 0.051 | -0.035 | -0.086 |
@@ -144,7 +161,51 @@ Usada só para verificar direção/coerência dos efeitos, concentração do gan
 | H5 | 120 | 240 | 0.058 | -0.006 | -0.065 |
 | H6 | 120 | 240 | 0.008 | -0.010 | -0.018 |
 
-LOYO usa anos passados E futuros (amostra maior, mais estável) — **nunca uma simulação operacional**. Divergências de sinal ou magnitude entre expanding e LOYO são registradas aqui como achado, nunca escondidas atrás do resultado mais favorável.
+**Esta comparação mistura dois efeitos: o desenho de treinamento (causal vs. passado+futuro) E o período de avaliação (N=120, 2001-2010 vs. N=240, 1991-2010) — nunca interpretar a divergência acima como efeito puro do método de treinamento.** Ver 9.2 para a comparação pareada.
+
+### 9.2. LOYO matched evaluation period — comparação PRINCIPAL (mesmos 120 casos)
+
+**Rótulo: `aditiva_loyo_matched_evaluation_period`.** LOYO (treino com passado+futuro, excluindo o ano avaliado) restrito ao MESMO conjunto de verificação do expanding (mesmos init_date×lead, N=120/horizonte) — isola o efeito do desenho de treinamento do efeito do período de avaliação. Esta é a comparação PRINCIPAL expanding × LOYO, nunca o loyo_retrospective (full, N=240) acima.
+
+- Identidade algébrica do `benchmark_anomalia_reconstruida_loyo`: ✅ OK (diferença máxima absoluta = 2.84e-14, 1440 linhas verificadas).
+
+| Horizonte | N exp. | N LOYO matched | RMSE calibrado exp. | RMSE calibrado LOYO matched | skill_vs_raw exp. | skill_vs_raw LOYO matched | RMSESS_climatologia exp. | RMSESS_climatologia LOYO matched | skill_vs_anomalia_reconstruida exp. | skill_vs_anomalia_reconstruida LOYO matched |
+|---|---|---|---|---|---|---|---|---|---|---|
+| H1 | 120 | 120 | 46.75 | 46.48 | 0.290 | 0.294 | 0.162 | 0.154 | 0.040 | 0.031 |
+| H2 | 120 | 120 | 52.35 | 52.29 | 0.268 | 0.268 | 0.051 | 0.040 | 0.036 | 0.022 |
+| H3 | 120 | 120 | 51.63 | 51.33 | 0.278 | 0.282 | 0.070 | 0.061 | 0.027 | 0.019 |
+| H4 | 120 | 120 | 53.35 | 53.03 | 0.298 | 0.302 | 0.038 | 0.031 | 0.022 | 0.015 |
+| H5 | 120 | 120 | 52.25 | 51.83 | 0.340 | 0.345 | 0.058 | 0.053 | 0.030 | 0.022 |
+| H6 | 120 | 120 | 54.74 | 54.01 | 0.326 | 0.335 | 0.008 | 0.009 | 0.013 | 0.012 |
+
+**Delta (LOYO matched − expanding), meramente descritivo — nunca um teste de significância automático:**
+
+| Horizonte | delta skill_vs_raw | delta RMSESS_climatologia | delta skill_vs_anomalia_reconstruida |
+|---|---|---|---|
+| H1 | 0.0041 | -0.0074 | -0.0094 |
+| H2 | 0.0008 | -0.0109 | -0.0146 |
+| H3 | 0.0041 | -0.0087 | -0.0077 |
+| H4 | 0.0042 | -0.0078 | -0.0064 |
+| H5 | 0.0053 | -0.0057 | -0.0079 |
+| H6 | 0.0089 | 0.0011 | -0.0007 |
+
+**IC 95% dos três skills do LOYO matched (bootstrap em blocos por target_ano, mesmos blocos para método e benchmarks em cada reamostra):**
+
+| Horizonte | skill_vs_raw | IC 95% | Classe | RMSESS_climatologia | IC 95% | Classe | skill_vs_anomalia_reconstruida | IC 95% | Classe |
+|---|---|---|---|---|---|---|---|---|---|
+| H1 | 0.294 | [0.192, 0.360] | IC 95% totalmente ACIMA de zero | 0.154 | [-0.016, 0.249] | IC 95% inclui zero (indeterminado) | 0.031 | [-0.006, 0.071] | IC 95% inclui zero (indeterminado) |
+| H2 | 0.268 | [0.188, 0.336] | IC 95% totalmente ACIMA de zero | 0.040 | [-0.069, 0.101] | IC 95% inclui zero (indeterminado) | 0.022 | [-0.015, 0.055] | IC 95% inclui zero (indeterminado) |
+| H3 | 0.282 | [0.198, 0.360] | IC 95% totalmente ACIMA de zero | 0.061 | [0.003, 0.132] | IC 95% totalmente ACIMA de zero | 0.019 | [-0.016, 0.049] | IC 95% inclui zero (indeterminado) |
+| H4 | 0.302 | [0.200, 0.401] | IC 95% totalmente ACIMA de zero | 0.031 | [-0.042, 0.119] | IC 95% inclui zero (indeterminado) | 0.015 | [-0.019, 0.052] | IC 95% inclui zero (indeterminado) |
+| H5 | 0.345 | [0.226, 0.455] | IC 95% totalmente ACIMA de zero | 0.053 | [-0.002, 0.106] | IC 95% inclui zero (indeterminado) | 0.022 | [-0.017, 0.058] | IC 95% inclui zero (indeterminado) |
+| H6 | 0.335 | [0.189, 0.453] | IC 95% totalmente ACIMA de zero | 0.009 | [-0.073, 0.101] | IC 95% inclui zero (indeterminado) | 0.012 | [-0.024, 0.049] | IC 95% inclui zero (indeterminado) |
+
+### 9.3. Contradição entre os desenhos?
+
+Maior `|delta|` observado entre LOYO matched e expanding (mesmos 120 casos, seção 9.2): **0.0146**. Maior divergência observada entre LOYO full e expanding (amostras diferentes, N=240 vs. N=120, seção 9.1): **0.0874**.
+
+Quando o período de avaliação é mantido CONSTANTE (9.2), os deltas ficam substancialmente MENORES que a divergência observada em 9.1 — isto sugere que a maior parte da divergência vista entre LOYO full e expanding é atribuível à diferença de amostra/período (N=240 vs. N=120), não ao desenho de treinamento em si. Leitura descritiva dos números acima, não um teste estatístico de equivalência entre os dois desenhos.
+Em ambos os casos, esta seção é descritiva — nunca transforma automaticamente a comparação em teste de significância.
 
 ## 10. Limitações
 
@@ -158,8 +219,21 @@ LOYO usa anos passados E futuros (amostra maior, mais estável) — **nunca uma 
 
 Esta conclusão vale SOMENTE para a correção aditiva causal por lead × mês-alvo — nunca generalizada para "calibração do CFSv2" em geral, e nunca chamando o modelo de validado ou pronto para produção.
 
-- `skill_vs_raw` (vs. CFSv2 bruto): ver seção 6 — se o IC 95% estiver totalmente acima de zero em todos os horizontes, isso mostra que remover o viés aditivo causal melhora sobre o ensemble bruto não corrigido, mas este NÃO é o critério principal de aprovação.
-- `RMSESS_climatologia` (vs. climatologia causal): ver seção 6.
-- **`skill_vs_anomalia_reconstruida` (vs. benchmark_anomalia_reconstruida) é o ponto PRINCIPAL pré-registrado (protocolo, Seção 6.2) — a aprovação do método depende de seu IC 95% estar totalmente acima de zero, consistentemente entre expanding e LOYO, e sem degradação relevante escondida na matriz mês×lead. Ver seção 6 para a classificação real, por horizonte.**
-- Qualquer horizonte em que esse IC inclua ou fique abaixo de zero significa que a correção aditiva NÃO demonstrou ganho estatisticamente distinguível sobre o benchmark mais exigente naquele horizonte — um resultado válido e esperado, não uma falha de implementação.
+### 11.1. Evidência expanding
+
+- Melhora robusta contra o CFSv2 bruto (`skill_vs_raw`) em TODOS os H1-H6: IC 95% totalmente acima de zero em todos os horizontes (seção 6) — remover o viés aditivo causal melhora de forma consistente sobre o ensemble bruto não corrigido. Isto NÃO é, por si só, o critério de aprovação.
+- Contra a climatologia causal (`RMSESS_climatologia`): IC 95% totalmente acima de zero somente em H3 e H5 (seção 6) — nos demais horizontes, o IC inclui zero.
+- Contra o `benchmark_anomalia_reconstruida` (`skill_vs_anomalia_reconstruida`): IC 95% totalmente acima de zero somente em H1 (seção 6).
+- **Portanto, nenhum horizonte H1-H6 satisfaz simultaneamente os dois critérios estatísticos principais (seção 6.1).**
+- H1: único horizonte com evidência de ganho sobre o benchmark de anomalia reconstruída, porém SEM evidência conclusiva de ganho sobre a climatologia causal — nunca descrito como aprovado.
+
+### 11.2. Evidência LOYO
+
+- **LOYO full** (seção 9.1, N=240, 1991-2010): retrospectivo descritivo adicional — amostra DIFERENTE do expanding, nunca comparado diretamente como se fosse só efeito do método de treinamento.
+- **LOYO matched** (seção 9.2, N=120, mesmos casos do expanding): comparação metodologicamente justa — isola o efeito do desenho de treinamento do efeito do período de avaliação.
+- Maior `|delta|` entre LOYO matched e expanding: 0.0146; maior divergência entre LOYO full e expanding: 0.0874 — ver discussão quantitativa na seção 9.3 sobre se isso indica ou não contradição real entre os desenhos, antes de qualquer conclusão.
+
+### 11.3. Síntese
+
 - Não implementar o método multiplicativo, quantile mapping, MOS ou calibração probabilística nesta atividade — são decisões de uma próxima etapa, condicionadas à revisão independente deste resultado.
+- Nenhum horizonte deve ser chamado de "aprovado" nesta rodada quando o critério pré-registrado não for integralmente satisfeito; a leitura correta é que a correção aditiva ainda não demonstrou, para esse(s) horizonte(s), ganho estatisticamente distinguível SIMULTANEAMENTE sobre a climatologia causal e sobre o benchmark de anomalia reconstruída — um resultado válido e informativo, não uma falha de implementação.

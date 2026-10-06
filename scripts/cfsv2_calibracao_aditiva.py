@@ -486,8 +486,16 @@ def construir_tabela_calibracao_aditiva_loyo(base_pareada, chirps_df):
     """Versão LOYO do bias aditivo — usa TODOS os anos exceto o do
     próprio target_ano avaliado (passado E futuro), mesma combinação
     lead × mês-alvo. Deliberadamente NÃO causal — rotulada
-    'aditiva_loyo_retrospective', nunca chamada de operacional, nunca
-    misturada com a tabela expansível."""
+    'aditiva_loyo_retrospective' (LOYO FULL, 1991-2010, N=240), nunca
+    chamada de operacional, nunca misturada com a tabela expansível.
+
+    Segunda revisão — também calcula, para o mesmo desenho LOYO, a
+    climatologia PRÓPRIA do modelo bruto (`climatologia_modelo_raw_loyo`:
+    média do forecast_raw em todos os outros anos, mesma combinação
+    lead×mês-alvo) e o `benchmark_anomalia_reconstruida_loyo`
+    correspondente — nunca altera bias_aditivo_loyo, forecast_
+    calibrado_loyo nem status_calibracao, que permanecem exatamente como
+    antes (só colunas NOVAS foram adicionadas)."""
     base_loyo = v._enriquecer_com_climatologia_loyo(base_pareada, chirps_df)
     media_membros = base_loyo.groupby(
         ['init_date', 'target_month', 'target_ano', 'target_mes', 'lead'], as_index=False
@@ -510,6 +518,16 @@ def construir_tabela_calibracao_aditiva_loyo(base_pareada, chirps_df):
                 status = STATUS_WARMUP
                 forecast_calibrado = None
             clim_loyo = row['climatologia_loyo_observada']
+
+            # Climatologia PRÓPRIA do modelo bruto em desenho LOYO —
+            # mesma combinação lead×mês-alvo, todos os anos exceto o
+            # avaliado (idem à regra do bias, reaproveitando `outros`).
+            clim_modelo_raw_loyo = float(outros['forecast_raw'].mean()) if len(outros) > 0 else None
+            if clim_modelo_raw_loyo is not None and pd.notna(clim_loyo):
+                bench3_loyo = float(clim_loyo + (row['forecast_raw'] - clim_modelo_raw_loyo))
+            else:
+                bench3_loyo = None
+
             linhas.append({
                 'init_date': row['init_date'], 'target_month': row['target_month'],
                 'target_ano': int(row['target_ano']), 'target_mes': int(row['target_mes']),
@@ -517,12 +535,54 @@ def construir_tabela_calibracao_aditiva_loyo(base_pareada, chirps_df):
                 'observacao': float(row['observacao']), 'n_treino': n_treino,
                 'bias_aditivo_loyo': bias, 'forecast_calibrado_loyo': forecast_calibrado,
                 'climatologia_loyo_observada': float(clim_loyo) if pd.notna(clim_loyo) else None,
+                'climatologia_modelo_raw_loyo': clim_modelo_raw_loyo,
+                'benchmark_anomalia_reconstruida_loyo': bench3_loyo,
                 'status_calibracao': status,
             })
     tabela = pd.DataFrame(linhas)
     tabela = tabela.assign(_p=pd.PeriodIndex(tabela['init_date'], freq='M')).sort_values(
         ['lead', '_p']).drop(columns='_p').reset_index(drop=True)
     return tabela
+
+
+def validar_identidade_benchmark3_loyo(tabela_loyo):
+    """Segunda revisão, item 3 — valida PROGRAMATICAMENTE a identidade
+    algébrica equivalente em desenho LOYO: benchmark_anomalia_
+    reconstruida_loyo - observacao == (forecast_raw -
+    climatologia_modelo_raw_loyo) - (observacao -
+    climatologia_loyo_observada). Mesma lógica de validar_identidade_
+    benchmark3, nunca assumida."""
+    sub = tabela_loyo.dropna(subset=['benchmark_anomalia_reconstruida_loyo',
+                                       'climatologia_modelo_raw_loyo',
+                                       'climatologia_loyo_observada'])
+    if len(sub) == 0:
+        return {'identidade_ok': True, 'max_diff_absoluto': 0.0, 'n_verificado': 0,
+                'nota': 'nenhuma linha com benchmark3_loyo disponível para verificar'}
+    lado_a = sub['benchmark_anomalia_reconstruida_loyo'] - sub['observacao']
+    lado_b = (sub['forecast_raw'] - sub['climatologia_modelo_raw_loyo']) - (
+        sub['observacao'] - sub['climatologia_loyo_observada'])
+    diff = (lado_a - lado_b).abs()
+    max_diff = float(diff.max())
+    return {'identidade_ok': bool(max_diff < 1e-9), 'max_diff_absoluto': max_diff,
+            'n_verificado': int(len(sub))}
+
+
+def construir_tabela_loyo_matched(tabela_expanding, tabela_loyo):
+    """Segunda revisão, item 2 — 'loyo_matched_evaluation_period':
+    restringe a tabela LOYO (treinada com passado+futuro, natureza
+    retrospectiva preservada) ao MESMO conjunto de verificação do
+    expanding — exatamente os (init_date, lead) com status_calibracao=
+    'ok' E benchmark_anomalia_reconstruida disponível no expanding
+    (120/horizonte). O que muda entre expanding e LOYO matched é só o
+    DESENHO DE TREINAMENTO do bias — nunca o período avaliado, que fica
+    idêntico, isolando o efeito do método de treinamento do efeito do
+    período de avaliação."""
+    chaves_expanding = tabela_expanding[
+        (tabela_expanding['status_calibracao'] == STATUS_OK)
+        & tabela_expanding['benchmark_anomalia_reconstruida'].notna()
+    ][['init_date', 'lead']].drop_duplicates()
+    matched = tabela_loyo.merge(chaves_expanding, on=['init_date', 'lead'], how='inner')
+    return matched
 
 
 def metricas_deterministicas_aditiva_loyo_por_horizonte(tabela_loyo):
@@ -566,7 +626,175 @@ def comparar_expanding_vs_loyo(det_expanding, det_loyo):
             'nota': 'LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA '
                     'operacional. Divergência relevante (sinal oposto ou magnitude muito '
                     'diferente) é um achado a registrar, nunca escondido atrás do resultado '
-                    'mais favorável.',
+                    'mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO '
+                    'full) — amostras DIFERENTES, misturando efeito do desenho de treinamento '
+                    'com efeito do período de avaliação. Ver loyo_matched_evaluation_period '
+                    'para a comparação pareada (mesmos 120 casos).',
+        }
+    return comparacao
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Segunda revisão — LOYO matched evaluation period (comparação PRINCIPAL
+# com o expanding, sobre EXATAMENTE os mesmos 120 casos/horizonte). O LOYO
+# full acima permanece só como retrospectivo descritivo adicional.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _calcular_skills_tres_benchmarks(sub, col_calibrado, col_obs, col_raw, col_clim, col_bench3):
+    """Núcleo compartilhado das métricas determinísticas + três skills —
+    usado pelo LOYO matched (nunca pelo expanding já aprovado, que
+    mantém sua própria função intocada, `metricas_deterministicas_
+    aditiva_por_horizonte`, para garantir que seus valores numéricos
+    nunca mudem nesta revisão)."""
+    n = len(sub)
+    if n == 0:
+        return {'n_elegivel': 0}
+    calibrado = sub[col_calibrado].values
+    obs = sub[col_obs].values
+    raw = sub[col_raw].values
+    clim = sub[col_clim].values
+    bench3 = sub[col_bench3].values
+    assert len(calibrado) == len(raw) == len(obs) == len(clim) == len(bench3) == n
+
+    rmse_cal = v._rmse(calibrado, obs)
+    rmse_raw = v._rmse(raw, obs)
+    rmse_clim = v._rmse(clim, obs)
+    rmse_bench3 = v._rmse(bench3, obs)
+
+    return {
+        'n_elegivel': n,
+        'bias': v._bias(calibrado, obs), 'mae': v._mae(calibrado, obs), 'rmse': rmse_cal,
+        'corr_absoluta': v._corr(calibrado, obs),
+        'rmse_raw': rmse_raw, 'rmse_climatologia': rmse_clim,
+        'rmse_benchmark_anomalia_reconstruida': rmse_bench3,
+        'skill_vs_raw': v.rmsess(rmse_cal, rmse_raw),
+        'RMSESS_climatologia': v.rmsess(rmse_cal, rmse_clim),
+        'skill_vs_anomalia_reconstruida': v.rmsess(rmse_cal, rmse_bench3),
+    }
+
+
+def metricas_deterministicas_loyo_matched_por_horizonte(tabela_loyo_matched):
+    """Segunda revisão, item 3 — os três benchmarks (CFSv2 bruto,
+    climatologia LOYO observada, benchmark_anomalia_reconstruida_loyo)
+    para o LOYO matched, usando exatamente os mesmos 120 casos/horizonte
+    do expanding."""
+    resultado = {}
+    for lead in v.LEADS_ESPERADOS:
+        sub_lead = tabela_loyo_matched[tabela_loyo_matched['lead'] == lead]
+        sub = sub_lead[sub_lead['status_calibracao'] == STATUS_OK].dropna(
+            subset=['benchmark_anomalia_reconstruida_loyo'])
+        resultado[lead] = _calcular_skills_tres_benchmarks(
+            sub, 'forecast_calibrado_loyo', 'observacao', 'forecast_raw',
+            'climatologia_loyo_observada', 'benchmark_anomalia_reconstruida_loyo')
+        resultado[lead]['rotulo'] = v.ROTULO_HORIZONTE[lead]
+    return resultado
+
+
+def bootstrap_skills_loyo_matched_por_horizonte(tabela_loyo_matched, n_resamples=500, seed=20261001):
+    """Segunda revisão, item 5 — IC 95% dos três skills do LOYO matched,
+    bootstrap em blocos por target_ano, mesmos blocos para o método e os
+    três benchmarks em cada reamostra (mesmo desenho do
+    bootstrap_skills_aditiva_por_horizonte do expanding, nunca
+    reaproveitando aquele resultado)."""
+    rng = np.random.default_rng(seed)
+    resultado = {}
+
+    for lead in v.LEADS_ESPERADOS:
+        sub_lead = tabela_loyo_matched[tabela_loyo_matched['lead'] == lead]
+        sub = sub_lead[sub_lead['status_calibracao'] == STATUS_OK].dropna(
+            subset=['benchmark_anomalia_reconstruida_loyo'])
+        n = len(sub)
+        if n < v.AMOSTRA_MINIMA_ESTRATO:
+            resultado[lead] = {'n': n, 'amostra_suficiente': False,
+                                'nota': 'amostra insuficiente — IC não calculado'}
+            continue
+
+        anos = np.array(sorted(sub['target_ano'].unique()))
+        if len(anos) < 3:
+            resultado[lead] = {'n': n, 'amostra_suficiente': True,
+                                'nota': 'menos de 3 anos distintos — bootstrap em blocos não é '
+                                        'confiável'}
+            continue
+
+        por_ano = {a: sub[sub['target_ano'] == a] for a in anos}
+
+        skill_raw_boot, rmsess_clim_boot, skill_anom_boot = [], [], []
+        for _ in range(n_resamples):
+            anos_sorteados = rng.choice(anos, size=len(anos), replace=True)
+            amostra = pd.concat([por_ano[a] for a in anos_sorteados], ignore_index=True)
+
+            rmse_cal = v._rmse(amostra['forecast_calibrado_loyo'].values, amostra['observacao'].values)
+            rmse_raw = v._rmse(amostra['forecast_raw'].values, amostra['observacao'].values)
+            rmse_clim = v._rmse(amostra['climatologia_loyo_observada'].values,
+                                  amostra['observacao'].values)
+            rmse_bench3 = v._rmse(amostra['benchmark_anomalia_reconstruida_loyo'].values,
+                                    amostra['observacao'].values)
+
+            s1 = v.rmsess(rmse_cal, rmse_raw)
+            s2 = v.rmsess(rmse_cal, rmse_clim)
+            s3 = v.rmsess(rmse_cal, rmse_bench3)
+            if s1 is not None:
+                skill_raw_boot.append(s1)
+            if s2 is not None:
+                rmsess_clim_boot.append(s2)
+            if s3 is not None:
+                skill_anom_boot.append(s3)
+
+        rmse_cal_p = v._rmse(sub['forecast_calibrado_loyo'].values, sub['observacao'].values)
+        rmse_raw_p = v._rmse(sub['forecast_raw'].values, sub['observacao'].values)
+        rmse_clim_p = v._rmse(sub['climatologia_loyo_observada'].values, sub['observacao'].values)
+        rmse_bench3_p = v._rmse(sub['benchmark_anomalia_reconstruida_loyo'].values,
+                                  sub['observacao'].values)
+
+        resumo_raw = v._resumo_bootstrap(v.rmsess(rmse_cal_p, rmse_raw_p), skill_raw_boot)
+        resumo_clim = v._resumo_bootstrap(v.rmsess(rmse_cal_p, rmse_clim_p), rmsess_clim_boot)
+        resumo_anom = v._resumo_bootstrap(v.rmsess(rmse_cal_p, rmse_bench3_p), skill_anom_boot)
+
+        resultado[lead] = {
+            'n': n, 'amostra_suficiente': True, 'n_anos_distintos': int(len(anos)),
+            'n_resamples': n_resamples,
+            'metodo': 'bootstrap em blocos por target_ano (LOYO matched) — método calibrado e '
+                      'os três benchmarks usam os MESMOS blocos sorteados em cada reamostra',
+            'skill_vs_raw': resumo_raw,
+            'skill_vs_raw_ic_classificacao': v._classificar_ic_relativo_a_zero(
+                resumo_raw['ic95_lo'], resumo_raw['ic95_hi']),
+            'RMSESS_climatologia': resumo_clim,
+            'RMSESS_climatologia_ic_classificacao': v._classificar_ic_relativo_a_zero(
+                resumo_clim['ic95_lo'], resumo_clim['ic95_hi']),
+            'skill_vs_anomalia_reconstruida': resumo_anom,
+            'skill_vs_anomalia_reconstruida_ic_classificacao': v._classificar_ic_relativo_a_zero(
+                resumo_anom['ic95_lo'], resumo_anom['ic95_hi']),
+        }
+    return resultado
+
+
+def comparar_expanding_vs_loyo_matched(det_expanding, boot_expanding, det_loyo_matched, boot_loyo_matched):
+    """Segunda revisão, item 4 — comparação PRINCIPAL expanding × LOYO,
+    sobre EXATAMENTE os mesmos 120 casos/horizonte. delta_skill =
+    skill_LOYO_matched - skill_expanding para os três benchmarks — nunca
+    transformado automaticamente em teste de significância."""
+    comparacao = {}
+    for lead in v.LEADS_ESPERADOS:
+        e = det_expanding.get(lead, {})
+        m = det_loyo_matched.get(lead, {})
+        deltas = {}
+        for chave in ('skill_vs_raw', 'RMSESS_climatologia', 'skill_vs_anomalia_reconstruida'):
+            ve, vm = e.get(chave), m.get(chave)
+            deltas[f'delta_{chave}'] = float(vm - ve) if ve is not None and vm is not None else None
+        comparacao[lead] = {
+            'n_expanding': e.get('n_elegivel', 0), 'n_loyo_matched': m.get('n_elegivel', 0),
+            'rmse_calibrado_expanding': e.get('rmse'), 'rmse_calibrado_loyo_matched': m.get('rmse'),
+            'skill_vs_raw_expanding': e.get('skill_vs_raw'),
+            'skill_vs_raw_loyo_matched': m.get('skill_vs_raw'),
+            'RMSESS_climatologia_expanding': e.get('RMSESS_climatologia'),
+            'RMSESS_climatologia_loyo_matched': m.get('RMSESS_climatologia'),
+            'skill_vs_anomalia_reconstruida_expanding': e.get('skill_vs_anomalia_reconstruida'),
+            'skill_vs_anomalia_reconstruida_loyo_matched': m.get('skill_vs_anomalia_reconstruida'),
+            **deltas,
+            'nota': 'MESMOS 120 casos em ambos os lados — a única diferença é o desenho de '
+                    'treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). '
+                    'delta_skill é meramente descritivo, nunca um teste de significância '
+                    'automático.',
         }
     return comparacao
 
@@ -628,7 +856,29 @@ def executar_calibracao_aditiva(n_resamples_bootstrap=500):
 
     tabela_loyo = construir_tabela_calibracao_aditiva_loyo(base, chirps_df)
     det_loyo = metricas_deterministicas_aditiva_loyo_por_horizonte(tabela_loyo)
-    comparacao = comparar_expanding_vs_loyo(det, det_loyo)
+    comparacao_loyo_full = comparar_expanding_vs_loyo(det, det_loyo)
+
+    identidade_loyo = validar_identidade_benchmark3_loyo(tabela_loyo)
+    if not identidade_loyo['identidade_ok']:
+        return ({'STOP_ON_FAILURE': True,
+                 'motivo': 'benchmark_anomalia_reconstruida_loyo não satisfaz a identidade '
+                            'algébrica esperada', 'detalhe': identidade_loyo}, None, None)
+
+    tabela_loyo_matched = construir_tabela_loyo_matched(tabela, tabela_loyo)
+    det_loyo_matched = metricas_deterministicas_loyo_matched_por_horizonte(tabela_loyo_matched)
+
+    for lead in v.LEADS_ESPERADOS:
+        n_exp = det.get(lead, {}).get('n_elegivel', 0)
+        n_mat = det_loyo_matched.get(lead, {}).get('n_elegivel', 0)
+        if n_exp != n_mat:
+            return ({'STOP_ON_FAILURE': True,
+                     'motivo': f'LOYO matched não reproduziu o mesmo N do expanding em H{lead}: '
+                                f'expanding={n_exp}, loyo_matched={n_mat}'}, None, None)
+
+    boot_loyo_matched = bootstrap_skills_loyo_matched_por_horizonte(tabela_loyo_matched,
+                                                                      n_resamples_bootstrap)
+    comparacao_matched = comparar_expanding_vs_loyo_matched(det, boot, det_loyo_matched,
+                                                              boot_loyo_matched)
 
     resultado = {
         'STOP_ON_FAILURE': False,
@@ -646,13 +896,29 @@ def executar_calibracao_aditiva(n_resamples_bootstrap=500):
             'matriz_grupo_sazonal_lead': matriz_grupo,
         },
         'loyo_retrospective': {
-            'rotulo': 'aditiva_loyo_retrospective',
-            'aviso': 'NÃO simula uso em tempo real — usa anos futuros no cálculo do bias. '
-                     'Análise complementar apenas, nunca misturada com '
-                     'expanding_operational_simulation nem chamada de operacional.',
+            'rotulo': 'aditiva_loyo_full_retrospective',
+            'aviso': 'NÃO simula uso em tempo real — usa anos futuros no cálculo do bias, E usa '
+                     'uma amostra MAIOR (N=240, 1991-2010) que o expanding (N=120, '
+                     '2001-2010) — nunca comparado diretamente ao expanding como se fosse só '
+                     'efeito do método de treinamento. Análise retrospectiva descritiva '
+                     'adicional, nunca misturada com expanding_operational_simulation nem '
+                     'chamada de operacional. Para a comparação pareada e justa, ver '
+                     'loyo_matched_evaluation_period.',
             'deterministico_por_horizonte': det_loyo,
         },
-        'comparacao_expanding_vs_loyo': comparacao,
+        'loyo_matched_evaluation_period': {
+            'rotulo': 'aditiva_loyo_matched_evaluation_period',
+            'aviso': 'LOYO (treino com passado+futuro, excluindo o ano avaliado) restrito ao '
+                     'MESMO conjunto de verificação do expanding (mesmos init_date×lead, '
+                     'N=120/horizonte) — isola o efeito do desenho de treinamento do efeito do '
+                     'período de avaliação. Esta é a comparação PRINCIPAL expanding × LOYO, '
+                     'nunca o loyo_retrospective (full, N=240) acima.',
+            'identidade_benchmark3_loyo': identidade_loyo,
+            'deterministico_por_horizonte': det_loyo_matched,
+            'intervalos_confianca_skills_por_horizonte': boot_loyo_matched,
+        },
+        'comparacao_expanding_vs_loyo_full': comparacao_loyo_full,
+        'comparacao_expanding_vs_loyo_matched': comparacao_matched,
         'nenhuma_calibracao_aplicada_em_producao': True,
         'nenhum_outro_metodo_de_calibracao_implementado': True,
         'data_geracao_utc': dt.datetime.now(dt.timezone.utc).isoformat(),

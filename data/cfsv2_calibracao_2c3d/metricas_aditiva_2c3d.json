@@ -1485,8 +1485,8 @@
     }
   },
   "loyo_retrospective": {
-    "rotulo": "aditiva_loyo_retrospective",
-    "aviso": "NÃO simula uso em tempo real — usa anos futuros no cálculo do bias. Análise complementar apenas, nunca misturada com expanding_operational_simulation nem chamada de operacional.",
+    "rotulo": "aditiva_loyo_full_retrospective",
+    "aviso": "NÃO simula uso em tempo real — usa anos futuros no cálculo do bias, E usa uma amostra MAIOR (N=240, 1991-2010) que o expanding (N=120, 2001-2010) — nunca comparado diretamente ao expanding como se fosse só efeito do método de treinamento. Análise retrospectiva descritiva adicional, nunca misturada com expanding_operational_simulation nem chamada de operacional. Para a comparação pareada e justa, ver loyo_matched_evaluation_period.",
     "deterministico_por_horizonte": {
       "1": {
         "n_elegivel": 240,
@@ -1538,14 +1538,261 @@
       }
     }
   },
-  "comparacao_expanding_vs_loyo": {
+  "loyo_matched_evaluation_period": {
+    "rotulo": "aditiva_loyo_matched_evaluation_period",
+    "aviso": "LOYO (treino com passado+futuro, excluindo o ano avaliado) restrito ao MESMO conjunto de verificação do expanding (mesmos init_date×lead, N=120/horizonte) — isola o efeito do desenho de treinamento do efeito do período de avaliação. Esta é a comparação PRINCIPAL expanding × LOYO, nunca o loyo_retrospective (full, N=240) acima.",
+    "identidade_benchmark3_loyo": {
+      "identidade_ok": true,
+      "max_diff_absoluto": 2.842170943040401e-14,
+      "n_verificado": 1440
+    },
+    "deterministico_por_horizonte": {
+      "1": {
+        "n_elegivel": 120,
+        "bias": 3.684638523391812,
+        "mae": 33.05415838450292,
+        "rmse": 46.47754472933856,
+        "corr_absoluta": 0.9018757775981882,
+        "rmse_raw": 65.87626219646049,
+        "rmse_climatologia": 54.94452790121644,
+        "rmse_benchmark_anomalia_reconstruida": 47.96143961348691,
+        "skill_vs_raw": 0.294472042285426,
+        "RMSESS_climatologia": 0.1541005718913534,
+        "skill_vs_anomalia_reconstruida": 0.030939331598609288,
+        "rotulo": "H1 — previsão do mês corrente"
+      },
+      "2": {
+        "n_elegivel": 120,
+        "bias": 1.8381690423976618,
+        "mae": 35.504130964912285,
+        "rmse": 52.290902997337035,
+        "corr_absoluta": 0.8713198740848683,
+        "rmse_raw": 71.47451068601991,
+        "rmse_climatologia": 54.46448578058683,
+        "rmse_benchmark_anomalia_reconstruida": 53.452123973282085,
+        "skill_vs_raw": 0.2683978876463313,
+        "RMSESS_climatologia": 0.03990825860371083,
+        "skill_vs_anomalia_reconstruida": 0.02172450577502749,
+        "rotulo": "H2 — horizonte futuro (+1 mês)"
+      },
+      "3": {
+        "n_elegivel": 120,
+        "bias": -0.46795120614034785,
+        "mae": 34.45289983187135,
+        "rmse": 51.332969957763794,
+        "corr_absoluta": 0.8776639947060983,
+        "rmse_raw": 71.45980714841676,
+        "rmse_climatologia": 54.672300259642775,
+        "rmse_benchmark_anomalia_reconstruida": 52.35298819739551,
+        "skill_vs_raw": 0.2816525539853614,
+        "RMSESS_climatologia": 0.06107901599201526,
+        "skill_vs_anomalia_reconstruida": 0.01948347696574193,
+        "rotulo": "H3 — horizonte futuro (+2 meses)"
+      },
+      "4": {
+        "n_elegivel": 120,
+        "bias": -2.008932602339182,
+        "mae": 34.4515739619883,
+        "rmse": 53.03038079874473,
+        "corr_absoluta": 0.8687312727585589,
+        "rmse_raw": 76.01873326875346,
+        "rmse_climatologia": 54.70482716081539,
+        "rmse_benchmark_anomalia_reconstruida": 53.8613381100525,
+        "skill_vs_raw": 0.30240378235107745,
+        "RMSESS_climatologia": 0.030608749702257576,
+        "skill_vs_anomalia_reconstruida": 0.015427713838262136,
+        "rotulo": "H4 — horizonte futuro (+3 meses)"
+      },
+      "5": {
+        "n_elegivel": 120,
+        "bias": -1.3086254751461999,
+        "mae": 33.877106652046784,
+        "rmse": 51.82628113097738,
+        "corr_absoluta": 0.8752696556887082,
+        "rmse_raw": 79.15623443045666,
+        "rmse_climatologia": 54.714441848807255,
+        "rmse_benchmark_anomalia_reconstruida": 53.010082051165924,
+        "skill_vs_raw": 0.3452659603646284,
+        "RMSESS_climatologia": 0.052786076586703534,
+        "skill_vs_anomalia_reconstruida": 0.022331618333394143,
+        "rotulo": "H5 — horizonte futuro (+4 meses)"
+      },
+      "6": {
+        "n_elegivel": 120,
+        "bias": -3.5095460160818677,
+        "mae": 33.9347084502924,
+        "rmse": 54.01098964076913,
+        "corr_absoluta": 0.8642794256277028,
+        "rmse_raw": 81.23341576953075,
+        "rmse_climatologia": 54.49855331742405,
+        "rmse_benchmark_anomalia_reconstruida": 54.689421093016755,
+        "skill_vs_raw": 0.335113645916294,
+        "RMSESS_climatologia": 0.008946359985284813,
+        "skill_vs_anomalia_reconstruida": 0.012405167922581062,
+        "rotulo": "H6 — horizonte futuro (+5 meses)"
+      }
+    },
+    "intervalos_confianca_skills_por_horizonte": {
+      "1": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 10,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.294472042285426,
+          "ic95_lo": 0.19162633547505628,
+          "ic95_hi": 0.35980354646162643
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.1541005718913534,
+          "ic95_lo": -0.015882923251271386,
+          "ic95_hi": 0.24919549862989965
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.030939331598609288,
+          "ic95_lo": -0.005643818329272332,
+          "ic95_hi": 0.0713063571742127
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "2": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.2683978876463313,
+          "ic95_lo": 0.18753009460862446,
+          "ic95_hi": 0.3362811588911101
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.03990825860371083,
+          "ic95_lo": -0.06926085854054044,
+          "ic95_hi": 0.10061704110596165
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02172450577502749,
+          "ic95_lo": -0.015301438430770635,
+          "ic95_hi": 0.055302339633041174
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "3": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.2816525539853614,
+          "ic95_lo": 0.19825407142289844,
+          "ic95_hi": 0.3602865239929835
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.06107901599201526,
+          "ic95_lo": 0.003228253309086187,
+          "ic95_hi": 0.13199470046433537
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.01948347696574193,
+          "ic95_lo": -0.016256198694340567,
+          "ic95_hi": 0.049481593090417046
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "4": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.30240378235107745,
+          "ic95_lo": 0.19990943663770266,
+          "ic95_hi": 0.40062075516802315
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.030608749702257576,
+          "ic95_lo": -0.041735807057331535,
+          "ic95_hi": 0.1194255844553141
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.015427713838262136,
+          "ic95_lo": -0.01874048077794272,
+          "ic95_hi": 0.05206380098775508
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "5": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.3452659603646284,
+          "ic95_lo": 0.22620637165011842,
+          "ic95_hi": 0.45531711188943935
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.052786076586703534,
+          "ic95_lo": -0.001523684425626069,
+          "ic95_hi": 0.10641470597010871
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.022331618333394143,
+          "ic95_lo": -0.01659857847099289,
+          "ic95_hi": 0.05771403896348994
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "6": {
+        "n": 120,
+        "amostra_suficiente": true,
+        "n_anos_distintos": 11,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por target_ano (LOYO matched) — método calibrado e os três benchmarks usam os MESMOS blocos sorteados em cada reamostra",
+        "skill_vs_raw": {
+          "estimativa": 0.335113645916294,
+          "ic95_lo": 0.18922128831809956,
+          "ic95_hi": 0.45264112048423216
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.008946359985284813,
+          "ic95_lo": -0.07277759384966803,
+          "ic95_hi": 0.10132833672226792
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.012405167922581062,
+          "ic95_lo": -0.023916247611043617,
+          "ic95_hi": 0.048929527453489906
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      }
+    }
+  },
+  "comparacao_expanding_vs_loyo_full": {
     "1": {
       "n_expanding": 120,
       "n_loyo": 240,
       "RMSESS_climatologia_expanding": 0.16150799319968867,
       "RMSESS_climatologia_loyo": 0.07408111989379551,
       "divergencia_loyo_menos_expanding": -0.08742687330589316,
-      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável."
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
     },
     "2": {
       "n_expanding": 120,
@@ -1553,7 +1800,7 @@
       "RMSESS_climatologia_expanding": 0.05084014961710537,
       "RMSESS_climatologia_loyo": -0.034909929966479014,
       "divergencia_loyo_menos_expanding": -0.08575007958358438,
-      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável."
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
     },
     "3": {
       "n_expanding": 120,
@@ -1561,7 +1808,7 @@
       "RMSESS_climatologia_expanding": 0.06974635715389621,
       "RMSESS_climatologia_loyo": -0.0023993999646516606,
       "divergencia_loyo_menos_expanding": -0.07214575711854787,
-      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável."
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
     },
     "4": {
       "n_expanding": 120,
@@ -1569,7 +1816,7 @@
       "RMSESS_climatologia_expanding": 0.03838165793255155,
       "RMSESS_climatologia_loyo": 0.016400691208141804,
       "divergencia_loyo_menos_expanding": -0.021980966724409745,
-      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável."
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
     },
     "5": {
       "n_expanding": 120,
@@ -1577,7 +1824,7 @@
       "RMSESS_climatologia_expanding": 0.05844282846936999,
       "RMSESS_climatologia_loyo": -0.0061540935605381986,
       "divergencia_loyo_menos_expanding": -0.06459692202990819,
-      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável."
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
     },
     "6": {
       "n_expanding": 120,
@@ -1585,10 +1832,108 @@
       "RMSESS_climatologia_expanding": 0.007807285155130184,
       "RMSESS_climatologia_loyo": -0.009776428531795833,
       "divergencia_loyo_menos_expanding": -0.017583713686926017,
-      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável."
+      "nota": "LOYO usa anos passados E futuros (amostra maior, mais estável) — NUNCA operacional. Divergência relevante (sinal oposto ou magnitude muito diferente) é um achado a registrar, nunca escondido atrás do resultado mais favorável. ATENÇÃO: compara N=120 (expanding) contra N=240 (LOYO full) — amostras DIFERENTES, misturando efeito do desenho de treinamento com efeito do período de avaliação. Ver loyo_matched_evaluation_period para a comparação pareada (mesmos 120 casos)."
+    }
+  },
+  "comparacao_expanding_vs_loyo_matched": {
+    "1": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 46.745833552517794,
+      "rmse_calibrado_loyo_matched": 46.47754472933856,
+      "skill_vs_raw_expanding": 0.2903994247106899,
+      "skill_vs_raw_loyo_matched": 0.294472042285426,
+      "RMSESS_climatologia_expanding": 0.16150799319968867,
+      "RMSESS_climatologia_loyo_matched": 0.1541005718913534,
+      "skill_vs_anomalia_reconstruida_expanding": 0.040294096718318184,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.030939331598609288,
+      "delta_skill_vs_raw": 0.004072617574736093,
+      "delta_RMSESS_climatologia": -0.007407421308335271,
+      "delta_skill_vs_anomalia_reconstruida": -0.009354765119708897,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "2": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 52.351303555063794,
+      "rmse_calibrado_loyo_matched": 52.290902997337035,
+      "skill_vs_raw_expanding": 0.2675528233409302,
+      "skill_vs_raw_loyo_matched": 0.2683978876463313,
+      "RMSESS_climatologia_expanding": 0.05084014961710537,
+      "RMSESS_climatologia_loyo_matched": 0.03990825860371083,
+      "skill_vs_anomalia_reconstruida_expanding": 0.03633969040165075,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.02172450577502749,
+      "delta_skill_vs_raw": 0.0008450643054010998,
+      "delta_RMSESS_climatologia": -0.010931891013394535,
+      "delta_skill_vs_anomalia_reconstruida": -0.014615184626623257,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "3": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 51.62509176817765,
+      "rmse_calibrado_loyo_matched": 51.332969957763794,
+      "skill_vs_raw_expanding": 0.27756463628629546,
+      "skill_vs_raw_loyo_matched": 0.2816525539853614,
+      "RMSESS_climatologia_expanding": 0.06974635715389621,
+      "RMSESS_climatologia_loyo_matched": 0.06107901599201526,
+      "skill_vs_anomalia_reconstruida_expanding": 0.02715970712687854,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.01948347696574193,
+      "delta_skill_vs_raw": 0.004087917699065913,
+      "delta_RMSESS_climatologia": -0.008667341161880948,
+      "delta_skill_vs_anomalia_reconstruida": -0.00767623016113661,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "4": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 53.35016456110512,
+      "rmse_calibrado_loyo_matched": 53.03038079874473,
+      "skill_vs_raw_expanding": 0.29819713816470517,
+      "skill_vs_raw_loyo_matched": 0.30240378235107745,
+      "RMSESS_climatologia_expanding": 0.03838165793255155,
+      "RMSESS_climatologia_loyo_matched": 0.030608749702257576,
+      "skill_vs_anomalia_reconstruida_expanding": 0.02180478348540482,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.015427713838262136,
+      "delta_skill_vs_raw": 0.004206644186372288,
+      "delta_RMSESS_climatologia": -0.007772908230293973,
+      "delta_skill_vs_anomalia_reconstruida": -0.006377069647142686,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "5": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 52.248903401540005,
+      "rmse_calibrado_loyo_matched": 51.82628113097738,
+      "skill_vs_raw_expanding": 0.3399268702272126,
+      "skill_vs_raw_loyo_matched": 0.3452659603646284,
+      "RMSESS_climatologia_expanding": 0.05844282846936999,
+      "RMSESS_climatologia_loyo_matched": 0.052786076586703534,
+      "skill_vs_anomalia_reconstruida_expanding": 0.030182094449654362,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.022331618333394143,
+      "delta_skill_vs_raw": 0.005339090137415847,
+      "delta_RMSESS_climatologia": -0.005656751882666455,
+      "delta_skill_vs_anomalia_reconstruida": -0.007850476116260219,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
+    },
+    "6": {
+      "n_expanding": 120,
+      "n_loyo_matched": 120,
+      "rmse_calibrado_expanding": 54.73598682969854,
+      "rmse_calibrado_loyo_matched": 54.01098964076913,
+      "skill_vs_raw_expanding": 0.32618878190483447,
+      "skill_vs_raw_loyo_matched": 0.335113645916294,
+      "RMSESS_climatologia_expanding": 0.007807285155130184,
+      "RMSESS_climatologia_loyo_matched": 0.008946359985284813,
+      "skill_vs_anomalia_reconstruida_expanding": 0.01315280815723241,
+      "skill_vs_anomalia_reconstruida_loyo_matched": 0.012405167922581062,
+      "delta_skill_vs_raw": 0.008924864011459532,
+      "delta_RMSESS_climatologia": 0.0011390748301546294,
+      "delta_skill_vs_anomalia_reconstruida": -0.0007476402346513478,
+      "nota": "MESMOS 120 casos em ambos os lados — a única diferença é o desenho de treinamento do bias (causal vs. passado+futuro excluindo o ano avaliado). delta_skill é meramente descritivo, nunca um teste de significância automático."
     }
   },
   "nenhuma_calibracao_aplicada_em_producao": true,
   "nenhum_outro_metodo_de_calibracao_implementado": true,
-  "data_geracao_utc": "2026-10-06T12:20:09.628694+00:00"
+  "data_geracao_utc": "2026-10-06T13:59:44.390352+00:00"
 }

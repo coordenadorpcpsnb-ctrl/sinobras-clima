@@ -47,13 +47,35 @@ def gerar_relatorio_markdown(resultados):
         )
 
     exp = resultados['expanding_operational_simulation']
-    loyo = resultados['loyo_retrospective']
+    loyo_full = resultados['loyo_retrospective']
+    loyo_matched = resultados['loyo_matched_evaluation_period']
     det = exp['deterministico_por_horizonte']
     boot = exp['intervalos_confianca_skills_por_horizonte']
     mml = exp['matriz_mes_lead']
     mgsl = exp['matriz_grupo_sazonal_lead']
-    det_loyo = loyo['deterministico_por_horizonte']
-    comparacao = resultados['comparacao_expanding_vs_loyo']
+    det_loyo_full = loyo_full['deterministico_por_horizonte']
+    det_loyo_matched = loyo_matched['deterministico_por_horizonte']
+    boot_loyo_matched = loyo_matched['intervalos_confianca_skills_por_horizonte']
+    comparacao_full = resultados['comparacao_expanding_vs_loyo_full']
+    comparacao_matched = resultados['comparacao_expanding_vs_loyo_matched']
+
+    def _criterio_aprovacao(lead):
+        """Segunda revisão, item 1 — um horizonte só atende ao critério
+        pré-registrado se as DUAS condições estatísticas principais
+        valerem SIMULTANEAMENTE: skill_vs_anomalia_reconstruida E
+        RMSESS_climatologia com IC 95% totalmente acima de zero."""
+        d = boot.get(lead, boot.get(str(lead), {}))
+        if not d.get('amostra_suficiente', False):
+            return False, 'amostra insuficiente'
+        c1 = d.get('skill_vs_anomalia_reconstruida_ic_classificacao') == 'ic_totalmente_acima_de_zero'
+        c2 = d.get('RMSESS_climatologia_ic_classificacao') == 'ic_totalmente_acima_de_zero'
+        return (c1 and c2), ('ambas condições atendidas' if (c1 and c2) else
+                              'skill_vs_anomalia_reconstruida OK, RMSESS_climatologia não' if c1 else
+                              'RMSESS_climatologia OK, skill_vs_anomalia_reconstruida não' if c2 else
+                              'nenhuma das duas condições atendida')
+
+    criterio_por_horizonte = {lead: _criterio_aprovacao(lead) for lead in v.LEADS_ESPERADOS}
+    nenhum_horizonte_aprovado = not any(ok for ok, _ in criterio_por_horizonte.values())
 
     linhas = [
         "# Correção aditiva causal do CFSv2 — Fase 2C.3D (Método 3.1)",
@@ -198,6 +220,32 @@ def gerar_relatorio_markdown(resultados):
 
     linhas += [
         "",
+        "### 6.1. Avaliação do critério de aprovação pré-registrado — NENHUM horizonte isolado",
+        "",
+        "O protocolo (Seção 6.2) exige, SIMULTANEAMENTE, que o IC 95% de "
+        "`skill_vs_anomalia_reconstruida` E de `RMSESS_climatologia` estejam totalmente acima "
+        "de zero — bater só um dos dois **não é suficiente** para aprovação. Atender só "
+        "`skill_vs_anomalia_reconstruida` (como H1) não habilita a chamar aquele horizonte de "
+        "aprovado.",
+        "",
+        "| Horizonte | skill_vs_anomalia_reconstruida acima de zero? | RMSESS_climatologia "
+        "acima de zero? | Atende ao critério pré-registrado? |",
+        "|---|---|---|---|",
+    ]
+    for lead in v.LEADS_ESPERADOS:
+        d = boot.get(lead, boot.get(str(lead), {}))
+        c1 = d.get('skill_vs_anomalia_reconstruida_ic_classificacao') == 'ic_totalmente_acima_de_zero'
+        c2 = d.get('RMSESS_climatologia_ic_classificacao') == 'ic_totalmente_acima_de_zero'
+        ok, _ = criterio_por_horizonte[lead]
+        linhas.append(f"| H{lead} | {'✅ sim' if c1 else '❌ não'} | {'✅ sim' if c2 else '❌ não'} | "
+                       f"{'✅ SIM' if ok else '❌ NÃO'} |")
+    linhas += [
+        "",
+        f"**{'Nenhum horizonte H1–H6 atende integralmente ao critério pré-registrado de aprovação do Método 3.1 nesta rodada.' if nenhum_horizonte_aprovado else 'Ao menos um horizonte atendeu integralmente ao critério — ver tabela acima.'}** "
+        "H1 pode ser descrito como: *único horizonte com evidência de ganho sobre o benchmark "
+        "de anomalia reconstruída, porém sem evidência conclusiva de ganho sobre a "
+        "climatologia causal* — nunca chamado de \"aprovado\".",
+        "",
         "## 7. Matriz mês-alvo × lead (diagnóstico de heterogeneidade — NUNCA 72 testes de "
         "significância)",
         "",
@@ -261,23 +309,135 @@ def gerar_relatorio_markdown(resultados):
         "",
         "## 9. Comparação expanding vs. LOYO",
         "",
-        f"**Rótulo LOYO: `{loyo['rotulo']}`.** {loyo['aviso']}",
+        "### 9.1. LOYO full (retrospectivo descritivo — amostra DIFERENTE do expanding)",
         "",
-        "| Horizonte | N expanding | N LOYO | RMSESS_climatologia expanding | "
-        "RMSESS_climatologia LOYO | Divergência (LOYO − expanding) |",
+        f"**Rótulo: `{loyo_full['rotulo']}`.** {loyo_full['aviso']}",
+        "",
+        "| Horizonte | N expanding | N LOYO full | RMSESS_climatologia expanding | "
+        "RMSESS_climatologia LOYO full | Divergência (LOYO full − expanding) |",
         "|---|---|---|---|---|---|",
     ]
     for lead in v.LEADS_ESPERADOS:
-        c = comparacao.get(lead, comparacao.get(str(lead), {}))
+        c = comparacao_full.get(lead, comparacao_full.get(str(lead), {}))
         linhas.append(f"| H{lead} | {c.get('n_expanding', 0)} | {c.get('n_loyo', 0)} | "
                        f"{_fmt(c.get('RMSESS_climatologia_expanding'), 3)} | "
                        f"{_fmt(c.get('RMSESS_climatologia_loyo'), 3)} | "
                        f"{_fmt(c.get('divergencia_loyo_menos_expanding'), 3)} |")
     linhas += [
         "",
-        "LOYO usa anos passados E futuros (amostra maior, mais estável) — **nunca uma "
-        "simulação operacional**. Divergências de sinal ou magnitude entre expanding e LOYO "
-        "são registradas aqui como achado, nunca escondidas atrás do resultado mais favorável.",
+        "**Esta comparação mistura dois efeitos: o desenho de treinamento (causal vs. "
+        "passado+futuro) E o período de avaliação (N=120, 2001-2010 vs. N=240, 1991-2010) — "
+        "nunca interpretar a divergência acima como efeito puro do método de treinamento.** "
+        "Ver 9.2 para a comparação pareada.",
+        "",
+        "### 9.2. LOYO matched evaluation period — comparação PRINCIPAL (mesmos 120 casos)",
+        "",
+        f"**Rótulo: `{loyo_matched['rotulo']}`.** {loyo_matched['aviso']}",
+        "",
+        f"- Identidade algébrica do `benchmark_anomalia_reconstruida_loyo`: "
+        f"{'✅ OK' if loyo_matched['identidade_benchmark3_loyo']['identidade_ok'] else '❌ FALHOU'} "
+        f"(diferença máxima absoluta = "
+        f"{loyo_matched['identidade_benchmark3_loyo']['max_diff_absoluto']:.2e}, "
+        f"{loyo_matched['identidade_benchmark3_loyo']['n_verificado']} linhas verificadas).",
+        "",
+        "| Horizonte | N exp. | N LOYO matched | RMSE calibrado exp. | RMSE calibrado "
+        "LOYO matched | skill_vs_raw exp. | skill_vs_raw LOYO matched | "
+        "RMSESS_climatologia exp. | RMSESS_climatologia LOYO matched | "
+        "skill_vs_anomalia_reconstruida exp. | skill_vs_anomalia_reconstruida LOYO matched |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for lead in v.LEADS_ESPERADOS:
+        c = comparacao_matched.get(lead, comparacao_matched.get(str(lead), {}))
+        linhas.append(
+            f"| H{lead} | {c.get('n_expanding', 0)} | {c.get('n_loyo_matched', 0)} | "
+            f"{_fmt(c.get('rmse_calibrado_expanding'))} | {_fmt(c.get('rmse_calibrado_loyo_matched'))} | "
+            f"{_fmt(c.get('skill_vs_raw_expanding'), 3)} | {_fmt(c.get('skill_vs_raw_loyo_matched'), 3)} | "
+            f"{_fmt(c.get('RMSESS_climatologia_expanding'), 3)} | "
+            f"{_fmt(c.get('RMSESS_climatologia_loyo_matched'), 3)} | "
+            f"{_fmt(c.get('skill_vs_anomalia_reconstruida_expanding'), 3)} | "
+            f"{_fmt(c.get('skill_vs_anomalia_reconstruida_loyo_matched'), 3)} |")
+
+    linhas += [
+        "",
+        "**Delta (LOYO matched − expanding), meramente descritivo — nunca um teste de "
+        "significância automático:**",
+        "",
+        "| Horizonte | delta skill_vs_raw | delta RMSESS_climatologia | "
+        "delta skill_vs_anomalia_reconstruida |",
+        "|---|---|---|---|",
+    ]
+    for lead in v.LEADS_ESPERADOS:
+        c = comparacao_matched.get(lead, comparacao_matched.get(str(lead), {}))
+        linhas.append(f"| H{lead} | {_fmt(c.get('delta_skill_vs_raw'), 4)} | "
+                       f"{_fmt(c.get('delta_RMSESS_climatologia'), 4)} | "
+                       f"{_fmt(c.get('delta_skill_vs_anomalia_reconstruida'), 4)} |")
+
+    linhas += [
+        "",
+        "**IC 95% dos três skills do LOYO matched (bootstrap em blocos por target_ano, mesmos "
+        "blocos para método e benchmarks em cada reamostra):**",
+        "",
+        "| Horizonte | skill_vs_raw | IC 95% | Classe | RMSESS_climatologia | IC 95% | Classe | "
+        "skill_vs_anomalia_reconstruida | IC 95% | Classe |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for lead in v.LEADS_ESPERADOS:
+        d = boot_loyo_matched.get(lead, boot_loyo_matched.get(str(lead), {}))
+        if not d.get('amostra_suficiente', False):
+            linhas.append(f"| H{lead} | — | — | {d.get('nota', 'amostra insuficiente')} | | | | | | |")
+            continue
+        r, c, an = d['skill_vs_raw'], d['RMSESS_climatologia'], d['skill_vs_anomalia_reconstruida']
+        linhas.append(
+            f"| H{lead} | {_fmt(r['estimativa'], 3)} | [{_fmt(r['ic95_lo'], 3)}, {_fmt(r['ic95_hi'], 3)}] | "
+            f"{_ic_texto(d['skill_vs_raw_ic_classificacao'])} | "
+            f"{_fmt(c['estimativa'], 3)} | [{_fmt(c['ic95_lo'], 3)}, {_fmt(c['ic95_hi'], 3)}] | "
+            f"{_ic_texto(d['RMSESS_climatologia_ic_classificacao'])} | "
+            f"{_fmt(an['estimativa'], 3)} | [{_fmt(an['ic95_lo'], 3)}, {_fmt(an['ic95_hi'], 3)}] | "
+            f"{_ic_texto(d['skill_vs_anomalia_reconstruida_ic_classificacao'])} |")
+
+    deltas_abs = [abs(c.get(k)) for lead in v.LEADS_ESPERADOS
+                  for c in [comparacao_matched.get(lead, comparacao_matched.get(str(lead), {}))]
+                  for k in ('delta_skill_vs_raw', 'delta_RMSESS_climatologia',
+                            'delta_skill_vs_anomalia_reconstruida')
+                  if c.get(k) is not None]
+    divergencias_full = [abs(c.get('divergencia_loyo_menos_expanding'))
+                          for lead in v.LEADS_ESPERADOS
+                          for c in [comparacao_full.get(lead, comparacao_full.get(str(lead), {}))]
+                          if c.get('divergencia_loyo_menos_expanding') is not None]
+    maior_delta_matched = max(deltas_abs) if deltas_abs else None
+    maior_divergencia_full = max(divergencias_full) if divergencias_full else None
+
+    linhas += [
+        "",
+        "### 9.3. Contradição entre os desenhos?",
+        "",
+        f"Maior `|delta|` observado entre LOYO matched e expanding (mesmos 120 casos, seção "
+        f"9.2): **{_fmt(maior_delta_matched, 4)}**. Maior divergência observada entre LOYO "
+        f"full e expanding (amostras diferentes, N=240 vs. N=120, seção 9.1): "
+        f"**{_fmt(maior_divergencia_full, 4)}**.",
+        "",
+    ]
+    if maior_delta_matched is not None and maior_divergencia_full is not None:
+        if maior_delta_matched < maior_divergencia_full / 2:
+            linhas.append(
+                "Quando o período de avaliação é mantido CONSTANTE (9.2), os deltas ficam "
+                "substancialmente MENORES que a divergência observada em 9.1 — isto sugere "
+                "que a maior parte da divergência vista entre LOYO full e expanding é "
+                "atribuível à diferença de amostra/período (N=240 vs. N=120), não ao desenho "
+                "de treinamento em si. Leitura descritiva dos números acima, não um teste "
+                "estatístico de equivalência entre os dois desenhos.")
+        else:
+            linhas.append(
+                "Mesmo com o período de avaliação mantido constante (9.2), os deltas "
+                "permanecem de magnitude comparável à divergência observada em 9.1 — isto "
+                "sugere que o desenho de treinamento (causal vs. passado+futuro) tem, sim, "
+                "efeito relevante além da diferença de amostra/período. Leitura descritiva "
+                "dos números acima, não um teste estatístico formal.")
+    linhas.append(
+        "Em ambos os casos, esta seção é descritiva — nunca transforma automaticamente a "
+        "comparação em teste de significância.")
+
+    linhas += [
         "",
         "## 10. Limitações",
         "",
@@ -301,23 +461,48 @@ def gerar_relatorio_markdown(resultados):
         "nunca generalizada para \"calibração do CFSv2\" em geral, e nunca chamando o modelo "
         "de validado ou pronto para produção.",
         "",
-        "- `skill_vs_raw` (vs. CFSv2 bruto): ver seção 6 — se o IC 95% estiver totalmente "
-        "acima de zero em todos os horizontes, isso mostra que remover o viés aditivo causal "
-        "melhora sobre o ensemble bruto não corrigido, mas este NÃO é o critério principal "
-        "de aprovação.",
-        "- `RMSESS_climatologia` (vs. climatologia causal): ver seção 6.",
-        "- **`skill_vs_anomalia_reconstruida` (vs. benchmark_anomalia_reconstruida) é o ponto "
-        "PRINCIPAL pré-registrado (protocolo, Seção 6.2) — a aprovação do método depende de "
-        "seu IC 95% estar totalmente acima de zero, consistentemente entre expanding e LOYO, "
-        "e sem degradação relevante escondida na matriz mês×lead. Ver seção 6 para a "
-        "classificação real, por horizonte.**",
-        "- Qualquer horizonte em que esse IC inclua ou fique abaixo de zero significa que a "
-        "correção aditiva NÃO demonstrou ganho estatisticamente distinguível sobre o "
-        "benchmark mais exigente naquele horizonte — um resultado válido e esperado, não uma "
-        "falha de implementação.",
+        "### 11.1. Evidência expanding",
+        "",
+        "- Melhora robusta contra o CFSv2 bruto (`skill_vs_raw`) em TODOS os H1-H6: IC 95% "
+        "totalmente acima de zero em todos os horizontes (seção 6) — remover o viés aditivo "
+        "causal melhora de forma consistente sobre o ensemble bruto não corrigido. Isto NÃO "
+        "é, por si só, o critério de aprovação.",
+        "- Contra a climatologia causal (`RMSESS_climatologia`): IC 95% totalmente acima de "
+        "zero somente em H3 e H5 (seção 6) — nos demais horizontes, o IC inclui zero.",
+        "- Contra o `benchmark_anomalia_reconstruida` (`skill_vs_anomalia_reconstruida`): IC "
+        "95% totalmente acima de zero somente em H1 (seção 6).",
+        "- **Portanto, " + ("nenhum horizonte H1-H6 satisfaz simultaneamente os dois "
+        "critérios estatísticos principais (seção 6.1)" if nenhum_horizonte_aprovado else
+        "ao menos um horizonte satisfaz simultaneamente os dois critérios principais — ver "
+        "seção 6.1") + ".**",
+        "- H1: único horizonte com evidência de ganho sobre o benchmark de anomalia "
+        "reconstruída, porém SEM evidência conclusiva de ganho sobre a climatologia causal — "
+        "nunca descrito como aprovado.",
+        "",
+        "### 11.2. Evidência LOYO",
+        "",
+        "- **LOYO full** (seção 9.1, N=240, 1991-2010): retrospectivo descritivo adicional — "
+        "amostra DIFERENTE do expanding, nunca comparado diretamente como se fosse só efeito "
+        "do método de treinamento.",
+        "- **LOYO matched** (seção 9.2, N=120, mesmos casos do expanding): comparação "
+        "metodologicamente justa — isola o efeito do desenho de treinamento do efeito do "
+        "período de avaliação.",
+        "- Maior `|delta|` entre LOYO matched e expanding: " + _fmt(maior_delta_matched, 4) +
+        "; maior divergência entre LOYO full e expanding: " + _fmt(maior_divergencia_full, 4) +
+        " — ver discussão quantitativa na seção 9.3 sobre se isso indica ou não contradição "
+        "real entre os desenhos, antes de qualquer conclusão.",
+        "",
+        "### 11.3. Síntese",
+        "",
         "- Não implementar o método multiplicativo, quantile mapping, MOS ou calibração "
         "probabilística nesta atividade — são decisões de uma próxima etapa, condicionadas à "
         "revisão independente deste resultado.",
+        "- Nenhum horizonte deve ser chamado de \"aprovado\" nesta rodada quando o critério "
+        "pré-registrado não for integralmente satisfeito; a leitura correta é que a correção "
+        "aditiva ainda não demonstrou, para esse(s) horizonte(s), ganho estatisticamente "
+        "distinguível SIMULTANEAMENTE sobre a climatologia causal e sobre o benchmark de "
+        "anomalia reconstruída — um resultado válido e informativo, não uma falha de "
+        "implementação.",
     ]
     return '\n'.join(linhas) + '\n'
 

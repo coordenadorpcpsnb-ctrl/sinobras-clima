@@ -339,6 +339,155 @@ class ComDadosReaisTestCase(unittest.TestCase):
         self.assertTrue(resultado['leakage_check']['ok'])
 
 
+class LoyoMatchedTestCase(unittest.TestCase):
+    """Segunda revisão, item 9 do pedido — LOYO matched evaluation
+    period: mesmos casos do expanding, três benchmarks equivalentes em
+    desenho LOYO, identidade algébrica e mesmos blocos no bootstrap."""
+
+    def setUp(self):
+        if not v.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        df_raw = v.carregar_cfsv2_raw()
+        chirps = v.carregar_chirps_v3_historico()
+        self.base = v.construir_base_pareada(df_raw, chirps)
+        base_enr = v._enriquecer_com_climatologia(self.base, chirps)
+        self.tabela_expanding = a.adicionar_climatologia_modelo_calibrado(
+            a.construir_tabela_calibracao_aditiva(base_enr))
+        self.tabela_loyo = a.construir_tabela_calibracao_aditiva_loyo(self.base, chirps)
+
+    def test_a_climatologia_modelo_raw_loyo_exclui_o_proprio_ano(self):
+        sub = self.tabela_loyo[(self.tabela_loyo['lead'] == 1) & (self.tabela_loyo['target_mes'] == 6)]
+        linha = sub.iloc[0]
+        media_incluindo_propria = sub['forecast_raw'].mean()
+        # com ~20 anos na amostra, excluir 1 ano muda a média de forma
+        # mensurável — não é coincidência numérica
+        self.assertNotAlmostEqual(linha['climatologia_modelo_raw_loyo'],
+                                   media_incluindo_propria, places=6)
+        outros = sub[sub['target_ano'] != linha['target_ano']]
+        self.assertAlmostEqual(linha['climatologia_modelo_raw_loyo'],
+                                outros['forecast_raw'].mean(), places=9)
+
+    def test_b_identidade_benchmark3_loyo_vale_na_base_real(self):
+        resultado = a.validar_identidade_benchmark3_loyo(self.tabela_loyo)
+        self.assertTrue(resultado['identidade_ok'], resultado)
+        self.assertGreater(resultado['n_verificado'], 0)
+
+    def test_c_identidade_benchmark3_loyo_quebrada_e_detectada(self):
+        tabela_errada = self.tabela_loyo.copy()
+        tabela_errada['benchmark_anomalia_reconstruida_loyo'] = (
+            tabela_errada['benchmark_anomalia_reconstruida_loyo'] + 999.0)
+        resultado = a.validar_identidade_benchmark3_loyo(tabela_errada)
+        self.assertFalse(resultado['identidade_ok'])
+
+    def test_d_loyo_matched_contem_exatamente_os_mesmos_casos_do_expanding(self):
+        matched = a.construir_tabela_loyo_matched(self.tabela_expanding, self.tabela_loyo)
+        chaves_expanding = set(map(tuple, self.tabela_expanding[
+            (self.tabela_expanding['status_calibracao'] == a.STATUS_OK)
+            & self.tabela_expanding['benchmark_anomalia_reconstruida'].notna()
+        ][['init_date', 'lead']].values.tolist()))
+        chaves_matched = set(map(tuple, matched[['init_date', 'lead']].values.tolist()))
+        self.assertEqual(chaves_expanding, chaves_matched)
+
+    def test_e_n_matched_igual_a_n_expanding_por_horizonte(self):
+        matched = a.construir_tabela_loyo_matched(self.tabela_expanding, self.tabela_loyo)
+        for lead in v.LEADS_ESPERADOS:
+            n_exp = len(self.tabela_expanding[
+                (self.tabela_expanding['lead'] == lead)
+                & (self.tabela_expanding['status_calibracao'] == a.STATUS_OK)
+                & self.tabela_expanding['benchmark_anomalia_reconstruida'].notna()])
+            n_mat = len(matched[matched['lead'] == lead])
+            self.assertEqual(n_exp, n_mat, f"lead={lead}")
+            self.assertEqual(n_exp, 120, f"lead={lead}: esperado 120 após warm-up")
+
+    def test_f_metodo_e_benchmark_usam_os_mesmos_casos_no_matched(self):
+        matched = a.construir_tabela_loyo_matched(self.tabela_expanding, self.tabela_loyo)
+        det_m = a.metricas_deterministicas_loyo_matched_por_horizonte(matched)
+        for lead in v.LEADS_ESPERADOS:
+            sub = matched[(matched['lead'] == lead)
+                          & (matched['status_calibracao'] == a.STATUS_OK)].dropna(
+                subset=['benchmark_anomalia_reconstruida_loyo'])
+            self.assertEqual(det_m[lead]['n_elegivel'], len(sub))
+
+    def test_g_bootstrap_loyo_matched_usa_os_mesmos_blocos(self):
+        matched = a.construir_tabela_loyo_matched(self.tabela_expanding, self.tabela_loyo)
+        observados_capturados = []
+        orig_rmse = v._rmse
+
+        def fake_rmse(previsto, observado):
+            observados_capturados.append(tuple(np.asarray(observado, dtype=float)))
+            return orig_rmse(previsto, observado)
+
+        n_resamples = 5
+        with mock.patch.object(v, '_rmse', side_effect=fake_rmse), \
+             mock.patch.object(v, 'LEADS_ESPERADOS', (1,)):
+            resultado = a.bootstrap_skills_loyo_matched_por_horizonte(
+                matched, n_resamples=n_resamples, seed=1)
+
+        self.assertTrue(resultado[1]['amostra_suficiente'])
+        self.assertEqual(len(observados_capturados), 4 * (n_resamples + 1))
+        for i in range(n_resamples):
+            grupo = observados_capturados[4 * i:4 * i + 4]
+            self.assertEqual(len(set(grupo)), 1,
+                              f"reamostra {i}: método e benchmarks (LOYO matched) usaram "
+                              "observações DIFERENTES")
+
+    def test_h_pipeline_completo_inclui_loyo_matched_sem_stop_on_failure(self):
+        resultado, tabela, tabela_loyo = a.executar_calibracao_aditiva(n_resamples_bootstrap=50)
+        self.assertFalse(resultado.get('STOP_ON_FAILURE', True), resultado.get('motivo'))
+        self.assertIn('loyo_matched_evaluation_period', resultado)
+        self.assertIn('comparacao_expanding_vs_loyo_matched', resultado)
+        self.assertTrue(
+            resultado['loyo_matched_evaluation_period']['identidade_benchmark3_loyo']['identidade_ok'])
+
+
+class ExpandingPermaneceInalteradoTestCase(unittest.TestCase):
+    """Segunda revisão, item 6/9 do pedido — teste de REGRESSÃO: os
+    valores expanding já aprovados (commit a001e85) precisam permanecer
+    numericamente idênticos após as adições desta revisão (LOYO
+    matched). Valores congelados a partir da execução já aprovada —
+    nunca recalculados "de olho" no resultado atual."""
+
+    _VALORES_CONGELADOS = {
+        1: {'n_elegivel': 120, 'bias': 5.409589424122345, 'mae': 33.664908597080355,
+            'rmse': 46.745833552517794, 'skill_vs_raw': 0.2903994247106899,
+            'RMSESS_climatologia': 0.16150799319968867,
+            'skill_vs_anomalia_reconstruida': 0.040294096718318184},
+        2: {'n_elegivel': 120, 'bias': 2.318821466593777, 'mae': 35.65614796499275,
+            'rmse': 52.351303555063794, 'skill_vs_raw': 0.2675528233409302,
+            'RMSESS_climatologia': 0.05084014961710537,
+            'skill_vs_anomalia_reconstruida': 0.03633969040165075},
+        3: {'n_elegivel': 120, 'bias': -0.4057611256347123, 'mae': 34.64334266242499,
+            'rmse': 51.62509176817765, 'skill_vs_raw': 0.27756463628629546,
+            'RMSESS_climatologia': 0.06974635715389621,
+            'skill_vs_anomalia_reconstruida': 0.02715970712687854},
+        4: {'n_elegivel': 120, 'bias': -2.393741256770868, 'mae': 34.69086501944182,
+            'rmse': 53.35016456110512, 'skill_vs_raw': 0.29819713816470517,
+            'RMSESS_climatologia': 0.03838165793255155,
+            'skill_vs_anomalia_reconstruida': 0.02180478348540482},
+        5: {'n_elegivel': 120, 'bias': -1.7325685202702734, 'mae': 33.8830962777807,
+            'rmse': 52.248903401540005, 'skill_vs_raw': 0.3399268702272126,
+            'RMSESS_climatologia': 0.05844282846936999,
+            'skill_vs_anomalia_reconstruida': 0.030182094449654362},
+        6: {'n_elegivel': 120, 'bias': -4.547118107392417, 'mae': 33.764282018035416,
+            'rmse': 54.73598682969854, 'skill_vs_raw': 0.32618878190483447,
+            'RMSESS_climatologia': 0.007807285155130184,
+            'skill_vs_anomalia_reconstruida': 0.01315280815723241},
+    }
+
+    def test_expanding_permanece_numericamente_identico_ao_commit_a001e85(self):
+        if not v.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        resultado, tabela, tabela_loyo = a.executar_calibracao_aditiva(n_resamples_bootstrap=50)
+        self.assertFalse(resultado.get('STOP_ON_FAILURE', True), resultado.get('motivo'))
+        det = resultado['expanding_operational_simulation']['deterministico_por_horizonte']
+        for lead, esperado in self._VALORES_CONGELADOS.items():
+            atual = det[lead]
+            for campo, valor_esperado in esperado.items():
+                self.assertAlmostEqual(atual[campo], valor_esperado, places=9,
+                                        msg=f"H{lead}.{campo} mudou: {atual[campo]} != "
+                                        f"{valor_esperado} (valor congelado do commit a001e85)")
+
+
 class RelatorioAditivaTestCase(unittest.TestCase):
     """Smoke test do gerador de relatório — nunca recalcula métrica, só
     formata o que já foi calculado; nunca declara o método validado."""
@@ -359,9 +508,24 @@ class RelatorioAditivaTestCase(unittest.TestCase):
         relatorio = rel.gerar_relatorio_markdown(resultados)
         for secao in ('Metodologia', 'warm-up', 'anti-leakage', 'H1', 'benchmark',
                       'Intervalos de confiança', 'mês', 'sazonais', 'LOYO', 'Limitações',
-                      'Conclusão'):
+                      'Conclusão', 'critério de aprovação', 'LOYO matched', 'LOYO full',
+                      'delta'):
             self.assertIn(secao, relatorio)
         _assert_nunca_declara_conclusao_isolada(self, relatorio)
+
+    def test_c_relatorio_declara_explicitamente_que_nenhum_horizonte_atende_ao_criterio(self):
+        """Segunda revisão, item 1 do pedido — o relatório tem que dizer
+        isso de forma explícita, nunca deixar implícito."""
+        if not a.CAMINHO_METRICAS_JSON.exists():
+            self.skipTest("métricas da calibração aditiva ainda não geradas nesta árvore")
+        import json
+        import cfsv2_relatorio_aditiva_2c3d as rel
+        resultados = json.loads(a.CAMINHO_METRICAS_JSON.read_text())
+        relatorio = rel.gerar_relatorio_markdown(resultados)
+        self.assertIn('nenhum horizonte h1-h6 satisfaz simultaneamente os dois critérios',
+                       relatorio.lower())
+        self.assertNotIn('h1 está aprovado', relatorio.lower())
+        self.assertNotIn('h1 foi aprovado', relatorio.lower())
 
 
 if __name__ == '__main__':
