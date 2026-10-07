@@ -126,16 +126,36 @@ init_date_treino < init_date_avaliada
 **Nunca `<=`** — mesma regra estrita já usada nos Métodos 3.1/3.2.
 
 As anomalias de TREINO também devem usar somente climatologias que eram
-causalmente disponíveis na data daquele registro histórico — ou seja,
-`anom_modelo_raw` e `anom_observada` de uma observação histórica usada no
-treino de uma previsão em 2005 são calculadas com as climatologias que
-estavam disponíveis EM 2005 (ou antes), nunca recalculadas
-retrospectivamente com a climatologia mais recente/mais completa
-disponível hoje. **Nunca recalcular retrospectivamente as anomalias
+causalmente disponíveis na data daquele registro histórico — cada linha
+de treino preserva a anomalia calculada ORIGINALMENTE para a sua própria
+`init_date`, nunca recalculada com a climatologia disponível na data da
+previsão avaliada. **Nunca recalcular retrospectivamente as anomalias
 históricas usando climatologia futura** — isso seria leakage mesmo que o
 `alpha`/`beta` em si sejam treinados só com `init_date < init_date_avaliada`,
 porque a climatologia embutida em cada anomalia de treino já teria
 "visto" dados que não estariam disponíveis na época.
+
+**Exemplo conceitual**: uma previsão histórica de 1998 usada para treinar
+uma previsão de 2005 deve continuar usando
+
+```
+anom_modelo_1998 = forecast_1998 - climatologia_modelo_disponivel_em_1998
+anom_obs_1998    = obs_1998      - climatologia_obs_disponivel_em_1998
+```
+
+— **nunca** recalculando a linha de 1998 usando as climatologias
+disponíveis em 2005 ou 2010 (que teriam mais histórico acumulado e
+seriam, portanto, diferentes das que existiam em 1998).
+
+Na futura implementação, **preferir reutilizar diretamente os campos
+causais já aprovados da 2C.3C/2C.3D** (`climatologia_observada`,
+`climatologia_modelo_raw`, já presentes linha a linha em
+`aditiva_expanding.csv`/`multiplicativa_expanding.csv`) em vez de
+reconstruir essas climatologias retrospectivamente a partir da base
+bruta — reconstruir de novo corre o risco de introduzir, por acidente,
+uma lógica de climatologia ligeiramente diferente da já testada, e
+reaproveitar os campos já aprovados elimina essa classe de erro por
+construção.
 
 ## 5. Warm-up
 
@@ -145,12 +165,32 @@ Pré-registrado, **antes de qualquer execução**:
 N_TREINO_MINIMO_MOS = 120
 ```
 
-Aproximadamente 10 anos × 12 meses por horizonte (consistente com o
-pooling entre meses da Seção 3 — a unidade de contagem agora é "quantas
-observações históricas daquele lead, de qualquer mês, estão disponíveis
-causalmente", não mais por célula lead×mês como nos Métodos 3.1/3.2).
+**Esclarecimento central desta revisão: 120 significa 120 PARES DE
+ANOMALIAS HISTÓRICAS VÁLIDAS do mesmo lead — nunca simplesmente 120
+inicializações anteriores.** Uma inicialização histórica só entra na
+contagem do warm-up se possuir SIMULTANEAMENTE:
 
-Enquanto `n_treino < 120`:
+- `anom_modelo_raw` finita e válida;
+- `anom_observada` finita e válida;
+- `climatologia_modelo_raw` causal disponível para aquele registro;
+- `climatologia_observada` causal disponível para aquele registro.
+
+Formalmente:
+
+```
+n_treino_mos = número de pares válidos de (anom_modelo_raw, anom_observada)
+               com init_date_treino < init_date_avaliada,
+               do MESMO lead, com as quatro condições acima satisfeitas
+```
+
+A previsão só é elegível quando `n_treino_mos >= 120`. **Nunca preencher
+anomalias ausentes** (nenhuma interpolação, nenhum valor assumido) e
+**nunca usar forecast bruto ou climatologia futura só para tornar uma
+linha utilizável** — uma linha sem climatologia causal disponível na
+época simplesmente não conta para `n_treino_mos`, ela não é "corrigida"
+para contar.
+
+Enquanto `n_treino_mos < 120`:
 
 ```
 status_mos = warmup_amostra_insuficiente
@@ -164,20 +204,41 @@ Regras obrigatórias, idênticas em espírito às dos Métodos 3.1/3.2:
 - **Nunca** imputar coeficientes (nem de outro lead, nem de uma média
   assumida).
 
-**A data real da primeira previsão elegível deve ser DERIVADA
-PROGRAMATICAMENTE** a partir da contagem efetiva de observações
-históricas causais, nunca hardcoded. Com base na estrutura atual do CFSv2
-(240 inicializações, jan/1991-dez/2010, 12 observações/ano por lead após
-o pooling entre meses da Seção 3), **espera-se** aproximadamente avaliação
-principal em 2001-2010 (120 observações/ano-base ÷ 12 meses = 10 anos de
-warm-up) — mas esta é só uma expectativa a ser CONFIRMADA pela
-implementação real, nunca assumida ou hardcoded no código.
+**Não assumir que a primeira elegibilidade será em 2001.** A versão
+anterior deste protocolo sugeria "~10 anos × 12 meses = warm-up até
+2000" como consequência direta do pooling entre meses — essa dedução é
+inválida uma vez que `n_treino_mos` exige PARES DE ANOMALIAS válidas, não
+inicializações: as primeiras inicializações do CFSv2 (início dos anos
+1990) podem não ter `climatologia_modelo_raw` causal suficiente para
+formar `anom_modelo_raw` (a própria climatologia do modelo também é
+expansível e causal, Seção 1) — ou seja, mesmo uma inicialização
+"antiga" pode não contribuir um par válido se a climatologia do modelo
+ainda não tinha histórico suficiente naquele momento. **A data real da
+primeira previsão elegível deve ser DERIVADA PROGRAMATICAMENTE** a partir
+da contagem efetiva de pares válidos, nunca hardcoded e nunca assumida
+como 2001 ou qualquer outra data específica antes da implementação.
+
+Na implementação futura, informar programaticamente, por H1-H6:
+
+- a primeira `init_date` elegível (`n_treino_mos >= 120`);
+- o número de pares válidos acumulados exatamente nessa data;
+- o número de linhas anteriores descartadas por anomalia indisponível
+  (quantas inicializações históricas existiam no período, mas NÃO
+  contribuíram um par válido — nunca escondido atrás do total simples de
+  inicializações).
+
+**STOP-ON-FAILURE se uma linha contendo `NaN`/`Inf` em `anom_modelo_raw`
+ou `anom_observada` for usada no ajuste OLS** — a exclusão de linhas
+inválidas acontece ANTES de montar a matriz de treino (via a própria
+definição de `n_treino_mos` acima), nunca como uma correção posterior
+silenciosa caso uma linha inválida escape para dentro do ajuste.
 
 ## 6. Justificativa do warm-up — registrada antes da execução
 
 - 2 parâmetros por regressão (`alpha_lead`, `beta_lead`).
-- Mínimo de 120 observações históricas.
-- Razão de aproximadamente **60 observações por parâmetro** — muito mais
+- Mínimo de 120 PARES DE ANOMALIAS HISTÓRICAS VÁLIDAS (Seção 5) — nunca
+  120 inicializações simplesmente contadas.
+- Razão de aproximadamente **60 pares válidos por parâmetro** — muito mais
   conservador que uma eventual regressão `lead × mês` (que teria, no
   máximo, 19 observações para 2 parâmetros, razão ~9,5 — já insuficiente
   pelos padrões usuais de regressão, e é exatamente por isso que o
@@ -337,11 +398,22 @@ regra já aplicada em todos os métodos anteriores desta fase.
 
 ## 12. H1 sempre separado
 
-Manter H1 separado e rotulado `previsão do mês corrente`
-(`ROTULO_HORIZONTE[1]`, já estabelecido desde a 2C.3C). **Nunca misturar
-H1 com H2-H6 numa conclusão de "previsão futura"** — H1 responde a uma
-pergunta estrutural diferente (nowcasting dentro do próprio mês) das dos
-demais horizontes (previsão de meses ainda não iniciados).
+Manter H1 separado e rotulado **exclusivamente** `H1 — previsão do mês
+corrente` (`ROTULO_HORIZONTE[1]`, já estabelecido desde a 2C.3C). **Nunca
+misturar H1 com H2-H6 numa conclusão de "previsão futura"**, e **nunca
+usar o termo "nowcasting" para H1, em nenhum relatório ou código desta
+fase.**
+
+**Motivo**: a estrutura confirma que `target_month == init_month` em H1
+— mas isso por si só não prova que a previsão é emitida depois de parte
+relevante do mês já ter sido observada (o que "nowcast" implicaria). A
+disponibilidade temporal real de emissão do produto CFSv2 (em que dia do
+mês de inicialização a previsão de fato fica disponível, e quanto do mês
+já transcorreu nesse momento) não foi demonstrada nesta fase nem em
+nenhuma fase anterior do projeto. Até que essa disponibilidade seja
+investigada e demonstrada explicitamente, H1 é descrito apenas como "o
+horizonte cujo mês-alvo coincide com o mês de inicialização" — nunca como
+nowcast.
 
 ## 13. Análise mensal e sazonal — diagnóstico, não parâmetro adicional
 
@@ -363,6 +435,47 @@ só por lead). **Não realizar 72 testes independentes** (12 meses × 6
 leads) — mesma restrição já aplicada em todos os métodos anteriores desta
 fase; a matriz é usada para ver direção/coerência/concentração do efeito,
 nunca como 72 critérios de aprovação individuais.
+
+### 13.1. Heterogeneidade de variância entre meses — pré-registrada, só diagnóstico
+
+O modelo da Seção 1 continua usando anomalias em **mm, sem padronização**
+— **não mudar agora para z-score/anomalia padronizada.** Entretanto, esta
+revisão registra, ANTES de qualquer execução, uma limitação explícita do
+pooling entre meses em escala de mm (Seção 3): meses com maior
+variabilidade pluviométrica natural têm maior variância de
+`anom_modelo_raw`/`anom_observada` e, portanto, maior peso efetivo no
+ajuste OLS (que minimiza soma de quadrados em mm) — esses meses podem
+influenciar desproporcionalmente a estimativa de `beta_lead`, mesmo sem
+nenhuma reponderação explícita.
+
+**Antes da interpretação dos coeficientes** (ligando-se diretamente à
+Seção 8), a implementação futura deverá gerar um diagnóstico, por `lead ×
+mês-alvo`, com:
+
+- N de anomalias válidas (mesma definição de par válido da Seção 5);
+- desvio-padrão de `anom_modelo_raw` naquele mês-alvo;
+- desvio-padrão de `anom_observada` naquele mês-alvo;
+- RMSE do `benchmark_anomalia_reconstruida` naquele mês-alvo;
+- contribuição aproximada daquele mês para `sum(x²)` do ajuste daquele
+  lead (ex.: soma de `anom_modelo_raw²` do mês dividida pela soma total
+  do lead) — a métrica direta de quanto aquele mês pesa na estimativa de
+  `beta_lead`.
+
+**Objetivo**: verificar se o `beta_lead` agregado está sendo dominado por
+poucos meses de alta variância, antes de interpretar o coeficiente como
+representativo do horizonte como um todo.
+
+**Esta análise é só diagnóstica.** Nesta primeira versão do Método 3.4:
+
+- **não** reponderar observações;
+- **não** padronizar meses (converter para z-score);
+- **não** criar uma regressão específica por mês (contradiria a Seção 3).
+
+Uma eventual variante padronizada (anomalias em desvios-padrão, não em
+mm) poderá ser considerada FUTURAMENTE como um **método separado**,
+somente depois de avaliar o MOS principal pré-registrado aqui — nunca
+como uma substituição silenciosa decidida durante a implementação deste
+protocolo.
 
 ## 14. LOYO — diagnóstico complementar, nunca operacional
 
@@ -402,6 +515,17 @@ O protocolo EXIGE, na implementação futura, testes garantindo:
    leads).
 6. Alterar dados futuros NÃO muda `alpha`/`beta` passados (variante da
    regra 3, no nível dos próprios coeficientes, não só do forecast final).
+7. **Teste específico desta revisão**: alterar observações/climatologias
+   FUTURAS não pode modificar as ANOMALIAS HISTÓRICAS (`anom_modelo_raw`/
+   `anom_observada` de linhas de treino) já usadas por uma previsão
+   passada — mutar um dado futuro e confirmar que as anomalias
+   históricas armazenadas/recalculadas para uma linha de treino antiga
+   permanecem numericamente idênticas, nível mais granular que o item 3
+   (que verifica só o `forecast_mos` final): mesmo que o `forecast_mos`
+   final de alguma forma não mudasse por coincidência numérica, a
+   anomalia histórica em si já teria sido contaminada se a implementação
+   não preservar a climatologia originalmente disponível linha a linha
+   (Seção 4).
 
 **Criar também um teste sintético onde uma regressão com leakage
 (deliberadamente construída incluindo a própria observação avaliada, ou
