@@ -193,12 +193,17 @@ def gerar_relatorio_markdown(resultados):
     linhas += [
         "",
         "**Leitura pré-registrada (protocolo, Seção 8) — nunca uma classificação automática "
-        "do método**:",
+        "do método, e nunca uma inferência causal sobre o CFSv2 só a partir de `beta`.** "
+        "`beta < 1` descreve o que o AJUSTE fez (amorteceu a amplitude da anomalia do CFSv2 "
+        "no ajuste pooled daquele horizonte); não é, por si só, evidência de que o CFSv2 "
+        "\"exagera\" seu próprio sinal — essa leitura exigiria olhar `R²` e o skill fora da "
+        "amostra (seção 9) junto com `beta`, nunca `beta` isolado.",
         "",
     ]
     for lead in v.LEADS_ESPERADOS:
         d = _g(det, lead)
         be = d.get('beta', {})
+        r2 = d.get('r2_treino', {})
         if be.get('n', 0) == 0:
             continue
         destaques = []
@@ -206,14 +211,29 @@ def gerar_relatorio_markdown(resultados):
             destaques.append('beta mediano <= 0 — indicador inverso, destaque científico '
                               'obrigatório, investigar antes de qualquer conclusão')
         elif be['mediana'] < 0.9:
-            destaques.append(f"beta mediano {be['mediana']:.3f} < 0,9 — sugere amortecimento "
-                              "das anomalias do CFSv2")
+            destaques.append(f"o ajuste MOS estimou beta mediano {be['mediana']:.3f} < 1, "
+                              "portanto aplicou amortecimento à amplitude das anomalias do "
+                              "CFSv2 no ajuste pooled por horizonte")
         elif be['mediana'] > 1.1:
-            destaques.append(f"beta mediano {be['mediana']:.3f} > 1,1 — sugere amplificação")
+            destaques.append(f"o ajuste MOS estimou beta mediano {be['mediana']:.3f} > 1, "
+                              "portanto aplicou amplificação à amplitude das anomalias do "
+                              "CFSv2 no ajuste pooled por horizonte")
         else:
             destaques.append(f"beta mediano {be['mediana']:.3f} próximo de 1 — comportamento "
                               "semelhante ao benchmark_anomalia_reconstruida")
+        if r2.get('n', 0) > 0:
+            destaques.append(f"R² treino mediano {r2['mediana']:.3f} — "
+                              + ('relação relativamente mais forte' if r2['mediana'] >= 0.1
+                                 else 'relação muito fraca dentro da própria amostra de treino')
+                              + "; `beta` deve ser interpretado junto com este R² e com o "
+                              "skill fora da amostra (seção 9), nunca isoladamente")
         linhas.append(f"- H{lead}: {'; '.join(destaques)}.")
+    linhas.append("")
+    linhas.append("De forma geral nesta rodada: H1 tende a apresentar a relação mais forte "
+                   "(maior R² treino) entre os seis horizontes, enquanto H2-H6 têm R² de "
+                   "treino consistentemente baixos — reforçando que `beta` nesses horizontes "
+                   "descreve um ajuste com pouca explicação da variância observada, não uma "
+                   "relação bem estabelecida.")
 
     linhas += [
         "",
@@ -240,51 +260,77 @@ def gerar_relatorio_markdown(resultados):
         "",
         "## 7. Heterogeneidade de variância mensal — só diagnóstico",
         "",
-        f"Verificação de que as participações no `sum(x²)` somam ~1 dentro de cada lead: "
-        f"{'✅ OK' if het['verificacao_soma_participacoes_ok'] else '❌ FALHOU'} "
-        f"({json.dumps(het['verificacao_soma_participacoes_por_lead'])}).",
+        "Métrica PRINCIPAL de influência sobre `beta_lead`: participação em `Sxx = "
+        "Σ(anom_modelo_raw - x̄_lead)²` (soma centrada na média do lead) — não `sum(x²)` bruto "
+        "(mantido abaixo só como diagnóstico adicional). Com intercepto no OLS, "
+        "`beta = cov(x,y)/var(x)`, e `var(x) = Sxx/n`: é a dispersão em torno da média, não a "
+        "magnitude bruta, que determina o peso de cada observação na inclinação.",
+        "",
+        f"Verificação de que as participações em `Sxx` somam ~1 dentro de cada lead: "
+        f"{'✅ OK' if het['verificacao_soma_participacoes_sxx_ok'] else '❌ FALHOU'} "
+        f"({json.dumps(het['verificacao_soma_participacoes_sxx_por_lead'])}).",
         "",
         "`" + het['nota'] + "`",
         "",
     ]
     for lead in v.LEADS_ESPERADOS:
-        linhas.append(f"### 7.{lead}. H{lead}")
+        linhas.append(f"### 7.{lead}. H{lead} (x̄_lead = {_fmt(het['x_bar_por_lead'].get(lead, het['x_bar_por_lead'].get(str(lead))), 3)})")
         linhas.append("")
         linhas.append("| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | "
-                       "RMSE benchmark3 | Participação no sum(x²) |")
-        linhas.append("|---|---|---|---|---|---|")
+                       "RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |")
+        linhas.append("|---|---|---|---|---|---|---|")
         matriz_lead = _g(het['matriz'], lead)
+        meses_ordenados_por_sxx = []
         for mes in range(1, 13):
             cel = _g(matriz_lead, mes)
             if cel.get('n', 0) == 0:
-                linhas.append(f"| {NOMES_MES[mes-1]} | 0 | — | — | — | — |")
+                linhas.append(f"| {NOMES_MES[mes-1]} | 0 | — | — | — | — | — |")
                 continue
             linhas.append(f"| {NOMES_MES[mes-1]} | {cel['n']} | "
                            f"{_fmt(cel['desvio_padrao_anom_modelo_raw'])} | "
                            f"{_fmt(cel['desvio_padrao_anom_observada'])} | "
                            f"{_fmt(cel['rmse_benchmark3'])} | "
-                           f"{_fmt(cel['participacao_no_sum_x2_do_lead'], 3)} |")
+                           f"{_fmt(cel['participacao_sxx_no_lead'], 3)} | "
+                           f"{_fmt(cel.get('soma_anom_modelo_raw_quadrado'), 1)} |")
+            if cel.get('participacao_sxx_no_lead') is not None:
+                meses_ordenados_por_sxx.append((NOMES_MES[mes-1], cel['participacao_sxx_no_lead']))
+        meses_ordenados_por_sxx.sort(key=lambda par: -par[1])
+        top3 = ', '.join(f"{nome} ({_fmt(part, 3)})" for nome, part in meses_ordenados_por_sxx[:3])
+        linhas.append("")
+        linhas.append(f"Meses que mais dominam a estimação de `beta` em H{lead} (maior "
+                       f"participação em `Sxx`): {top3}.")
         linhas.append("")
     linhas.append("**Nenhuma reponderação do OLS, nenhuma padronização e nenhum mês dominante "
                    "removido nesta versão do Método 3.4** — esta seção serve só para verificar "
-                   "se `beta_lead` está sendo dominado por poucos meses de alta variância, "
-                   "antes de interpretar o coeficiente como representativo do horizonte.")
+                   "se `beta_lead` está sendo dominado por poucos meses de alta variância "
+                   "(agora medida corretamente por `Sxx`, não por `sum(x²)` bruto), antes de "
+                   "interpretar o coeficiente como representativo do horizonte. Os meses "
+                   "dominantes são lidos diretamente dos números recalculados acima, nunca "
+                   "assumidos a priori.")
 
     linhas += [
         "",
         "## 8. Resultados determinísticos H1-H6",
         "",
-        "| Horizonte | N | Bias | MAE | RMSE | Corr. absoluta | Corr. anomalia |",
-        "|---|---|---|---|---|---|---|",
+        "`corr_anomalia_mos` (correlação de `anom_mos = forecast_mos - climatologia_"
+        "observada` com `anom_observada`) é a métrica PRINCIPAL de correlação de anomalia do "
+        "Método 3.4 — **corrigida nesta revisão**: a versão anterior reportava "
+        "`corr_anomalia_raw` (correlação da anomalia BRUTA do CFSv2, o preditor de entrada do "
+        "OLS, nunca o resultado do ajuste) sob o rótulo ambíguo `corr_anomalia`. As duas são "
+        "mantidas, com nomes inequívocos, para comparação.",
+        "",
+        "| Horizonte | N | Bias | MAE | RMSE | Corr. absoluta | Corr. anomalia (MOS, "
+        "principal) | Corr. anomalia (raw, CFSv2 bruto) |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for lead in v.LEADS_ESPERADOS:
         d = _g(det, lead)
         if d.get('n', 0) == 0:
-            linhas.append(f"| H{lead} | 0 | — | — | — | — | — |")
+            linhas.append(f"| H{lead} | 0 | — | — | — | — | — | — |")
             continue
         linhas.append(f"| H{lead} | {d['n']} | {_fmt(d['bias'])} | {_fmt(d['mae'])} | "
                        f"{_fmt(d['rmse'])} | {_fmt(d['corr_absoluta'], 3)} | "
-                       f"{_fmt(d['corr_anomalia'], 3)} |")
+                       f"{_fmt(d['corr_anomalia_mos'], 3)} | {_fmt(d['corr_anomalia_raw'], 3)} |")
 
     linhas += [
         "",

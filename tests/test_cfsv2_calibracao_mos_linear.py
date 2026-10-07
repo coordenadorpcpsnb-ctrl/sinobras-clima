@@ -348,6 +348,118 @@ class Benchmark3IdentidadeTestCase(unittest.TestCase):
             self.assertAlmostEqual(lado_a, lado_b, places=9)
 
 
+class CorrAnomaliaMosTestCase(unittest.TestCase):
+    """Correção obrigatória desta revisão — `corr_anomalia_mos` tem
+    que vir de `anom_mos = forecast_mos - climatologia_observada`,
+    NUNCA da anomalia bruta do CFSv2 (`anom_modelo_raw`). Construído
+    deliberadamente para que as duas correlações sejam NUMERICAMENTE
+    DIFERENTES — `beta` varia por linha (mesmo padrão real: cada linha
+    tem seu próprio ajuste causal expanding), então `anom_mos` NÃO é
+    uma transformação afim única de `anom_modelo_raw` ao longo da
+    amostra, e as duas correlações não podem coincidir por construção."""
+
+    def test_a_corr_anomalia_mos_difere_de_corr_anomalia_raw_quando_beta_varia_por_linha(self):
+        anom_modelo_raw = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        anom_observada = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])  # corr(raw, obs) = 1,0 exato
+        beta_por_linha = np.array([1.0, 1.0, 1.0, -1.0, -1.0, -1.0])  # varia por linha
+        anom_mos = beta_por_linha * anom_modelo_raw
+        climatologia_observada = np.full(6, 50.0)
+        observacao = climatologia_observada + anom_observada
+        forecast_mos = climatologia_observada + anom_mos
+        forecast_raw = climatologia_observada + anom_modelo_raw
+        benchmark_anomalia_reconstruida = climatologia_observada + anom_modelo_raw
+        forecast_calibrado_aditivo = observacao.copy()
+
+        comparacao = pd.DataFrame({
+            'anom_modelo_raw': anom_modelo_raw, 'anom_observada': anom_observada,
+            'anom_mos': anom_mos, 'climatologia_observada': climatologia_observada,
+            'observacao': observacao, 'forecast_mos': forecast_mos,
+            'forecast_raw': forecast_raw,
+            'benchmark_anomalia_reconstruida': benchmark_anomalia_reconstruida,
+            'forecast_calibrado_aditivo': forecast_calibrado_aditivo,
+            'alpha': np.full(6, 0.0), 'beta': beta_por_linha, 'r2_treino': np.full(6, 0.5),
+        })
+
+        resultado = mos._metricas_de_subconjunto_mos(comparacao)
+        corr_raw_esperado = v._corr(anom_modelo_raw, anom_observada)
+        corr_mos_esperado = v._corr(anom_mos, anom_observada)
+
+        self.assertAlmostEqual(resultado['corr_anomalia_raw'], corr_raw_esperado, places=9)
+        self.assertAlmostEqual(resultado['corr_anomalia_mos'], corr_mos_esperado, places=9)
+        # Asserção central: as duas correlações NUNCA podem coincidir
+        # neste teste — se coincidirem, a função está lendo a mesma
+        # coluna para as duas métricas (o bug original).
+        self.assertNotAlmostEqual(resultado['corr_anomalia_raw'], resultado['corr_anomalia_mos'],
+                                   places=2)
+        self.assertAlmostEqual(resultado['corr_anomalia_raw'], 1.0, places=9)
+        self.assertLess(resultado['corr_anomalia_mos'], 0.9)
+
+    def test_b_anom_mos_presente_na_tabela_real_e_consistente_com_forecast_mos(self):
+        if not a.CAMINHO_TABELA_EXPANDING.exists() or not v.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        resultado, tabela, _ = mos.executar_mos_linear(n_resamples_bootstrap=1)
+        self.assertFalse(resultado.get('STOP_ON_FAILURE', True))
+        self.assertIn('anom_mos', tabela.columns)
+        ok = tabela[tabela['status_mos'] == mos.STATUS_OK]
+        diffs = (ok['anom_mos'] - (ok['forecast_mos'] - ok['climatologia_observada'])).abs()
+        self.assertLess(diffs.max(), 1e-9)
+
+
+class ResultadosPrincipaisPermanecemIdenticosTestCase(unittest.TestCase):
+    """Item 7 da revisão — teste de REGRESSÃO: os valores principais já
+    aprovados (commit 319ad4c) precisam permanecer numericamente
+    idênticos após a correção da correlação de anomalia e do
+    diagnóstico Sxx (ambas são métricas novas/corrigidas, nunca tocam
+    em RMSE/skills/ICs). Valores congelados a partir da execução já
+    aprovada — nunca recalculados "de olho" no resultado atual."""
+
+    _VALORES_CONGELADOS = {
+        1: {'n': 108, 'bias': 0.29861978219443414, 'mae': 33.640044431916536,
+            'rmse': 48.37809376788118, 'skill_vs_raw': 0.27358858812496545,
+            'RMSESS_climatologia': 0.15492906707741694,
+            'skill_vs_anomalia_reconstruida': 0.010367619059827526,
+            'skill_mos_vs_aditivo': -0.023312715191458278},
+        2: {'n': 108, 'bias': 0.1691699793659726, 'mae': 36.684840211292666,
+            'rmse': 55.347836733406865, 'skill_vs_raw': 0.2274167130978053,
+            'RMSESS_climatologia': 0.02158279287186038,
+            'skill_vs_anomalia_reconstruida': -0.00137816479369679,
+            'skill_mos_vs_aditivo': -0.03838756241123131},
+        3: {'n': 108, 'bias': -0.9326125840071453, 'mae': 36.753250978636984,
+            'rmse': 55.5940185588372, 'skill_vs_raw': 0.22947213784611775,
+            'RMSESS_climatologia': 0.028483118328209045,
+            'skill_vs_anomalia_reconstruida': -0.019069449645805703,
+            'skill_mos_vs_aditivo': -0.04899980136087323},
+        4: {'n': 108, 'bias': -1.0177726049878595, 'mae': 35.84617580232791,
+            'rmse': 54.84860323680825, 'skill_vs_raw': 0.2710542498285702,
+            'RMSESS_climatologia': 0.028774749101210695,
+            'skill_vs_anomalia_reconstruida': 0.0009156702570436437,
+            'skill_mos_vs_aditivo': -0.01949137065187001},
+        5: {'n': 108, 'bias': -1.4317112949109503, 'mae': 35.33119681976383,
+            'rmse': 54.87581660830699, 'skill_vs_raw': 0.2928582395903141,
+            'RMSESS_climatologia': 0.01973782752234965,
+            'skill_vs_anomalia_reconstruida': -0.008134980553572424,
+            'skill_mos_vs_aditivo': -0.03510916648631124},
+        6: {'n': 108, 'bias': -1.8218616434409294, 'mae': 36.01212831967383,
+            'rmse': 56.03660331757259, 'skill_vs_raw': 0.31116131960981963,
+            'RMSESS_climatologia': -0.0017516827606507412,
+            'skill_vs_anomalia_reconstruida': 0.02743702488892097,
+            'skill_mos_vs_aditivo': 0.0158222831390592},
+    }
+
+    def test_metricas_principais_permanecem_identicas_ao_commit_319ad4c(self):
+        if not a.CAMINHO_TABELA_EXPANDING.exists() or not v.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        resultado, tabela, _ = mos.executar_mos_linear(n_resamples_bootstrap=50)
+        self.assertFalse(resultado.get('STOP_ON_FAILURE', True), resultado.get('motivo'))
+        det = resultado['expanding_operational_simulation']['deterministico_por_horizonte']
+        for lead, esperado in self._VALORES_CONGELADOS.items():
+            atual = det[lead]
+            for campo, valor_esperado in esperado.items():
+                self.assertAlmostEqual(atual[campo], valor_esperado, places=9,
+                                        msg=f"H{lead}.{campo} mudou: {atual[campo]} != "
+                                        f"{valor_esperado} (valor congelado do commit 319ad4c)")
+
+
 class ComDadosReaisTestCase(unittest.TestCase):
     """Usa os arquivos JÁ APROVADOS do repositório (sem rede) —
     confirma N, warm-up, ausência de leakage e a comparação pareada
@@ -396,9 +508,10 @@ class ComDadosReaisTestCase(unittest.TestCase):
     def test_g_identidade_benchmark3_vale_na_base_real(self):
         self.assertTrue(self.resultado['identidade_benchmark3']['identidade_ok'])
 
-    def test_h_heterogeneidade_participacoes_somam_um_por_lead(self):
+    def test_h_heterogeneidade_participacoes_sxx_somam_um_por_lead(self):
         het = self.resultado['expanding_operational_simulation']['diagnostico_heterogeneidade_variancia']
-        self.assertTrue(het['verificacao_soma_participacoes_ok'], het['verificacao_soma_participacoes_por_lead'])
+        self.assertTrue(het['verificacao_soma_participacoes_sxx_ok'],
+                         het['verificacao_soma_participacoes_sxx_por_lead'])
 
     def test_i_skill_mos_vs_aditivo_presente_em_todos_os_horizontes(self):
         det = self.resultado['expanding_operational_simulation']['deterministico_por_horizonte']

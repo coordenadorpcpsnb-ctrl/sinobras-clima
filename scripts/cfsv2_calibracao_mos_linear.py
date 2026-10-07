@@ -85,7 +85,7 @@ COLUNAS_TABELA_EXPANDING = [
     'forecast_raw', 'observacao', 'climatologia_modelo_raw', 'climatologia_observada',
     'anom_modelo_raw', 'anom_observada', 'par_anomalia_valido',
     'n_treino_mos', 'periodo_treino_inicio', 'periodo_treino_fim',
-    'alpha', 'beta', 'r2_treino', 'condicao_numerica', 'forecast_mos',
+    'alpha', 'beta', 'r2_treino', 'condicao_numerica', 'forecast_mos', 'anom_mos',
     'benchmark_anomalia_reconstruida', 'status_mos',
 ]
 
@@ -220,6 +220,13 @@ def construir_tabela_mos_linear(base_enriquecida):
                 else:
                     forecast_mos = None
 
+            # anom_mos (correção desta revisão) — derivada UMA ÚNICA VEZ
+            # aqui, a partir do forecast_mos já calculado, nunca
+            # recalculada de outra forma em nenhuma métrica/diagnóstico
+            # posterior (_metricas_de_subconjunto_mos lê esta coluna).
+            anom_mos = (float(forecast_mos - base['climatologia_observada'])
+                        if forecast_mos is not None else None)
+
             linhas.append({
                 'init_date': row['init_date'], 'target_month': row['target_month'],
                 'target_ano': int(row['target_ano']), 'target_mes': int(row['target_mes']),
@@ -233,7 +240,7 @@ def construir_tabela_mos_linear(base_enriquecida):
                 'n_treino_mos': n_treino_mos,
                 'periodo_treino_inicio': periodo_inicio, 'periodo_treino_fim': periodo_fim,
                 'alpha': alpha, 'beta': beta, 'r2_treino': r2_treino,
-                'condicao_numerica': condicao, 'forecast_mos': forecast_mos,
+                'condicao_numerica': condicao, 'forecast_mos': forecast_mos, 'anom_mos': anom_mos,
                 'benchmark_anomalia_reconstruida': base['benchmark_anomalia_reconstruida'],
                 'status_mos': status,
             })
@@ -389,8 +396,17 @@ def _metricas_de_subconjunto_mos(sub_comparacao):
         'climatologia_observada', 'benchmark_anomalia_reconstruida')
     resultado['n'] = n
     resultado['amostra_suficiente'] = n >= v.AMOSTRA_MINIMA_ESTRATO
-    resultado['corr_anomalia'] = v._corr(sub_comparacao['anom_modelo_raw'].values,
-                                          sub_comparacao['anom_observada'].values)
+    # Correção desta revisão: a correlação de anomalia do MÉTODO 3.4
+    # precisa usar anom_mos (= forecast_mos - climatologia_observada),
+    # nunca a anomalia BRUTA do CFSv2 — corr(anom_modelo_raw,
+    # anom_observada) mede o preditor de entrada do OLS, não o
+    # resultado do ajuste. As duas são mantidas, com nomes
+    # inequívocos; `corr_anomalia_mos` é a métrica PRINCIPAL do
+    # Método 3.4.
+    resultado['corr_anomalia_raw'] = v._corr(sub_comparacao['anom_modelo_raw'].values,
+                                              sub_comparacao['anom_observada'].values)
+    resultado['corr_anomalia_mos'] = v._corr(sub_comparacao['anom_mos'].values,
+                                              sub_comparacao['anom_observada'].values)
 
     rmse_mos = resultado['rmse']
     rmse_adit = v._rmse(sub_comparacao['forecast_calibrado_aditivo'].values,
@@ -444,52 +460,65 @@ def matriz_grupo_sazonal_lead_mos(comparacao):
 
 
 def diagnostico_heterogeneidade_variancia(tabela_mos):
-    """Item 17 do pedido — SÓ diagnóstico, sobre os PARES VÁLIDOS
+    """Item 5/6 da revisão — SÓ diagnóstico, sobre os PARES VÁLIDOS
     (independente de status_mos=='ok', porque descreve a população de
-    treino em potencial, não a população avaliada). Confirma
-    programaticamente que as participações somam ~1 dentro de cada
-    lead — nunca reponderação, padronização ou remoção de mês
-    dominante."""
+    treino em potencial, não a população avaliada). Nunca
+    reponderação, padronização ou remoção de mês dominante.
+
+    Métrica PRINCIPAL de influência sobre `beta_lead`: `Sxx`, não
+    `sum(x²)`. Com intercepto no OLS, `beta = cov(x,y)/var(x)` e
+    `var(x) = Sxx/n`, onde `Sxx = Σ(x_i - x̄_lead)²` — é essa
+    quantidade centrada na média, não a soma bruta dos quadrados, que
+    corresponde ao denominador efetivo da inclinação. `sum(x²)` é
+    mantido como diagnóstico ADICIONAL (nunca a medida principal)."""
     validos = tabela_mos[tabela_mos['par_anomalia_valido']].copy()
     validos['anom_modelo_raw_quadrado'] = validos['anom_modelo_raw'] ** 2
     validos['erro_benchmark3'] = (validos['benchmark_anomalia_reconstruida']
                                    - validos['observacao'])
 
+    x_bar_por_lead = validos.groupby('lead')['anom_modelo_raw'].mean()
+    validos['x_bar_lead'] = validos['lead'].map(x_bar_por_lead)
+    validos['sxx_contrib'] = (validos['anom_modelo_raw'] - validos['x_bar_lead']) ** 2
+
     resultado = {}
-    soma_por_lead = validos.groupby('lead')['anom_modelo_raw_quadrado'].sum()
-    verificacao_soma_participacoes = {}
+    soma_sxx_por_lead = validos.groupby('lead')['sxx_contrib'].sum()
+    verificacao_soma_participacoes_sxx = {}
 
     for lead in v.LEADS_ESPERADOS:
         resultado[int(lead)] = {}
-        soma_total_lead = float(soma_por_lead.get(lead, 0.0))
-        soma_participacoes = 0.0
+        sxx_total_lead = float(soma_sxx_por_lead.get(lead, 0.0))
+        soma_participacoes_sxx = 0.0
         for mes in range(1, 13):
             sub = validos[(validos['lead'] == lead) & (validos['target_mes'] == mes)]
             n = len(sub)
             if n == 0:
                 resultado[int(lead)][mes] = {'n': 0}
                 continue
-            soma_x2_mes = float(sub['anom_modelo_raw_quadrado'].sum())
-            participacao = (soma_x2_mes / soma_total_lead) if soma_total_lead > 0 else None
-            if participacao is not None:
-                soma_participacoes += participacao
+            sxx_mes = float(sub['sxx_contrib'].sum())
+            participacao_sxx = (sxx_mes / sxx_total_lead) if sxx_total_lead > 0 else None
+            if participacao_sxx is not None:
+                soma_participacoes_sxx += participacao_sxx
             resultado[int(lead)][mes] = {
                 'n': n,
                 'desvio_padrao_anom_modelo_raw': float(sub['anom_modelo_raw'].std(ddof=0)),
                 'desvio_padrao_anom_observada': float(sub['anom_observada'].std(ddof=0)),
                 'rmse_benchmark3': float(np.sqrt(np.mean(sub['erro_benchmark3'] ** 2))),
-                'soma_anom_modelo_raw_quadrado': soma_x2_mes,
-                'participacao_no_sum_x2_do_lead': participacao,
+                'sxx_mes': sxx_mes,
+                'participacao_sxx_no_lead': participacao_sxx,
+                'soma_anom_modelo_raw_quadrado': float(sub['anom_modelo_raw_quadrado'].sum()),
             }
-        verificacao_soma_participacoes[int(lead)] = soma_participacoes
+        verificacao_soma_participacoes_sxx[int(lead)] = soma_participacoes_sxx
 
-    ok = all(abs(s - 1.0) < 1e-6 for s in verificacao_soma_participacoes.values() if s > 0)
+    ok = all(abs(s - 1.0) < 1e-6 for s in verificacao_soma_participacoes_sxx.values() if s > 0)
     return {
         'matriz': resultado,
-        'verificacao_soma_participacoes_por_lead': verificacao_soma_participacoes,
-        'verificacao_soma_participacoes_ok': ok,
-        'nota': 'só diagnóstico — nenhuma reponderação do OLS, nenhuma padronização, nenhum mês '
-                'dominante removido nesta versão do Método 3.4.',
+        'x_bar_por_lead': {int(lead): float(media) for lead, media in x_bar_por_lead.items()},
+        'verificacao_soma_participacoes_sxx_por_lead': verificacao_soma_participacoes_sxx,
+        'verificacao_soma_participacoes_sxx_ok': ok,
+        'nota': 'só diagnóstico — participação em Sxx (soma centrada na média do lead) é a '
+                'métrica PRINCIPAL de influência sobre beta_lead; sum(x²) bruto é mantido só '
+                'como diagnóstico adicional. Nenhuma reponderação do OLS, nenhuma '
+                'padronização, nenhum mês dominante removido nesta versão do Método 3.4.',
     }
 
 

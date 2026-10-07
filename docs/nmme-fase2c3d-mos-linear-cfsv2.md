@@ -65,14 +65,16 @@ Apenas 2 parâmetros por horizonte (`alpha_lead`, `beta_lead`) — sem mês-dumm
 | H5 | 108 | 0.217 | 0.251 | 0.286 | 0.291 | 0.358 | 0.390 |
 | H6 | 108 | 0.282 | 0.341 | 0.383 | 0.402 | 0.489 | 0.503 |
 
-**Leitura pré-registrada (protocolo, Seção 8) — nunca uma classificação automática do método**:
+**Leitura pré-registrada (protocolo, Seção 8) — nunca uma classificação automática do método, e nunca uma inferência causal sobre o CFSv2 só a partir de `beta`.** `beta < 1` descreve o que o AJUSTE fez (amorteceu a amplitude da anomalia do CFSv2 no ajuste pooled daquele horizonte); não é, por si só, evidência de que o CFSv2 "exagera" seu próprio sinal — essa leitura exigiria olhar `R²` e o skill fora da amostra (seção 9) junto com `beta`, nunca `beta` isolado.
 
-- H1: beta mediano 0.598 < 0,9 — sugere amortecimento das anomalias do CFSv2.
-- H2: beta mediano 0.254 < 0,9 — sugere amortecimento das anomalias do CFSv2.
-- H3: beta mediano 0.374 < 0,9 — sugere amortecimento das anomalias do CFSv2.
-- H4: beta mediano 0.458 < 0,9 — sugere amortecimento das anomalias do CFSv2.
-- H5: beta mediano 0.286 < 0,9 — sugere amortecimento das anomalias do CFSv2.
-- H6: beta mediano 0.383 < 0,9 — sugere amortecimento das anomalias do CFSv2.
+- H1: o ajuste MOS estimou beta mediano 0.598 < 1, portanto aplicou amortecimento à amplitude das anomalias do CFSv2 no ajuste pooled por horizonte; R² treino mediano 0.152 — relação relativamente mais forte; `beta` deve ser interpretado junto com este R² e com o skill fora da amostra (seção 9), nunca isoladamente.
+- H2: o ajuste MOS estimou beta mediano 0.254 < 1, portanto aplicou amortecimento à amplitude das anomalias do CFSv2 no ajuste pooled por horizonte; R² treino mediano 0.016 — relação muito fraca dentro da própria amostra de treino; `beta` deve ser interpretado junto com este R² e com o skill fora da amostra (seção 9), nunca isoladamente.
+- H3: o ajuste MOS estimou beta mediano 0.374 < 1, portanto aplicou amortecimento à amplitude das anomalias do CFSv2 no ajuste pooled por horizonte; R² treino mediano 0.022 — relação muito fraca dentro da própria amostra de treino; `beta` deve ser interpretado junto com este R² e com o skill fora da amostra (seção 9), nunca isoladamente.
+- H4: o ajuste MOS estimou beta mediano 0.458 < 1, portanto aplicou amortecimento à amplitude das anomalias do CFSv2 no ajuste pooled por horizonte; R² treino mediano 0.036 — relação muito fraca dentro da própria amostra de treino; `beta` deve ser interpretado junto com este R² e com o skill fora da amostra (seção 9), nunca isoladamente.
+- H5: o ajuste MOS estimou beta mediano 0.286 < 1, portanto aplicou amortecimento à amplitude das anomalias do CFSv2 no ajuste pooled por horizonte; R² treino mediano 0.014 — relação muito fraca dentro da própria amostra de treino; `beta` deve ser interpretado junto com este R² e com o skill fora da amostra (seção 9), nunca isoladamente.
+- H6: o ajuste MOS estimou beta mediano 0.383 < 1, portanto aplicou amortecimento à amplitude das anomalias do CFSv2 no ajuste pooled por horizonte; R² treino mediano 0.025 — relação muito fraca dentro da própria amostra de treino; `beta` deve ser interpretado junto com este R² e com o skill fora da amostra (seção 9), nunca isoladamente.
+
+De forma geral nesta rodada: H1 tende a apresentar a relação mais forte (maior R² treino) entre os seis horizontes, enquanto H2-H6 têm R² de treino consistentemente baixos — reforçando que `beta` nesses horizontes descreve um ajuste com pouca explicação da variância observada, não uma relação bem estabelecida.
 
 ## 6. Diagnóstico de estabilidade
 
@@ -89,124 +91,140 @@ Apenas 2 parâmetros por horizonte (`alpha_lead`, `beta_lead`) — sem mês-dumm
 
 ## 7. Heterogeneidade de variância mensal — só diagnóstico
 
-Verificação de que as participações no `sum(x²)` somam ~1 dentro de cada lead: ✅ OK ({"1": 1.0, "2": 1.0, "3": 0.9999999999999998, "4": 1.0, "5": 1.0, "6": 1.0000000000000002}).
+Métrica PRINCIPAL de influência sobre `beta_lead`: participação em `Sxx = Σ(anom_modelo_raw - x̄_lead)²` (soma centrada na média do lead) — não `sum(x²)` bruto (mantido abaixo só como diagnóstico adicional). Com intercepto no OLS, `beta = cov(x,y)/var(x)`, e `var(x) = Sxx/n`: é a dispersão em torno da média, não a magnitude bruta, que determina o peso de cada observação na inclinação.
 
-`só diagnóstico — nenhuma reponderação do OLS, nenhuma padronização, nenhum mês dominante removido nesta versão do Método 3.4.`
+Verificação de que as participações em `Sxx` somam ~1 dentro de cada lead: ✅ OK ({"1": 1.0, "2": 1.0000000000000002, "3": 0.9999999999999998, "4": 1.0000000000000002, "5": 0.9999999999999999, "6": 1.0}).
 
-### 7.1. H1
+`só diagnóstico — participação em Sxx (soma centrada na média do lead) é a métrica PRINCIPAL de influência sobre beta_lead; sum(x²) bruto é mantido só como diagnóstico adicional. Nenhuma reponderação do OLS, nenhuma padronização, nenhum mês dominante removido nesta versão do Método 3.4.`
 
-| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação no sum(x²) |
-|---|---|---|---|---|---|
-| Jan | 19 | 75.86 | 77.66 | 97.89 | 0.333 |
-| Fev | 19 | 49.83 | 72.11 | 70.05 | 0.144 |
-| Mar | 19 | 49.04 | 83.04 | 67.43 | 0.146 |
-| Abr | 19 | 43.08 | 86.35 | 70.95 | 0.106 |
-| Mai | 19 | 21.57 | 63.97 | 57.65 | 0.026 |
-| Jun | 19 | 1.09 | 9.79 | 9.60 | 0.000 |
-| Jul | 19 | 0.42 | 5.32 | 5.25 | 0.000 |
-| Ago | 19 | 0.45 | 13.89 | 14.02 | 0.000 |
-| Set | 19 | 2.47 | 34.30 | 37.28 | 0.000 |
-| Out | 19 | 6.70 | 35.11 | 42.81 | 0.003 |
-| Nov | 19 | 34.30 | 59.59 | 51.60 | 0.069 |
-| Dez | 19 | 54.57 | 38.05 | 65.75 | 0.173 |
+### 7.1. H1 (x̄_lead = 2.101)
 
-### 7.2. H2
+| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |
+|---|---|---|---|---|---|---|
+| Jan | 19 | 75.86 | 77.66 | 97.89 | 0.336 | 111397.7 |
+| Fev | 19 | 49.83 | 72.11 | 70.05 | 0.143 | 48109.4 |
+| Mar | 19 | 49.04 | 83.04 | 67.43 | 0.143 | 48821.7 |
+| Abr | 19 | 43.08 | 86.35 | 70.95 | 0.106 | 35441.2 |
+| Mai | 19 | 21.57 | 63.97 | 57.65 | 0.027 | 8841.2 |
+| Jun | 19 | 1.09 | 9.79 | 9.60 | 0.000 | 28.7 |
+| Jul | 19 | 0.42 | 5.32 | 5.25 | 0.000 | 3.6 |
+| Ago | 19 | 0.45 | 13.89 | 14.02 | 0.000 | 4.0 |
+| Set | 19 | 2.47 | 34.30 | 37.28 | 0.001 | 133.8 |
+| Out | 19 | 6.70 | 35.11 | 42.81 | 0.004 | 945.3 |
+| Nov | 19 | 34.30 | 59.59 | 51.60 | 0.068 | 23214.6 |
+| Dez | 19 | 54.57 | 38.05 | 65.75 | 0.172 | 57843.4 |
 
-| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação no sum(x²) |
-|---|---|---|---|---|---|
-| Jan | 19 | 35.48 | 77.52 | 90.29 | 0.138 |
-| Fev | 19 | 47.65 | 72.11 | 68.41 | 0.248 |
-| Mar | 19 | 40.66 | 83.04 | 96.10 | 0.184 |
-| Abr | 19 | 31.32 | 86.35 | 87.52 | 0.118 |
-| Mai | 19 | 9.36 | 63.97 | 70.67 | 0.010 |
-| Jun | 19 | 1.12 | 9.79 | 9.74 | 0.000 |
-| Jul | 19 | 0.63 | 5.32 | 5.49 | 0.000 |
-| Ago | 19 | 1.33 | 13.89 | 14.20 | 0.000 |
-| Set | 19 | 4.47 | 34.30 | 37.54 | 0.002 |
-| Out | 19 | 9.42 | 35.11 | 44.75 | 0.010 |
-| Nov | 19 | 30.01 | 59.59 | 48.07 | 0.099 |
-| Dez | 19 | 41.44 | 38.05 | 67.36 | 0.191 |
+Meses que mais dominam a estimação de `beta` em H1 (maior participação em `Sxx`): Jan (0.336), Dez (0.172), Mar (0.143).
 
-### 7.3. H3
+### 7.2. H2 (x̄_lead = -0.955)
 
-| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação no sum(x²) |
-|---|---|---|---|---|---|
-| Jan | 19 | 34.05 | 77.52 | 89.07 | 0.197 |
-| Fev | 19 | 39.71 | 71.85 | 70.46 | 0.257 |
-| Mar | 19 | 29.79 | 83.04 | 79.14 | 0.160 |
-| Abr | 19 | 19.54 | 86.35 | 86.87 | 0.071 |
-| Mai | 19 | 10.62 | 63.97 | 69.80 | 0.018 |
-| Jun | 19 | 0.95 | 9.79 | 9.45 | 0.000 |
-| Jul | 19 | 1.18 | 5.32 | 5.75 | 0.000 |
-| Ago | 19 | 1.51 | 13.89 | 13.67 | 0.000 |
-| Set | 19 | 5.32 | 34.30 | 38.65 | 0.005 |
-| Out | 19 | 8.86 | 35.11 | 45.41 | 0.013 |
-| Nov | 19 | 26.35 | 59.59 | 61.88 | 0.115 |
-| Dez | 19 | 31.74 | 38.05 | 57.84 | 0.164 |
+| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |
+|---|---|---|---|---|---|---|
+| Jan | 19 | 35.48 | 77.52 | 90.29 | 0.139 | 24006.6 |
+| Fev | 19 | 47.65 | 72.11 | 68.41 | 0.248 | 43175.3 |
+| Mar | 19 | 40.66 | 83.04 | 96.10 | 0.183 | 31994.3 |
+| Abr | 19 | 31.32 | 86.35 | 87.52 | 0.116 | 20578.9 |
+| Mai | 19 | 9.36 | 63.97 | 70.67 | 0.010 | 1742.3 |
+| Jun | 19 | 1.12 | 9.79 | 9.74 | 0.000 | 25.8 |
+| Jul | 19 | 0.63 | 5.32 | 5.49 | 0.000 | 7.7 |
+| Ago | 19 | 1.33 | 13.89 | 14.20 | 0.000 | 33.8 |
+| Set | 19 | 4.47 | 34.30 | 37.54 | 0.002 | 387.6 |
+| Out | 19 | 9.42 | 35.11 | 44.75 | 0.010 | 1686.2 |
+| Nov | 19 | 30.01 | 59.59 | 48.07 | 0.099 | 17210.1 |
+| Dez | 19 | 41.44 | 38.05 | 67.36 | 0.193 | 33322.3 |
 
-### 7.4. H4
+Meses que mais dominam a estimação de `beta` em H2 (maior participação em `Sxx`): Fev (0.248), Dez (0.193), Mar (0.183).
 
-| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação no sum(x²) |
-|---|---|---|---|---|---|
-| Jan | 19 | 39.66 | 77.52 | 79.60 | 0.270 |
-| Fev | 19 | 38.11 | 71.85 | 68.68 | 0.252 |
-| Mar | 19 | 34.31 | 78.57 | 86.82 | 0.190 |
-| Abr | 19 | 26.29 | 86.35 | 84.90 | 0.122 |
-| Mai | 19 | 6.18 | 63.97 | 71.08 | 0.006 |
-| Jun | 19 | 0.88 | 9.79 | 9.94 | 0.000 |
-| Jul | 19 | 1.32 | 5.32 | 5.30 | 0.000 |
-| Ago | 19 | 1.73 | 13.89 | 14.07 | 0.000 |
-| Set | 19 | 2.69 | 34.30 | 38.22 | 0.001 |
-| Out | 19 | 8.92 | 35.11 | 45.95 | 0.013 |
-| Nov | 19 | 17.12 | 59.59 | 56.98 | 0.047 |
-| Dez | 19 | 22.94 | 38.05 | 44.56 | 0.097 |
+### 7.3. H3 (x̄_lead = -0.222)
 
-### 7.5. H5
+| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |
+|---|---|---|---|---|---|---|
+| Jan | 19 | 34.05 | 77.52 | 89.07 | 0.197 | 23246.9 |
+| Fev | 19 | 39.71 | 71.85 | 70.46 | 0.257 | 30360.4 |
+| Mar | 19 | 29.79 | 83.04 | 79.14 | 0.159 | 18900.6 |
+| Abr | 19 | 19.54 | 86.35 | 86.87 | 0.071 | 8423.2 |
+| Mai | 19 | 10.62 | 63.97 | 69.80 | 0.018 | 2145.5 |
+| Jun | 19 | 0.95 | 9.79 | 9.45 | 0.000 | 17.4 |
+| Jul | 19 | 1.18 | 5.32 | 5.75 | 0.000 | 26.6 |
+| Ago | 19 | 1.51 | 13.89 | 13.67 | 0.000 | 45.8 |
+| Set | 19 | 5.32 | 34.30 | 38.65 | 0.005 | 553.7 |
+| Out | 19 | 8.86 | 35.11 | 45.41 | 0.014 | 1578.7 |
+| Nov | 19 | 26.35 | 59.59 | 61.88 | 0.115 | 13593.5 |
+| Dez | 19 | 31.74 | 38.05 | 57.84 | 0.164 | 19410.6 |
 
-| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação no sum(x²) |
-|---|---|---|---|---|---|
-| Jan | 19 | 29.59 | 77.52 | 87.35 | 0.141 |
-| Fev | 19 | 38.10 | 71.85 | 71.86 | 0.224 |
-| Mar | 19 | 43.07 | 78.57 | 85.79 | 0.289 |
-| Abr | 19 | 30.57 | 82.73 | 73.14 | 0.144 |
-| Mai | 19 | 6.62 | 63.97 | 72.86 | 0.007 |
-| Jun | 19 | 0.62 | 9.79 | 9.81 | 0.000 |
-| Jul | 19 | 1.35 | 5.32 | 5.46 | 0.000 |
-| Ago | 19 | 2.22 | 13.89 | 13.95 | 0.001 |
-| Set | 19 | 3.16 | 34.30 | 38.52 | 0.002 |
-| Out | 19 | 6.86 | 35.11 | 45.86 | 0.008 |
-| Nov | 19 | 13.41 | 59.59 | 58.08 | 0.032 |
-| Dez | 19 | 31.03 | 38.05 | 60.03 | 0.153 |
+Meses que mais dominam a estimação de `beta` em H3 (maior participação em `Sxx`): Fev (0.257), Jan (0.197), Dez (0.164).
 
-### 7.6. H6
+### 7.4. H4 (x̄_lead = -1.034)
 
-| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação no sum(x²) |
-|---|---|---|---|---|---|
-| Jan | 19 | 24.68 | 77.52 | 83.30 | 0.091 |
-| Fev | 19 | 43.18 | 71.85 | 77.30 | 0.280 |
-| Mar | 19 | 44.52 | 78.57 | 83.37 | 0.309 |
-| Abr | 19 | 28.38 | 82.73 | 81.52 | 0.122 |
-| Mai | 19 | 6.65 | 62.32 | 72.54 | 0.007 |
-| Jun | 19 | 0.41 | 9.79 | 9.86 | 0.000 |
-| Jul | 19 | 0.71 | 5.32 | 5.52 | 0.000 |
-| Ago | 19 | 1.46 | 13.89 | 13.75 | 0.000 |
-| Set | 19 | 3.33 | 34.30 | 38.17 | 0.002 |
-| Out | 19 | 8.58 | 35.11 | 43.02 | 0.011 |
-| Nov | 19 | 15.77 | 59.59 | 56.42 | 0.037 |
-| Dez | 19 | 30.97 | 38.05 | 54.35 | 0.141 |
+| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |
+|---|---|---|---|---|---|---|
+| Jan | 19 | 39.66 | 77.52 | 79.60 | 0.267 | 31871.0 |
+| Fev | 19 | 38.11 | 71.85 | 68.68 | 0.257 | 29787.5 |
+| Mar | 19 | 34.31 | 78.57 | 86.82 | 0.191 | 22447.4 |
+| Abr | 19 | 26.29 | 86.35 | 84.90 | 0.120 | 14454.1 |
+| Mai | 19 | 6.18 | 63.97 | 71.08 | 0.007 | 732.4 |
+| Jun | 19 | 0.88 | 9.79 | 9.94 | 0.000 | 14.7 |
+| Jul | 19 | 1.32 | 5.32 | 5.30 | 0.000 | 33.0 |
+| Ago | 19 | 1.73 | 13.89 | 14.07 | 0.001 | 56.9 |
+| Set | 19 | 2.69 | 34.30 | 38.22 | 0.002 | 142.3 |
+| Out | 19 | 8.92 | 35.11 | 45.95 | 0.013 | 1518.9 |
+| Nov | 19 | 17.12 | 59.59 | 56.98 | 0.048 | 5568.6 |
+| Dez | 19 | 22.94 | 38.05 | 44.56 | 0.094 | 11458.9 |
 
-**Nenhuma reponderação do OLS, nenhuma padronização e nenhum mês dominante removido nesta versão do Método 3.4** — esta seção serve só para verificar se `beta_lead` está sendo dominado por poucos meses de alta variância, antes de interpretar o coeficiente como representativo do horizonte.
+Meses que mais dominam a estimação de `beta` em H4 (maior participação em `Sxx`): Jan (0.267), Fev (0.257), Mar (0.191).
+
+### 7.5. H5 (x̄_lead = 0.307)
+
+| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |
+|---|---|---|---|---|---|---|
+| Jan | 19 | 29.59 | 77.52 | 87.35 | 0.141 | 17437.2 |
+| Fev | 19 | 38.10 | 71.85 | 71.86 | 0.224 | 27645.7 |
+| Mar | 19 | 43.07 | 78.57 | 85.79 | 0.290 | 35701.1 |
+| Abr | 19 | 30.57 | 82.73 | 73.14 | 0.144 | 17774.8 |
+| Mai | 19 | 6.62 | 63.97 | 72.86 | 0.007 | 844.7 |
+| Jun | 19 | 0.62 | 9.79 | 9.81 | 0.000 | 7.5 |
+| Jul | 19 | 1.35 | 5.32 | 5.46 | 0.000 | 34.9 |
+| Ago | 19 | 2.22 | 13.89 | 13.95 | 0.001 | 95.4 |
+| Set | 19 | 3.16 | 34.30 | 38.52 | 0.002 | 190.4 |
+| Out | 19 | 6.86 | 35.11 | 45.86 | 0.007 | 929.9 |
+| Nov | 19 | 13.41 | 59.59 | 58.08 | 0.032 | 3925.5 |
+| Dez | 19 | 31.03 | 38.05 | 60.03 | 0.152 | 18823.6 |
+
+Meses que mais dominam a estimação de `beta` em H5 (maior participação em `Sxx`): Mar (0.290), Fev (0.224), Dez (0.152).
+
+### 7.6. H6 (x̄_lead = -1.530)
+
+| Mês | N | Desvio padrão anom. modelo | Desvio padrão anom. observada | RMSE benchmark3 | Participação em Sxx | Participação em sum(x²) (adicional) |
+|---|---|---|---|---|---|---|
+| Jan | 19 | 24.68 | 77.52 | 83.30 | 0.093 | 11780.3 |
+| Fev | 19 | 43.18 | 71.85 | 77.30 | 0.278 | 36245.7 |
+| Mar | 19 | 44.52 | 78.57 | 83.37 | 0.306 | 40066.2 |
+| Abr | 19 | 28.38 | 82.73 | 81.52 | 0.121 | 15867.1 |
+| Mai | 19 | 6.65 | 62.32 | 72.54 | 0.008 | 866.6 |
+| Jun | 19 | 0.41 | 9.79 | 9.86 | 0.000 | 3.5 |
+| Jul | 19 | 0.71 | 5.32 | 5.52 | 0.001 | 10.4 |
+| Ago | 19 | 1.46 | 13.89 | 13.75 | 0.001 | 41.4 |
+| Set | 19 | 3.33 | 34.30 | 38.17 | 0.002 | 216.2 |
+| Out | 19 | 8.58 | 35.11 | 43.02 | 0.011 | 1416.4 |
+| Nov | 19 | 15.77 | 59.59 | 56.42 | 0.037 | 4776.5 |
+| Dez | 19 | 30.97 | 38.05 | 54.35 | 0.143 | 18311.6 |
+
+Meses que mais dominam a estimação de `beta` em H6 (maior participação em `Sxx`): Mar (0.306), Fev (0.278), Dez (0.143).
+
+**Nenhuma reponderação do OLS, nenhuma padronização e nenhum mês dominante removido nesta versão do Método 3.4** — esta seção serve só para verificar se `beta_lead` está sendo dominado por poucos meses de alta variância (agora medida corretamente por `Sxx`, não por `sum(x²)` bruto), antes de interpretar o coeficiente como representativo do horizonte. Os meses dominantes são lidos diretamente dos números recalculados acima, nunca assumidos a priori.
 
 ## 8. Resultados determinísticos H1-H6
 
-| Horizonte | N | Bias | MAE | RMSE | Corr. absoluta | Corr. anomalia |
-|---|---|---|---|---|---|---|
-| H1 | 108 | 0.30 | 33.64 | 48.38 | 0.894 | 0.565 |
-| H2 | 108 | 0.17 | 36.68 | 55.35 | 0.855 | 0.266 |
-| H3 | 108 | -0.93 | 36.75 | 55.59 | 0.856 | 0.303 |
-| H4 | 108 | -1.02 | 35.85 | 54.85 | 0.860 | 0.247 |
-| H5 | 108 | -1.43 | 35.33 | 54.88 | 0.861 | 0.248 |
-| H6 | 108 | -1.82 | 36.01 | 56.04 | 0.855 | 0.085 |
+`corr_anomalia_mos` (correlação de `anom_mos = forecast_mos - climatologia_observada` com `anom_observada`) é a métrica PRINCIPAL de correlação de anomalia do Método 3.4 — **corrigida nesta revisão**: a versão anterior reportava `corr_anomalia_raw` (correlação da anomalia BRUTA do CFSv2, o preditor de entrada do OLS, nunca o resultado do ajuste) sob o rótulo ambíguo `corr_anomalia`. As duas são mantidas, com nomes inequívocos, para comparação.
+
+| Horizonte | N | Bias | MAE | RMSE | Corr. absoluta | Corr. anomalia (MOS, principal) | Corr. anomalia (raw, CFSv2 bruto) |
+|---|---|---|---|---|---|---|---|
+| H1 | 108 | 0.30 | 33.64 | 48.38 | 0.894 | 0.547 | 0.565 |
+| H2 | 108 | 0.17 | 36.68 | 55.35 | 0.855 | 0.181 | 0.266 |
+| H3 | 108 | -0.93 | 36.75 | 55.59 | 0.856 | 0.235 | 0.303 |
+| H4 | 108 | -1.02 | 35.85 | 54.85 | 0.860 | 0.227 | 0.247 |
+| H5 | 108 | -1.43 | 35.33 | 54.88 | 0.861 | 0.209 | 0.248 |
+| H6 | 108 | -1.82 | 36.01 | 56.04 | 0.855 | 0.039 | 0.085 |
 
 ## 9. Comparação contra os três benchmarks pré-registrados
 
