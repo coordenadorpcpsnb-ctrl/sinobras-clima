@@ -1,0 +1,607 @@
+{
+  "STOP_ON_FAILURE": false,
+  "metodo": "robustez_spread_skill_h2_metodo_3_5",
+  "referencia_congelada_h2": {
+    "pearson_residual": 0.154965,
+    "pearson_ic95": [
+      0.042564,
+      0.256144
+    ],
+    "spearman_residual": 0.179941,
+    "spearman_ic95": [
+      0.036391,
+      0.290664
+    ],
+    "congelamento_confirmado_contra_json_do_gate": true
+  },
+  "outros_horizontes_congelado": {
+    "1": -0.023,
+    "3": 0.115,
+    "4": 0.011,
+    "5": -0.069,
+    "6": -0.046
+  },
+  "leave_one_month_out": {
+    "1": {
+      "mes_excluido": 1,
+      "mes_excluido_nome": "Jan",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.2070857480668626,
+        "ic95_lo": 0.05353223036523615,
+        "ic95_hi": 0.34383150427086695,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.23652479671818913,
+        "ic95_lo": 0.0559867326365186,
+        "ic95_hi": 0.3691213205982922,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "2": {
+      "mes_excluido": 2,
+      "mes_excluido_nome": "Fev",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.14603036174313866,
+        "ic95_lo": 0.01793690926034071,
+        "ic95_hi": 0.2590624397442603,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.1769856251725712,
+        "ic95_lo": 0.03155819965326729,
+        "ic95_hi": 0.2838670553299898,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "3": {
+      "mes_excluido": 3,
+      "mes_excluido_nome": "Mar",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.06943516986862626,
+        "ic95_lo": -0.039779496183041885,
+        "ic95_hi": 0.17390875682004833,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_inclui_zero",
+      "spearman": {
+        "estimativa": 0.12435042797653595,
+        "ic95_lo": -0.03672872881898945,
+        "ic95_hi": 0.24211194246984283,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_inclui_zero"
+    },
+    "4": {
+      "mes_excluido": 4,
+      "mes_excluido_nome": "Abr",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.14047234768977576,
+        "ic95_lo": 0.0006739804123999458,
+        "ic95_hi": 0.25571239620387803,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.14301685421749882,
+        "ic95_lo": -0.018686504445592167,
+        "ic95_hi": 0.2694623094237865,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_inclui_zero"
+    },
+    "5": {
+      "mes_excluido": 5,
+      "mes_excluido_nome": "Mai",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.1627153836393629,
+        "ic95_lo": 0.023041046264401704,
+        "ic95_hi": 0.2737100998650198,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.19765246840186404,
+        "ic95_lo": 0.04423892806220566,
+        "ic95_hi": 0.31029514308054196,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "6": {
+      "mes_excluido": 6,
+      "mes_excluido_nome": "Jun",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.15516742342724882,
+        "ic95_lo": 0.042253215446887774,
+        "ic95_hi": 0.2563529828401054,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.1778319987828449,
+        "ic95_lo": 0.03457720536297044,
+        "ic95_hi": 0.29546715308453986,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "7": {
+      "mes_excluido": 7,
+      "mes_excluido_nome": "Jul",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.15514265660929702,
+        "ic95_lo": 0.04262883365272061,
+        "ic95_hi": 0.25635006832765783,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.17977831998782845,
+        "ic95_lo": 0.03942394237367722,
+        "ic95_hi": 0.2966069376571031,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "8": {
+      "mes_excluido": 8,
+      "mes_excluido_nome": "Ago",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.1559433792812647,
+        "ic95_lo": 0.042952723942161646,
+        "ic95_hi": 0.257134797178318,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.18044775530673998,
+        "ic95_lo": 0.04134172341319026,
+        "ic95_hi": 0.29492781025309023,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "9": {
+      "mes_excluido": 9,
+      "mes_excluido_nome": "Set",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.1594598992253485,
+        "ic95_lo": 0.039950620607513594,
+        "ic95_hi": 0.2635374081939495,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.1833847055442543,
+        "ic95_lo": 0.03804648770542316,
+        "ic95_hi": 0.29333067485226816,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "10": {
+      "mes_excluido": 10,
+      "mes_excluido_nome": "Out",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.16148901107582922,
+        "ic95_lo": 0.032640045103368244,
+        "ic95_hi": 0.2662204493988739,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.1930791207181215,
+        "ic95_lo": 0.03814131768593496,
+        "ic95_hi": 0.3231335065923619,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "11": {
+      "mes_excluido": 11,
+      "mes_excluido_nome": "Nov",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.1626171591556887,
+        "ic95_lo": 0.03648363648508572,
+        "ic95_hi": 0.2687646536615836,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.1698325848204978,
+        "ic95_lo": 0.03609235936136526,
+        "ic95_hi": 0.2675113341218724,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "12": {
+      "mes_excluido": 12,
+      "mes_excluido_nome": "Dez",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.1742777022700161,
+        "ic95_lo": 0.039479497863717884,
+        "ic95_hi": 0.2826337145274212,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.1886038216416943,
+        "ic95_lo": 0.024439305708391094,
+        "ic95_hi": 0.31616462442865634,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    }
+  },
+  "resumo_leave_one_month_out": {
+    "n_exclusoes_validas": 12,
+    "pearson_minimo": 0.06943516986862626,
+    "pearson_maximo": 0.2070857480668626,
+    "pearson_mediana": 0.1577016392533066,
+    "spearman_minimo": 0.12435042797653595,
+    "spearman_maximo": 0.23652479671818913,
+    "spearman_mediana": 0.1801130376472842,
+    "n_exclusoes_pearson_positivo": 12,
+    "n_exclusoes_spearman_positivo": 12,
+    "n_exclusoes_pearson_ic_acima_de_zero": 11,
+    "n_exclusoes_spearman_ic_acima_de_zero": 10
+  },
+  "classificacao_robustez_h2": {
+    "classificacao": "sinal_h2_robusto",
+    "justificativa": "Pearson e Spearman positivos em >= 10/12 exclusões, pelo menos uma métrica com IC 95% acima de zero na maioria (>= 7/12) das exclusões, e nenhuma exclusão produziu inversão forte (< -0.1).",
+    "sinais": {
+      "inversao_forte_em_alguma_exclusao": false,
+      "pelo_menos_uma_ic_maioria": true,
+      "ambas_positivas_limiar_robusto": true,
+      "ambas_positivas_maioria": true,
+      "sinal_mediano_positivo": true
+    },
+    "nota": "Classificação pré-registrada (limiares fixados antes de olhar o resultado real) — síntese descritiva de robustez, NUNCA um teste de hipótese formal."
+  },
+  "leave_one_season_out": {
+    "chuvosa": {
+      "grupo_excluido": "chuvosa",
+      "n": 100,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.0950712311278784,
+        "ic95_lo": -0.21038343093552356,
+        "ic95_hi": 0.37288407659790923,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_inclui_zero",
+      "spearman": {
+        "estimativa": 0.03338733873387338,
+        "ic95_lo": -0.22661505672376087,
+        "ic95_hi": 0.33354325932351125,
+        "n_anos_distintos": 20,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_inclui_zero"
+    },
+    "transicao": {
+      "grupo_excluido": "transicao",
+      "n": 200,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.16838710561393896,
+        "ic95_lo": 0.023910538546537814,
+        "ic95_hi": 0.2857067145794646,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.20318757968949228,
+        "ic95_lo": 0.05109788455659659,
+        "ic95_hi": 0.3220248336035573,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    },
+    "seca": {
+      "grupo_excluido": "seca",
+      "n": 180,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.15632948547349973,
+        "ic95_lo": 0.04270613969660796,
+        "ic95_hi": 0.2577320110683127,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "spearman": {
+        "estimativa": 0.16622735269607086,
+        "ic95_lo": 0.03213062133158937,
+        "ic95_hi": 0.2961575498536931,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_totalmente_acima_de_zero"
+    }
+  },
+  "diagnostico_meses_h2": {
+    "1": {
+      "mes": 1,
+      "mes_nome": "Jan",
+      "n": 20,
+      "pearson_std_vs_erro_abs": -0.2357289396004182,
+      "spearman_std_vs_erro_abs": -0.3142857142857143,
+      "spread_medio": 97.9107230148249,
+      "erro_abs_medio": 69.73411166666668
+    },
+    "2": {
+      "mes": 2,
+      "mes_nome": "Fev",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.22663731635086107,
+      "spearman_std_vs_erro_abs": 0.13533834586466165,
+      "spread_medio": 89.8337619678289,
+      "erro_abs_medio": 60.80818916666667
+    },
+    "3": {
+      "mes": 3,
+      "mes_nome": "Mar",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.48521826273032304,
+      "spearman_std_vs_erro_abs": 0.5052631578947367,
+      "spread_medio": 99.5491671583462,
+      "erro_abs_medio": 87.6581325
+    },
+    "4": {
+      "mes": 4,
+      "mes_nome": "Abr",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.2524177338648749,
+      "spearman_std_vs_erro_abs": 0.2541353383458646,
+      "spread_medio": 80.12586679469214,
+      "erro_abs_medio": 59.69048416666668
+    },
+    "5": {
+      "mes": 5,
+      "mes_nome": "Mai",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.1329642928810457,
+      "spearman_std_vs_erro_abs": 0.09924812030075188,
+      "spread_medio": 21.746847093553093,
+      "erro_abs_medio": 78.80928791666666
+    },
+    "6": {
+      "mes": 6,
+      "mes_nome": "Jun",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.08132863889821705,
+      "spearman_std_vs_erro_abs": 0.3744360902255639,
+      "spread_medio": 2.6972029701248887,
+      "erro_abs_medio": 5.586245416666666
+    },
+    "7": {
+      "mes": 7,
+      "mes_nome": "Jul",
+      "n": 20,
+      "pearson_std_vs_erro_abs": -0.10318027460149427,
+      "spearman_std_vs_erro_abs": -0.7413533834586465,
+      "spread_medio": 1.4675098760838057,
+      "erro_abs_medio": 2.7100470833333334
+    },
+    "8": {
+      "mes": 8,
+      "mes_nome": "Ago",
+      "n": 20,
+      "pearson_std_vs_erro_abs": -0.0648460018439719,
+      "spearman_std_vs_erro_abs": 0.1263157894736842,
+      "spread_medio": 1.957770456914692,
+      "erro_abs_medio": 9.424427083333333
+    },
+    "9": {
+      "mes": 9,
+      "mes_nome": "Set",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.05815098781296437,
+      "spearman_std_vs_erro_abs": 0.18796992481203004,
+      "spread_medio": 8.319484033737606,
+      "erro_abs_medio": 45.155966666666664
+    },
+    "10": {
+      "mes": 10,
+      "mes_nome": "Out",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.016514231485429732,
+      "spearman_std_vs_erro_abs": 0.04210526315789473,
+      "spread_medio": 21.75117882530876,
+      "erro_abs_medio": 83.83759125
+    },
+    "11": {
+      "mes": 11,
+      "mes_nome": "Nov",
+      "n": 20,
+      "pearson_std_vs_erro_abs": 0.08421383364428549,
+      "spearman_std_vs_erro_abs": 0.29774436090225564,
+      "spread_medio": 61.890131574347336,
+      "erro_abs_medio": 92.77703083333334
+    },
+    "12": {
+      "mes": 12,
+      "mes_nome": "Dez",
+      "n": 20,
+      "pearson_std_vs_erro_abs": -0.007423147908580859,
+      "spearman_std_vs_erro_abs": 0.030075187969924807,
+      "spread_medio": 100.05605062402131,
+      "erro_abs_medio": 52.41189083333332
+    }
+  },
+  "analise_influencia": {
+    "mes_maior_pearson_observado": 3,
+    "mes_maior_pearson_observado_nome": "Mar",
+    "mes_maior_spearman_observado": 3,
+    "mes_maior_spearman_observado_nome": "Mar",
+    "sem_marco": {
+      "mes_excluido": 3,
+      "mes_excluido_nome": "Mar",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.06943516986862626,
+        "ic95_lo": -0.039779496183041885,
+        "ic95_hi": 0.17390875682004833,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_inclui_zero",
+      "spearman": {
+        "estimativa": 0.12435042797653595,
+        "ic95_lo": -0.03672872881898945,
+        "ic95_hi": 0.24211194246984283,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_inclui_zero"
+    },
+    "sem_mes_maior_pearson": {
+      "mes_excluido": 3,
+      "mes_excluido_nome": "Mar",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.06943516986862626,
+        "ic95_lo": -0.039779496183041885,
+        "ic95_hi": 0.17390875682004833,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_inclui_zero",
+      "spearman": {
+        "estimativa": 0.12435042797653595,
+        "ic95_lo": -0.03672872881898945,
+        "ic95_hi": 0.24211194246984283,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_inclui_zero"
+    },
+    "sem_mes_maior_spearman": {
+      "mes_excluido": 3,
+      "mes_excluido_nome": "Mar",
+      "n": 220,
+      "amostra_suficiente": true,
+      "pearson": {
+        "estimativa": 0.06943516986862626,
+        "ic95_lo": -0.039779496183041885,
+        "ic95_hi": 0.17390875682004833,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "pearson_ic_classificacao": "ic_inclui_zero",
+      "spearman": {
+        "estimativa": 0.12435042797653595,
+        "ic95_lo": -0.03672872881898945,
+        "ic95_hi": 0.24211194246984283,
+        "n_anos_distintos": 21,
+        "n_resamples": 500,
+        "metodo": "bootstrap em blocos por ano, com centralização por target_mes RECALCULADA dentro de cada reamostra (nunca médias fixas da amostra original) — revisão sazonal, item 3."
+      },
+      "spearman_ic_classificacao": "ic_inclui_zero"
+    },
+    "marco_e_o_mes_de_maior_pearson_e_spearman": true,
+    "nota": "Análise de INFLUÊNCIA, não seleção de modelo — nenhuma destas exclusões decide a metodologia final; servem só para checar se o resultado completo depende desproporcionalmente de um mês específico."
+  },
+  "multiplicidade_nota": "Foram avaliados H1-H6 no gate principal controlado por mês e apenas H2 apresentou IC 95% totalmente acima de zero. Nenhuma correção formal de multiplicidade (Bonferroni/FDR) foi aplicada como novo critério de gate nesta atividade — mas um achado isolado entre seis horizontes é tratado aqui como evidência EXPLORATÓRIA que exige robustez interna (este documento) antes de justificar um novo modelo. H2 nunca é chamado de \"validado\".",
+  "decisao_final_emos_h2": "prosseguir_para_protocolo_emos_h2",
+  "nenhum_emos_ajustado": true,
+  "nenhum_dressing_aplicado": true,
+  "nenhuma_recalibracao_de_membros": true,
+  "nenhuma_probabilidade_operacional_alterada": true,
+  "data_geracao_utc": "2026-10-08T17:41:05.014419+00:00"
+}
