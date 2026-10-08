@@ -1,0 +1,133 @@
+{
+  "STOP_ON_FAILURE": false,
+  "metodo": "protocolo_emos_h2_viabilidade_estrutural_metodo_3_5",
+  "viabilidade_estrutural_warmup": {
+    "n_treino_minimo_emos": 120,
+    "n_total_inicializacoes_h2": 240,
+    "n_pares_validos_total": 216,
+    "primeira_init_date_elegivel": "2003-01",
+    "n_treino_disponivel_nessa_data": 120,
+    "n_previsoes_avaliaveis_final": 96,
+    "nota": "Contagem puramente estrutural — nenhum CRPS/skill do EMOS foi calculado (item 10 do protocolo). Warm-up NÃO foi reduzido automaticamente mesmo que encurte a avaliação — qualquer ajuste exige revisão (item 10)."
+  },
+  "gate_viabilidade_escala": {
+    "n_casos_validos_checados": 216,
+    "todos_spread_clim_modelo_mes_positivos": true,
+    "todos_erro_clim_sd_mes_positivos": true,
+    "distribuicao_por_mes": {
+      "1": {
+        "mes": 1,
+        "mes_nome": "Jan",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 90.16502753475949,
+        "spread_clim_modelo_mes_mediana": 96.7138199611174,
+        "erro_clim_sd_mes_minimo": 85.19018403439986,
+        "erro_clim_sd_mes_mediana": 95.63222914845502
+      },
+      "2": {
+        "mes": 2,
+        "mes_nome": "Fev",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 80.91502162765006,
+        "spread_clim_modelo_mes_mediana": 85.59682735428294,
+        "erro_clim_sd_mes_minimo": 34.142851276513795,
+        "erro_clim_sd_mes_mediana": 74.18412195126388
+      },
+      "3": {
+        "mes": 3,
+        "mes_nome": "Mar",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 91.34461378167995,
+        "spread_clim_modelo_mes_mediana": 98.30907216455012,
+        "erro_clim_sd_mes_minimo": 74.11012932454814,
+        "erro_clim_sd_mes_mediana": 94.49681311273805
+      },
+      "4": {
+        "mes": 4,
+        "mes_nome": "Abr",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 75.80097842884267,
+        "spread_clim_modelo_mes_mediana": 80.32489569060888,
+        "erro_clim_sd_mes_minimo": 69.6834223393949,
+        "erro_clim_sd_mes_mediana": 85.82504731589177
+      },
+      "5": {
+        "mes": 5,
+        "mes_nome": "Mai",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 21.24664428183654,
+        "spread_clim_modelo_mes_mediana": 24.26161760879155,
+        "erro_clim_sd_mes_minimo": 46.343226031513765,
+        "erro_clim_sd_mes_mediana": 50.40915983817892
+      },
+      "6": {
+        "mes": 6,
+        "mes_nome": "Jun",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 1.3468933167891999,
+        "spread_clim_modelo_mes_mediana": 2.5551219460357633,
+        "erro_clim_sd_mes_minimo": 0.6213347286286194,
+        "erro_clim_sd_mes_mediana": 11.302210017739059
+      },
+      "7": {
+        "mes": 7,
+        "mes_nome": "Jul",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 1.0721145431069052,
+        "spread_clim_modelo_mes_mediana": 1.4184721685282669,
+        "erro_clim_sd_mes_minimo": 0.24301492302428668,
+        "erro_clim_sd_mes_mediana": 2.4545658775699972
+      },
+      "8": {
+        "mes": 8,
+        "mes_nome": "Ago",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 1.4002769476806132,
+        "spread_clim_modelo_mes_mediana": 1.9454258021073154,
+        "erro_clim_sd_mes_minimo": 9.19433269907338,
+        "erro_clim_sd_mes_mediana": 14.535307579636562
+      },
+      "9": {
+        "mes": 9,
+        "mes_nome": "Set",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 4.3335502047018135,
+        "spread_clim_modelo_mes_mediana": 5.929344841435972,
+        "erro_clim_sd_mes_minimo": 33.2530258553535,
+        "erro_clim_sd_mes_mediana": 38.78897831367229
+      },
+      "10": {
+        "mes": 10,
+        "mes_nome": "Out",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 15.918009442770202,
+        "spread_clim_modelo_mes_mediana": 20.586040080832134,
+        "erro_clim_sd_mes_minimo": 9.368911470791831,
+        "erro_clim_sd_mes_mediana": 26.016755805989412
+      },
+      "11": {
+        "mes": 11,
+        "mes_nome": "Nov",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 53.79501464097379,
+        "spread_clim_modelo_mes_mediana": 62.8389198523133,
+        "erro_clim_sd_mes_minimo": 17.461576681034906,
+        "erro_clim_sd_mes_mediana": 47.58176561945598
+      },
+      "12": {
+        "mes": 12,
+        "mes_nome": "Dez",
+        "n": 18,
+        "spread_clim_modelo_mes_minimo": 89.83617318543867,
+        "spread_clim_modelo_mes_mediana": 96.58198249783553,
+        "erro_clim_sd_mes_minimo": 64.18289343878698,
+        "erro_clim_sd_mes_mediana": 72.13813550285843
+      }
+    },
+    "nota": "Nenhum piso numérico foi escolhido com base em desempenho (proibido pelo item 6 do protocolo) — só reporta a distribuição observada, para revisão."
+  },
+  "nenhum_parametro_emos_ajustado": true,
+  "nenhum_crps_emos_calculado": true,
+  "nenhuma_probabilidade_calibrada_produzida": true,
+  "data_geracao_utc": "2026-10-08T19:30:40.097424+00:00"
+}
