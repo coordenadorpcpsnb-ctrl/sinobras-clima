@@ -144,7 +144,7 @@ class SpreadSobreMembrosNuncaSobreAnosTestCase(unittest.TestCase):
         self_test = self
         with mock.patch.object(v, 'LEADS_ESPERADOS', (1,)), \
              mock.patch.object(v, 'bootstrap_blocos_por_ano', side_effect=fake):
-            g.spread_skill_por_horizonte(tabela, n_resamples=5)
+            g.spread_skill_raw_pooled_por_horizonte(tabela, n_resamples=5)
 
         self.assertTrue(len(colunas_ano_usadas) > 0)
         self.assertTrue(all(c == 'target_ano' for c in colunas_ano_usadas))
@@ -363,7 +363,7 @@ class BootstrapPreservaBlocosAnuaisTestCase(unittest.TestCase):
             return {'estimativa': 0.0, 'ic95_lo': 0.0, 'ic95_hi': 0.0}
 
         with mock.patch.object(v, 'bootstrap_blocos_por_ano', side_effect=fake_bootstrap):
-            g.spread_skill_por_horizonte(tabela, n_resamples=5)
+            g.spread_skill_raw_pooled_por_horizonte(tabela, n_resamples=5)
 
         anos_reais = set(sub['target_ano'].unique())
         for anos_sorteados in anos_vistos_por_resample:
@@ -377,7 +377,7 @@ class BootstrapPreservaBlocosAnuaisTestCase(unittest.TestCase):
         base = _base_pareada_sintetica(n_inits_por_lead=25, leads=(1,))
         r1 = g.dependencia_membros_por_horizonte(base)
         r2 = g.dependencia_membros_por_horizonte(base)
-        self.assertEqual(r1[1]['correlacao_media_par_a_par'], r2[1]['correlacao_media_par_a_par'])
+        self.assertEqual(r1[1]['correlacao_membros_raw'], r2[1]['correlacao_membros_raw'])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -415,7 +415,7 @@ class MembroNuncaObservacaoIndependenteTestCase(unittest.TestCase):
             return {'estimativa': 0.0, 'ic95_lo': 0.0, 'ic95_hi': 0.0}
 
         with mock.patch.object(v, 'bootstrap_blocos_por_ano', side_effect=fake):
-            g.spread_skill_por_horizonte(tabela, n_resamples=5)
+            g.spread_skill_raw_pooled_por_horizonte(tabela, n_resamples=5)
 
         for colunas in colunas_vistas:
             self.assertNotIn('member', colunas)
@@ -449,6 +449,213 @@ class ComDadosReaisAprovadosTestCase(unittest.TestCase):
         self.assertFalse(resultado.get('STOP_ON_FAILURE', True))
         self.assertEqual(set(resultado['classificacao_gate_por_horizonte'].keys()),
                           set(v.LEADS_ESPERADOS))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão sazonal — item 13 do pedido de revisão: centralização por
+# lead×target_mes, confundimento sazonal sintético, e regressão de
+# CRPS/Brier contra o commit ad6caf5.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _tabela_sazonal_sintetica(n_anos=20, seed=11, informativo_dentro_do_mes=False):
+    """Tabela mínima (schema de `construir_tabela_ensemble`, só as
+    colunas usadas pelas funções de spread-skill) com um ciclo sazonal
+    FORTE e comum a spread e erro_abs — por construção, qualquer
+    correlação pooled positiva aqui vem SÓ da sazonalidade compartilhada,
+    nunca de informação caso a caso, EXCETO quando
+    `informativo_dentro_do_mes=True`, caso em que uma segunda
+    componente (`eps_s`) é injetada tanto no spread quanto no erro
+    DENTRO do mesmo mês, para comprovar que a centralização preserva
+    sinal real quando ele existe."""
+    rng = np.random.default_rng(seed)
+    linhas = []
+    for ano in range(2000, 2000 + n_anos):
+        for mes in range(1, 13):
+            nivel = 60.0 if mes <= 6 else 10.0   # nível sazonal comum (chuvosa vs seca)
+            eps_s = rng.normal(0, 5)              # desvio do spread DENTRO do mês
+            spread = max(0.1, nivel + eps_s)
+            if informativo_dentro_do_mes:
+                erro_abs = max(0.0, nivel + 0.8 * eps_s + rng.normal(0, 2))
+            else:
+                erro_abs = max(0.0, nivel + rng.normal(0, 5))   # ruído independente de eps_s
+            linhas.append({
+                'lead': 1, 'target_ano': ano, 'target_mes': mes,
+                'ensemble_std': spread, 'erro_abs': erro_abs,
+                'ensemble_variance': spread ** 2, 'erro_quadratico': erro_abs ** 2,
+            })
+    return pd.DataFrame(linhas)
+
+
+class CentralizacaoPorMesTestCase(unittest.TestCase):
+
+    def test_a_media_do_residuo_e_zero_dentro_de_cada_mes(self):
+        tabela = _tabela_sazonal_sintetica()
+        resid = g._residuo_centrado_por_mes(tabela, 'target_mes', 'ensemble_std')
+        tabela_com_resid = tabela.assign(_r=resid)
+        medias_por_mes = tabela_com_resid.groupby('target_mes')['_r'].mean()
+        for mes, media in medias_por_mes.items():
+            self.assertAlmostEqual(media, 0.0, places=10,
+                                    msg=f"média do resíduo no mês {mes} não é ~0")
+
+    def test_b_centralizacao_recalculada_dentro_do_bootstrap(self):
+        """O bootstrap residualizado deve recalcular as médias mensais
+        em CADA reamostra (preferência explícita da revisão), não usar
+        médias fixas da amostra original."""
+        tabela = _tabela_sazonal_sintetica()
+        resultado = g._bootstrap_residualizado_por_ano(
+            tabela, 'target_mes', 'target_ano', 'ensemble_std', 'erro_abs', v._corr,
+            n_resamples=20, seed=5)
+        self.assertIn('RECALCULADA', resultado['metodo'])
+        self.assertIsNotNone(resultado['estimativa'])
+
+
+class ConfundimentoSazonalSinteticoTestCase(unittest.TestCase):
+    """Teste CENTRAL da revisão: comprova que o ciclo sazonal comum
+    gera correlação POOLED alta mesmo sem nenhuma informação caso a
+    caso, e que a correlação CONTROLADA POR MÊS corretamente cai para
+    perto de zero nesse cenário — e permanece positiva quando a
+    informação dentro do mês realmente existe."""
+
+    def test_a_ciclo_sazonal_gera_correlacao_raw_alta_mas_residual_proxima_de_zero(self):
+        tabela = _tabela_sazonal_sintetica(n_anos=30, informativo_dentro_do_mes=False)
+        with mock.patch.object(v, 'LEADS_ESPERADOS', (1,)):
+            raw = g.spread_skill_raw_pooled_por_horizonte(tabela, n_resamples=50, seed=3)
+            mc = g.spread_skill_month_controlled_retrospective_por_horizonte(
+                tabela, n_resamples=50, seed=3)
+
+        corr_raw = raw[1]['pearson_std_vs_erro_abs']['estimativa']
+        corr_resid = mc[1]['pearson_std_resid_vs_erro_abs_resid']['estimativa']
+
+        self.assertGreater(corr_raw, 0.5,
+                            "ciclo sazonal comum deveria gerar correlação pooled claramente alta")
+        self.assertLess(abs(corr_resid), 0.3,
+                         "correlação controlada por mês deveria cair para perto de zero quando "
+                         "não há informação caso a caso, só sazonalidade compartilhada")
+        self.assertGreater(corr_raw - abs(corr_resid), 0.3,
+                            "a queda da correlação pooled para a residual deveria ser grande "
+                            "neste cenário de confundimento sazonal puro")
+
+    def test_b_informacao_real_dentro_do_mes_sobrevive_a_centralizacao(self):
+        tabela = _tabela_sazonal_sintetica(n_anos=30, informativo_dentro_do_mes=True)
+        with mock.patch.object(v, 'LEADS_ESPERADOS', (1,)):
+            mc = g.spread_skill_month_controlled_retrospective_por_horizonte(
+                tabela, n_resamples=50, seed=3)
+        corr_resid = mc[1]['pearson_std_resid_vs_erro_abs_resid']['estimativa']
+        self.assertGreater(corr_resid, 0.3,
+                            "quando existe relação real dentro do mês (eps_s compartilhado), a "
+                            "correlação residual deveria permanecer claramente positiva")
+
+
+class CorrelacaoMembrosAnomaliaMensalTestCase(unittest.TestCase):
+    """Revisão sazonal, item 7 — mesma lógica do teste acima, agora
+    para a dependência entre membros: um ciclo sazonal comum a todos
+    os membros infla a correlação par-a-par RAW; a versão por
+    anomalia mensal deve ser sensivelmente menor."""
+
+    def _base_sazonal_membros(self, n_anos=20, n_membros=24, seed=13):
+        rng = np.random.default_rng(seed)
+        linhas = []
+        for ano in range(2000, 2000 + n_anos):
+            for mes in range(1, 13):
+                nivel = 150.0 if mes <= 6 else 20.0
+                init_date = f'{ano}-{mes:02d}'
+                for m in range(n_membros):
+                    linhas.append({
+                        'init_date': init_date, 'target_month': init_date, 'target_ano': ano,
+                        'target_mes': mes, 'lead': 1, 'member': m,
+                        'forecast_prec_mm': max(0.0, nivel + rng.normal(0, 8)),
+                        'obs_prec_mm': nivel,
+                    })
+        return pd.DataFrame(linhas)
+
+    def test_a_correlacao_raw_alta_cai_apos_remocao_da_climatologia_mensal(self):
+        base = self._base_sazonal_membros()
+        with mock.patch.object(v, 'LEADS_ESPERADOS', (1,)):
+            resultado = g.dependencia_membros_por_horizonte(base)
+        rho_raw = resultado[1]['correlacao_membros_raw']
+        rho_anom = resultado[1]['correlacao_membros_anomalia_mensal']
+        self.assertGreater(rho_raw, 0.5,
+                            "ciclo sazonal comum deveria inflar a correlação par-a-par RAW")
+        self.assertLess(rho_anom, rho_raw - 0.2,
+                         "correlação por anomalia mensal deveria ser sensivelmente menor que a "
+                         "raw, já que o ciclo sazonal comum foi removido")
+
+    def test_b_ess_principal_usa_a_anomalia_mensal_nao_a_raw(self):
+        base = self._base_sazonal_membros()
+        with mock.patch.object(v, 'LEADS_ESPERADOS', (1,)):
+            resultado = g.dependencia_membros_por_horizonte(base)
+        self.assertEqual(resultado[1]['rho_usado_no_ess_principal'], 'anomalia_mensal')
+        self.assertNotEqual(resultado[1]['effective_ensemble_size_aprox'],
+                             resultado[1]['effective_ensemble_size_aprox_raw'])
+
+
+class Rank1VsRankMMais1SeparadosTestCase(unittest.TestCase):
+
+    def test_a_rank_1_e_rank_m_mais_1_reportados_separadamente_e_somam_a_extrema(self):
+        membros = [10.0, 20.0, 30.0, 40.0]
+        linhas_rank1 = [_linha_sintetica(membros, observado=0.0, tercil_33=15.0, tercil_67=35.0,
+                                           anos_hist=[5, 15, 25, 35, 45]) for _ in range(6)]
+        linhas_rank_topo = [_linha_sintetica(membros, observado=100.0, tercil_33=15.0,
+                                               tercil_67=35.0, anos_hist=[5, 15, 25, 35, 45])
+                            for _ in range(2)]
+        resumo = g._resumo_probabilistico(linhas_rank1 + linhas_rank_topo)
+        diag = resumo['rank_histogram_diagnostico']
+        n = resumo['n']
+        self.assertAlmostEqual(diag['frequencia_rank_1'], 6 / n, places=10)
+        self.assertAlmostEqual(diag['frequencia_rank_m_mais_1'], 2 / n, places=10)
+        self.assertAlmostEqual(diag['frequencia_ranks_extremos'],
+                                diag['frequencia_rank_1'] + diag['frequencia_rank_m_mais_1'],
+                                places=10)
+        self.assertAlmostEqual(diag['diferenca_rank_m_mais_1_menos_rank_1'],
+                                diag['frequencia_rank_m_mais_1'] - diag['frequencia_rank_1'],
+                                places=10)
+
+    def test_b_simetria_entre_rank_1_e_rank_m_mais_1_da_diferenca_proxima_de_zero(self):
+        membros = [10.0, 20.0, 30.0, 40.0]
+        linhas = ([_linha_sintetica(membros, observado=0.0, tercil_33=15.0, tercil_67=35.0,
+                                      anos_hist=[5, 15, 25, 35, 45]) for _ in range(4)]
+                  + [_linha_sintetica(membros, observado=100.0, tercil_33=15.0, tercil_67=35.0,
+                                        anos_hist=[5, 15, 25, 35, 45]) for _ in range(4)])
+        resumo = g._resumo_probabilistico(linhas)
+        diag = resumo['rank_histogram_diagnostico']
+        self.assertAlmostEqual(diag['diferenca_rank_m_mais_1_menos_rank_1'], 0.0, places=10)
+
+
+class CrpsBrierIdenticosAoCommitAd6caf5TestCase(unittest.TestCase):
+    """Revisão sazonal, item 11/13 — CRPS, CRPSS, Brier e BSS não
+    foram alterados nesta revisão; comparados numericamente contra o
+    JSON já publicado no commit `ad6caf5`."""
+
+    def test_a_crps_crpss_brier_bss_identicos_ao_commit_anterior(self):
+        import json
+        import subprocess
+        if not v.CAMINHO_METRICAS_JSON.parent.exists():
+            self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
+        try:
+            saida = subprocess.run(
+                ['git', 'show',
+                 'ad6caf5:data/cfsv2_calibracao_2c3d/gate_calibracao_probabilistica_2c3d.json'],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=30, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            self.skipTest("commit ad6caf5 não disponível neste checkout")
+        anterior = json.loads(saida.stdout)
+
+        resultado = g.executar_gate_probabilistico(n_resamples_bootstrap=5)
+        self.assertFalse(resultado.get('STOP_ON_FAILURE', True))
+
+        prob_atual = resultado['probabilistico_por_horizonte']
+        prob_anterior = anterior['probabilistico_por_horizonte']
+        for lead_str in map(str, v.LEADS_ESPERADOS):
+            atual = prob_atual[int(lead_str)] if int(lead_str) in prob_atual else prob_atual[lead_str]
+            ant = prob_anterior[lead_str]
+            for campo in ('crps_medio_modelo', 'crps_medio_climatologia', 'crpss'):
+                self.assertAlmostEqual(atual[campo], ant[campo], places=9,
+                                        msg=f"{campo} mudou para H{lead_str} vs. commit ad6caf5")
+            for cat in ('seco', 'normal', 'umido'):
+                self.assertAlmostEqual(atual['brier_score_por_categoria'][cat],
+                                        ant['brier_score_por_categoria'][cat], places=9)
+                self.assertAlmostEqual(atual['bss_por_categoria'][cat],
+                                        ant['bss_por_categoria'][cat], places=9)
 
 
 if __name__ == '__main__':

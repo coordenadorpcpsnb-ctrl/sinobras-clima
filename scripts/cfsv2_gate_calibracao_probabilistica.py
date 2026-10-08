@@ -31,6 +31,42 @@ observacao` (2C.3C) resolve empates por sorteio seedado, reprodutível
 mas não determinístico no sentido de regra fixa. Ver nota na seção
 correspondente.
 
+══════════════════════════════════════════════════════════════════════
+REVISÃO SAZONAL (commit ad6caf5 → esta revisão) — a revisão
+independente confirmou auditoria de 24 membros, CRPS/CRPSS, Brier/BSS,
+bootstrap anual, rank histogram e cobertura, mas apontou que a
+classificação `ensemble_mal_calibrado_mas_potencialmente_calibravel`
+baseada na correlação spread×erro POOLED (todos os meses juntos) pode
+estar confundida pelo ciclo sazonal forte da precipitação — meses
+chuvosos têm spread E erro absolutos maiores que meses secos por pura
+sazonalidade, o que por si só já gera correlação positiva entre
+spread e erro, mesmo que o spread não carregue nenhuma informação
+CASO A CASO sobre a dificuldade da previsão dentro de cada mês.
+
+Por isso, a partir desta revisão:
+- `spread_skill_raw_pooled_por_horizonte` é o MESMO diagnóstico bruto
+  de antes (números idênticos, só renomeado/rotulado) — mantido,
+  nunca apagado, mas NÃO é mais usado para decidir a classificação do
+  gate.
+- `spread_skill_month_controlled_retrospective_por_horizonte` é a
+  análise PRINCIPAL nova: centraliza spread/erro por `target_mes`
+  antes de correlacionar, testando se existe informação ALÉM do ciclo
+  sazonal. RETROSPECTIVA/DESCRITIVA (a centralização usa a amostra
+  completa de hindcast) — nunca operacional.
+- A classificação do gate (`classificar_gate_por_horizonte`) agora usa
+  prioritariamente a versão controlada por mês; a classificação
+  baseada só no pooled é mantida separadamente, só como referência não
+  decisória (`classificacao_raw_pooled_referencia_apenas_por_
+  horizonte`).
+- Dependência entre membros ganha uma versão baseada em anomalia
+  mensal (`correlacao_membros_anomalia_mensal`), já que a correlação
+  par-a-par sobre precipitação bruta também é contaminada pelo mesmo
+  ciclo sazonal comum a todos os membros.
+
+CRPS, CRPSS, Brier e BSS NÃO foram alterados nesta revisão — são
+comparados byte-a-byte com o commit `ad6caf5` em teste de regressão.
+══════════════════════════════════════════════════════════════════════
+
 Roda com:
     python scripts/cfsv2_gate_calibracao_probabilistica.py --executar
     python scripts/cfsv2_gate_calibracao_probabilistica.py --gerar-relatorio
@@ -62,6 +98,18 @@ NOMES_MES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out
 CLASSIFICACAO_INFORMATIVO = 'spread_informativo'
 CLASSIFICACAO_POUCO_INFORMATIVO = 'spread_pouco_informativo'
 CLASSIFICACAO_MAL_CALIBRADO_POTENCIAL = 'ensemble_mal_calibrado_mas_potencialmente_calibravel'
+# Revisão sazonal — distingue "mal calibrado, mas o spread ainda ajuda
+# depois de controlar o mês" (acima) de "mal calibrado E o spread não
+# ajuda nem depois de controlar o mês" (abaixo, novo):
+CLASSIFICACAO_MAL_CALIBRADO_POUCO_INFORMATIVO = 'ensemble_mal_calibrado_spread_pouco_informativo'
+
+NOTA_COBERTURA_BIAS_VS_SPREAD = (
+    'Cobertura baixa dos membros RAW pode refletir simultaneamente localização/média '
+    'viesada (bias determinístico, já documentado nos Métodos 3.1/3.2/3.4) e spread '
+    'insuficiente (underdispersion). Cobertura isolada não identifica qual componente de '
+    'um eventual EMOS (média ou variância) precisaria ser corrigido — revisão sazonal, '
+    'item 10.'
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -134,14 +182,23 @@ def _corr_spearman(x, y):
     return float(rho) if np.isfinite(rho) else None
 
 
-def spread_skill_por_horizonte(tabela_ensemble, n_resamples=500, seed=20261001):
-    """Item 3 do pedido — Pearson e Spearman entre `ensemble_std` e
-    `erro_abs`, e Pearson entre `ensemble_variance` e `erro_
-    quadratico`, por H1-H6, com IC 95% via bootstrap em BLOCOS DE ANO
-    (`v.bootstrap_blocos_por_ano`, reaproveitado sem modificação —
-    nunca um bootstrap que resample membros ou linhas individuais).
-    Nunca declara relação útil só por correlação pontual positiva — a
-    classificação fica para o gate (item 11), nunca aqui."""
+def spread_skill_raw_pooled_por_horizonte(tabela_ensemble, n_resamples=500, seed=20261001):
+    """Item 3 do pedido (original) — Pearson e Spearman entre
+    `ensemble_std` e `erro_abs`, e Pearson entre `ensemble_variance` e
+    `erro_quadratico`, por H1-H6, com IC 95% via bootstrap em BLOCOS
+    DE ANO (`v.bootstrap_blocos_por_ano`, reaproveitado sem
+    modificação — nunca um bootstrap que resample membros ou linhas
+    individuais).
+
+    RENOMEADA conceitualmente na revisão sazonal para
+    `spread_skill_raw_pooled` (rótulo em cada resultado) — mesmos
+    números de sempre, mantidos como diagnóstico BRUTO. Responde
+    "meses/casos com maior spread absoluto também têm maior erro
+    absoluto?", mas NUNCA separa sazonalidade de informação caso a
+    caso — por isso NÃO é mais usada para decidir a classificação do
+    gate (ver `spread_skill_month_controlled_retrospective_por_
+    horizonte` e `classificar_gate_por_horizonte`). Nunca declara
+    relação útil só por correlação pontual positiva."""
     resultado = {}
     for lead in v.LEADS_ESPERADOS:
         sub = tabela_ensemble[tabela_ensemble['lead'] == lead].dropna(
@@ -149,6 +206,7 @@ def spread_skill_por_horizonte(tabela_ensemble, n_resamples=500, seed=20261001):
         n = len(sub)
         if n < v.AMOSTRA_MINIMA_ESTRATO:
             resultado[lead] = {'n': n, 'amostra_suficiente': False,
+                                'rotulo': 'spread_skill_raw_pooled',
                                 'nota': 'amostra insuficiente — IC não calculado'}
             continue
 
@@ -161,6 +219,7 @@ def spread_skill_por_horizonte(tabela_ensemble, n_resamples=500, seed=20261001):
 
         resultado[lead] = {
             'n': n, 'amostra_suficiente': True,
+            'rotulo': 'spread_skill_raw_pooled',
             'pearson_std_vs_erro_abs': pearson_std_abs,
             'pearson_std_vs_erro_abs_ic_classificacao': v._classificar_ic_relativo_a_zero(
                 pearson_std_abs['ic95_lo'], pearson_std_abs['ic95_hi']),
@@ -175,6 +234,156 @@ def spread_skill_por_horizonte(tabela_ensemble, n_resamples=500, seed=20261001):
                     '(item 3 do pedido).',
         }
     return resultado
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Revisão sazonal, itens 2/3 — análise PRINCIPAL de spread-skill,
+# controlada por `target_mes`, para separar informação caso a caso do
+# puro ciclo sazonal da precipitação (que por si só já geraria
+# correlação positiva entre spread e erro mesmo sem nenhuma informação
+# dinâmica). RETROSPECTIVA/DESCRITIVA — a centralização usa a amostra
+# completa de hindcast, nunca é operacional.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _residuo_centrado_por_mes(df, coluna_mes, coluna_valor):
+    """`valor - média(valor | target_mes)`, usando as ~20 observações
+    daquele mês dentro de `df` (amostra completa OU uma reamostra do
+    bootstrap, dependendo de quem chama) — nunca a série completa sem
+    separar por mês, que é exatamente o que confundiria sazonalidade
+    com informação caso a caso."""
+    media_por_mes = df.groupby(coluna_mes)[coluna_valor].transform('mean')
+    return (df[coluna_valor] - media_por_mes).to_numpy(dtype=float)
+
+
+def _bootstrap_residualizado_por_ano(df_lead, coluna_mes, coluna_ano, coluna_x, coluna_y,
+                                       funcao_metrica, n_resamples=500, seed=20261001):
+    """Mesmo padrão de `v.bootstrap_blocos_por_ano` (reamostra ANOS
+    inteiros com reposição, preservando todos os meses do ano
+    sorteado — nunca linhas individuais nem membros), mas recalculando
+    a centralização por `target_mes` DENTRO de cada reamostra antes de
+    residualizar: a transformação completa (média mensal → resíduo →
+    correlação) é refeita a cada reamostra, não só a correlação sobre
+    resíduos fixos pré-calculados na amostra original — preferência
+    explícita da revisão sazonal (item 3). O IC resultante reflete a
+    incerteza da transformação inteira, não só da correlação final."""
+    rng = np.random.default_rng(seed)
+    anos = df_lead[coluna_ano].unique()
+    if len(anos) < 3:
+        return {'estimativa': None, 'ic95_lo': None, 'ic95_hi': None,
+                'nota': 'menos de 3 anos distintos — bootstrap em blocos não é confiável'}
+    estimativas = []
+    for _ in range(n_resamples):
+        anos_sorteados = rng.choice(anos, size=len(anos), replace=True)
+        partes = [df_lead[df_lead[coluna_ano] == a] for a in anos_sorteados]
+        amostra = pd.concat(partes, ignore_index=True)
+        resid_x = _residuo_centrado_por_mes(amostra, coluna_mes, coluna_x)
+        resid_y = _residuo_centrado_por_mes(amostra, coluna_mes, coluna_y)
+        estimativas.append(funcao_metrica(resid_x, resid_y))
+    estimativas = np.array([e for e in estimativas if e is not None])
+    resid_x_real = _residuo_centrado_por_mes(df_lead, coluna_mes, coluna_x)
+    resid_y_real = _residuo_centrado_por_mes(df_lead, coluna_mes, coluna_y)
+    valor_real = funcao_metrica(resid_x_real, resid_y_real)
+    return {
+        'estimativa': valor_real,
+        'ic95_lo': float(np.percentile(estimativas, 2.5)) if len(estimativas) else None,
+        'ic95_hi': float(np.percentile(estimativas, 97.5)) if len(estimativas) else None,
+        'n_anos_distintos': int(len(anos)), 'n_resamples': n_resamples,
+        'metodo': 'bootstrap em blocos por ano, com centralização por target_mes RECALCULADA '
+                  'dentro de cada reamostra (nunca médias fixas da amostra original) — revisão '
+                  'sazonal, item 3.',
+    }
+
+
+def spread_skill_month_controlled_retrospective_por_horizonte(tabela_ensemble, n_resamples=500,
+                                                                 seed=20261001):
+    """Análise PRINCIPAL de spread-skill desta revisão —
+    `spread_skill_month_controlled_retrospective` (RETROSPECTIVA/
+    DESCRITIVA, a centralização usa a amostra completa de hindcast,
+    NUNCA chamada de operacional). Testa se o spread contém informação
+    sobre o erro ALÉM do ciclo sazonal: para cada lead, centraliza
+    `ensemble_std`/`erro_abs`/`ensemble_variance`/`erro_quadratico`
+    pela média de cada `target_mes` (as ~20 observações daquele mês,
+    `lead × target_mes`) e calcula Pearson/Spearman sobre os
+    RESÍDUOS, com IC 95% via `_bootstrap_residualizado_por_ano`
+    (acima) — nunca sobre os valores brutos (isso seria o pooled, já
+    coberto por `spread_skill_raw_pooled_por_horizonte`)."""
+    resultado = {}
+    for lead in v.LEADS_ESPERADOS:
+        sub = tabela_ensemble[tabela_ensemble['lead'] == lead].dropna(
+            subset=['ensemble_std', 'ensemble_variance']).reset_index(drop=True)
+        n = len(sub)
+        if n < v.AMOSTRA_MINIMA_ESTRATO:
+            resultado[lead] = {'n': n, 'amostra_suficiente': False,
+                                'rotulo': 'spread_skill_month_controlled_retrospective',
+                                'nota': 'amostra insuficiente — IC não calculado'}
+            continue
+
+        pearson_resid = _bootstrap_residualizado_por_ano(
+            sub, 'target_mes', 'target_ano', 'ensemble_std', 'erro_abs', v._corr,
+            n_resamples, seed)
+        spearman_resid = _bootstrap_residualizado_por_ano(
+            sub, 'target_mes', 'target_ano', 'ensemble_std', 'erro_abs', _corr_spearman,
+            n_resamples, seed)
+        pearson_var_quad_resid = _bootstrap_residualizado_por_ano(
+            sub, 'target_mes', 'target_ano', 'ensemble_variance', 'erro_quadratico', v._corr,
+            n_resamples, seed)
+
+        # Verificação estrutural (reforçada em teste automatizado): a
+        # média dos resíduos dentro de cada target_mes é ~0 por
+        # construção (centralização por grupo).
+        media_residuo_std = float(np.mean(_residuo_centrado_por_mes(sub, 'target_mes', 'ensemble_std')))
+
+        resultado[lead] = {
+            'n': n, 'amostra_suficiente': True,
+            'rotulo': 'spread_skill_month_controlled_retrospective',
+            'pearson_std_resid_vs_erro_abs_resid': pearson_resid,
+            'pearson_std_resid_vs_erro_abs_resid_ic_classificacao': v._classificar_ic_relativo_a_zero(
+                pearson_resid['ic95_lo'], pearson_resid['ic95_hi']),
+            'spearman_std_resid_vs_erro_abs_resid': spearman_resid,
+            'spearman_std_resid_vs_erro_abs_resid_ic_classificacao': v._classificar_ic_relativo_a_zero(
+                spearman_resid['ic95_lo'], spearman_resid['ic95_hi']),
+            'pearson_variance_resid_vs_erro_quadratico_resid': pearson_var_quad_resid,
+            'pearson_variance_resid_vs_erro_quadratico_resid_ic_classificacao':
+                v._classificar_ic_relativo_a_zero(pearson_var_quad_resid['ic95_lo'],
+                                                    pearson_var_quad_resid['ic95_hi']),
+            'media_residuo_std_dentro_do_mes': media_residuo_std,
+            'nota': 'Centralização por target_mes (20 anos daquele mês), RETROSPECTIVA/'
+                    'DESCRITIVA, nunca operacional (revisão sazonal, item 2). Esta é agora a '
+                    'análise PRINCIPAL de spread-skill do gate — ver '
+                    'spread_skill_raw_pooled_por_horizonte para o diagnóstico bruto pooled, '
+                    'mantido mas não decisório para a classificação.',
+        }
+    return resultado
+
+
+def spread_skill_matriz_mes_lead(tabela_ensemble):
+    """Revisão sazonal, item 5 — diagnóstico descritivo das 72 células
+    `target_mes × lead`: N, Pearson e Spearman entre `ensemble_std` e
+    `erro_abs` (SEM centralização — valores brutos de cada célula,
+    pouco sentido centralizar dentro da própria célula que já é um
+    único mês), e médias de spread/erro_abs. NUNCA um teste de
+    significância por célula — objetivo é só ver se o sinal pooled
+    (seção raw) é coerente entre muitos meses ou concentrado na
+    diferença seca/chuvosa."""
+    matriz = {}
+    for mes in range(1, 13):
+        matriz[mes] = {}
+        for lead in v.LEADS_ESPERADOS:
+            sub = tabela_ensemble[(tabela_ensemble['target_mes'] == mes) &
+                                   (tabela_ensemble['lead'] == lead)].dropna(subset=['ensemble_std'])
+            n = len(sub)
+            if n < 3:
+                matriz[mes][lead] = {'n': n, 'nota': 'amostra insuficiente para correlação'}
+                continue
+            matriz[mes][lead] = {
+                'n': n,
+                'pearson_std_vs_erro_abs': v._corr(sub['ensemble_std'].values, sub['erro_abs'].values),
+                'spearman_std_vs_erro_abs': _corr_spearman(sub['ensemble_std'].values,
+                                                             sub['erro_abs'].values),
+                'spread_medio': float(sub['ensemble_std'].mean()),
+                'erro_abs_medio': float(sub['erro_abs'].mean()),
+            }
+    return matriz
 
 
 def spread_error_ratio_por_horizonte(tabela_ensemble):
@@ -351,6 +560,16 @@ def _resumo_probabilistico(linhas):
     # simples e determinística, nunca um teste de hipótese formal.
     n_ranks = n_membros + 1
     freq_extrema = (hist_rank[1] + hist_rank[n_ranks]) / n if n > 0 else None
+    # Revisão sazonal, item 9 — rank 1 e rank M+1 separados: o uso
+    # conjunto acima (freq_extrema) detecta falta de cobertura mas não
+    # distingue dispersão insuficiente (extremos altos e simétricos)
+    # de bias sistemático (assimetria entre rank 1 e rank M+1). Ranks
+    # existentes (hist_rank, freq_extrema) NÃO foram alterados.
+    freq_rank_1 = hist_rank[1] / n if n > 0 else None
+    freq_rank_m_mais_1 = hist_rank[n_ranks] / n if n > 0 else None
+    diferenca_rank_extremos = (freq_rank_m_mais_1 - freq_rank_1
+                                if freq_rank_1 is not None and freq_rank_m_mais_1 is not None
+                                else None)
     tercio = max(1, n_ranks // 3)
     centro_ini = (n_ranks - tercio) // 2 + 1
     centro_fim = centro_ini + tercio - 1
@@ -378,13 +597,19 @@ def _resumo_probabilistico(linhas):
         'rank_histogram_diagnostico': {
             'n_ranks_possiveis': n_ranks,
             'frequencia_ranks_extremos': freq_extrema,
+            'frequencia_rank_1': freq_rank_1,
+            'frequencia_rank_m_mais_1': freq_rank_m_mais_1,
+            'diferenca_rank_m_mais_1_menos_rank_1': diferenca_rank_extremos,
             'frequencia_central': freq_central,
             'desvio_uniformidade': desvio_uniformidade,
             'esperado_sob_uniformidade_por_rank': esperado_uniforme,
             'nota': 'Medida simples e determinística — nunca um teste de hipótese sofisticado '
                     'como critério único (item 5 do pedido). freq_ranks_extremos alto sugere '
                     'underdispersion (formato em U); freq_central alto sugere overdispersion/'
-                    'concentração; assimetria entre ranks baixos e altos sugere viés.',
+                    'concentração. Revisão sazonal, item 9: rank 1 e rank M+1 separados para '
+                    'distinguir dispersão insuficiente (extremos altos e aproximadamente '
+                    'simétricos, diferenca ~0) de bias sistemático (forte assimetria entre '
+                    'rank 1 e rank M+1) — os dois podem coexistir.',
         },
         'brier_score_por_categoria': bs,
         'brier_referencia_nominal_por_categoria': bs_ref_nominal,
@@ -432,46 +657,92 @@ def probabilistico_matriz_grupo_sazonal_lead(base_enriquecida, chirps_df):
 # Item 9 do pedido — dependência/diversidade entre membros
 # ══════════════════════════════════════════════════════════════════════════
 
+def _correlacao_par_a_par_media(pivot):
+    """Correlação de Pearson par-a-par média (fora da diagonal) entre
+    as colunas de `pivot` (cada coluna = 1 série por membro) — núcleo
+    único compartilhado pelas versões raw e anomalia mensal abaixo,
+    nunca duas fórmulas paralelas de correlação par-a-par."""
+    if pivot.shape[0] < 3 or pivot.shape[1] < 2:
+        return None, pivot.shape[1]
+    matriz_corr = pivot.corr().values
+    m = matriz_corr.shape[0]
+    mascara_fora_diagonal = ~np.eye(m, dtype=bool)
+    correlacoes_fora_diagonal = matriz_corr[mascara_fora_diagonal]
+    correlacoes_validas = correlacoes_fora_diagonal[np.isfinite(correlacoes_fora_diagonal)]
+    rho_media = float(np.mean(correlacoes_validas)) if len(correlacoes_validas) else None
+    return rho_media, m
+
+
 def dependencia_membros_por_horizonte(base_pareada):
     """Diagnostica quanto os 24 membros são realmente diversos ao
-    longo do tempo (nunca usado para inflar N histórico — item 9).
-    Para cada lead, monta a matriz (n_inits × 24 membros) e calcula a
-    correlação de Pearson par-a-par entre as 24 SÉRIES TEMPORAIS de
-    membro (cada membro como uma série ao longo das inicializações
-    daquele lead) — a média das correlações fora da diagonal mede
-    redundância: perto de 1 = membros quase idênticos (pouca
-    diversidade real); perto de 0 = membros efetivamente
-    independentes.
+    longo do tempo (nunca usado para inflar N histórico — item 9 do
+    pedido original). Para cada lead, monta a matriz (n_inits × 24
+    membros) e calcula a correlação de Pearson par-a-par entre as 24
+    SÉRIES TEMPORAIS de membro — a média das correlações fora da
+    diagonal mede redundância.
 
-    `effective_ensemble_size` aproximado usa a formulação clássica de
-    tamanho efetivo de amostra correlacionada (ex.: Bretherton et al.
-    1999, adaptada): ESS = M / (1 + (M-1) * rho_media), onde M é o
-    número de membros e rho_media a correlação par-a-par média — só
-    um diagnóstico de quanto a dispersão aparente é redundante, NUNCA
-    usado para expandir a amostra histórica de 240 inicializações."""
+    Revisão sazonal, item 7: a correlação sobre precipitação BRUTA
+    (`correlacao_membros_raw`, mantida como diagnóstico bruto) é
+    fortemente contaminada pelo ciclo sazonal comum a todos os
+    membros — meses chuvosos elevam TODOS os membros juntos, inflando
+    a correlação par-a-par mesmo que os membros divirjam bastante
+    dentro de cada mês. A versão PRINCIPAL
+    (`correlacao_membros_anomalia_mensal`) remove isso: para cada
+    membro, subtrai sua própria média histórica por `target_mes`
+    (`anom_membro = forecast_membro - media_historica_membro_mes`)
+    antes de montar a matriz de correlação par-a-par.
+
+    `effective_ensemble_size_aprox` (item 8) usa agora
+    PREFERENCIALMENTE `rho_media_anomalia_mensal` (nunca a raw) na
+    formulação clássica de tamanho efetivo de amostra correlacionada
+    (ex.: Bretherton et al. 1999, adaptada): ESS = M / (1 + (M-1) *
+    rho_media). Mantido como diagnóstico heurístico — NUNCA
+    interpretado literalmente como "o ensemble possui apenas X membros
+    independentes"; a leitura correta é "a correlação média entre
+    anomalias dos membros implica redundância forte/moderada/baixa
+    segundo esta aproximação". Nunca usado para expandir a amostra
+    histórica de 240 inicializações."""
     resultado = {}
     for lead in v.LEADS_ESPERADOS:
-        sub = base_pareada[base_pareada['lead'] == lead]
-        pivot = sub.pivot_table(index='init_date', columns='member', values='forecast_prec_mm')
-        pivot = pivot.dropna(axis=0, how='any')
-        if pivot.shape[0] < 3 or pivot.shape[1] < 2:
-            resultado[lead] = {'n_inits': int(pivot.shape[0]), 'n_membros': int(pivot.shape[1]),
+        sub = base_pareada[base_pareada['lead'] == lead].copy()
+        pivot_raw = sub.pivot_table(index='init_date', columns='member', values='forecast_prec_mm')
+        pivot_raw = pivot_raw.dropna(axis=0, how='any')
+        rho_raw, m_raw = _correlacao_par_a_par_media(pivot_raw)
+
+        media_historica_membro_mes = sub.groupby(['member', 'target_mes'])[
+            'forecast_prec_mm'].transform('mean')
+        sub['anom_membro'] = sub['forecast_prec_mm'] - media_historica_membro_mes
+        pivot_anom = sub.pivot_table(index='init_date', columns='member', values='anom_membro')
+        pivot_anom = pivot_anom.dropna(axis=0, how='any')
+        rho_anom, m_anom = _correlacao_par_a_par_media(pivot_anom)
+
+        if rho_raw is None and rho_anom is None:
+            resultado[lead] = {'n_inits': int(pivot_raw.shape[0]), 'n_membros': int(m_raw),
                                 'nota': 'amostra insuficiente para correlação par-a-par'}
             continue
-        matriz_corr = pivot.corr().values
-        m = matriz_corr.shape[0]
-        mascara_fora_diagonal = ~np.eye(m, dtype=bool)
-        correlacoes_fora_diagonal = matriz_corr[mascara_fora_diagonal]
-        correlacoes_validas = correlacoes_fora_diagonal[np.isfinite(correlacoes_fora_diagonal)]
-        rho_media = float(np.mean(correlacoes_validas)) if len(correlacoes_validas) else None
-        ess = (m / (1 + (m - 1) * rho_media)) if rho_media is not None else None
+
+        ess_raw = (m_raw / (1 + (m_raw - 1) * rho_raw)) if rho_raw is not None else None
+        ess_anom = (m_anom / (1 + (m_anom - 1) * rho_anom)) if rho_anom is not None else None
+        # `effective_ensemble_size_aprox` (rótulo principal) agora usa
+        # a anomalia mensal preferencialmente; cai para a raw só se a
+        # anomalia não puder ser calculada.
+        ess_principal = ess_anom if ess_anom is not None else ess_raw
+        rho_principal_usado = 'anomalia_mensal' if ess_anom is not None else 'raw'
+
         resultado[lead] = {
-            'n_inits': int(pivot.shape[0]), 'n_membros': int(m),
-            'correlacao_media_par_a_par': rho_media,
-            'effective_ensemble_size_aprox': float(ess) if ess is not None else None,
-            'formula_ess': 'ESS = M / (1 + (M-1) * rho_media_par_a_par) — diagnóstico de '
-                           'redundância entre membros, NUNCA usado para inflar a amostra '
-                           'histórica de 240 inicializações (item 9 do pedido).',
+            'n_inits': int(pivot_raw.shape[0]), 'n_membros': int(m_raw),
+            'correlacao_membros_raw': rho_raw,
+            'correlacao_membros_anomalia_mensal': rho_anom,
+            'effective_ensemble_size_aprox_raw': float(ess_raw) if ess_raw is not None else None,
+            'effective_ensemble_size_aprox': float(ess_principal) if ess_principal is not None else None,
+            'rho_usado_no_ess_principal': rho_principal_usado,
+            'formula_ess': 'ESS = M / (1 + (M-1) * rho_media_par_a_par) — diagnóstico '
+                           'HEURÍSTICO de redundância entre membros, calculado preferencialmente '
+                           'sobre rho_media_anomalia_mensal (revisão sazonal, item 8). NUNCA '
+                           'usado para expandir a amostra histórica de 240 inicializações; nunca '
+                           'interpretado literalmente como "o ensemble possui apenas X membros '
+                           'independentes" — leitura correta: "a correlação média implica '
+                           'redundância forte/moderada/baixa segundo esta aproximação".',
             'spread_std_por_mes': {
                 int(mes): float(sub[sub['target_mes'] == mes].groupby('init_date')[
                     'forecast_prec_mm'].std(ddof=1).mean())
@@ -482,28 +753,69 @@ def dependencia_membros_por_horizonte(base_pareada):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Item 11 do pedido — classificação qualitativa do gate
+# Item 11 do pedido (original) / item 6 da revisão sazonal —
+# classificação qualitativa do gate
 # ══════════════════════════════════════════════════════════════════════════
 
-def classificar_gate_por_horizonte(spread_skill, spread_error_ratio, probabilistico):
-    """Nunca usa um limiar numérico escolhido pós-hoc — todos os
-    limiares abaixo (0,8/1,2 para o ratio, já usados em `spread_error_
-    ratio_por_horizonte`; múltiplos simples sobre a frequência
-    esperada do rank histogram) são fixados ANTES de olhar o
-    resultado real, e a classificação é uma síntese CAUTELOSA dos
-    fatos já calculados (correlações + IC, ratio, rank histogram),
-    nunca o inverso.
+def _sinais_calibracao_bruta(ser, prob):
+    """Núcleo ÚNICO dos sinais de (mal)calibração de MAGNITUDE do
+    ensemble (spread_error_ratio + rank histogram) — compartilhado
+    entre a classificação de referência (raw pooled) e a classificação
+    principal (month-controlled), nunca duas fórmulas paralelas para o
+    mesmo julgamento. Limiares (0,8/1,2 moderado; 0,5/2,0 extremo;
+    múltiplos simples sobre a frequência esperada do rank histogram)
+    fixados ANTES de olhar qualquer resultado real."""
+    ratio = ser.get('spread_error_ratio')
+    ratio_moderadamente_fora = ratio is not None and (ratio < 0.8 or ratio > 1.2)
+    ratio_extremo = ratio is not None and (ratio < 0.5 or ratio > 2.0)
 
-    Correlação positiva isolada NUNCA basta para `spread_informativo`:
-    esse rótulo também exige que ratio E rank histogram não
-    demonstrem under/overdispersion — um ensemble pode ter spread
-    correlacionado com o erro E ainda estar mal calibrado em
-    magnitude (ex.: underdispersive em todos os horizontes), caso em
-    que o rótulo correto é `ensemble_mal_calibrado_mas_potencialmente_
-    calibravel`, não `spread_informativo`."""
+    rank_diag = prob.get('rank_histogram_diagnostico', {})
+    n_ranks = rank_diag.get('n_ranks_possiveis')
+    freq_extrema = rank_diag.get('frequencia_ranks_extremos')
+    freq_central = rank_diag.get('frequencia_central')
+    esperado = rank_diag.get('esperado_sob_uniformidade_por_rank')
+    n_prob = prob.get('n', 0)
+    rank_histogram_sinaliza_desvio = False
+    if freq_extrema is not None and n_ranks and esperado:
+        esperado_extrema = 2 * esperado / max(n_prob, 1) if n_prob else None
+        if esperado_extrema and freq_extrema > 2 * esperado_extrema:
+            rank_histogram_sinaliza_desvio = True
+    if freq_central is not None and n_ranks and esperado and n_prob:
+        tercio = max(1, n_ranks // 3)
+        esperado_central = (tercio * esperado) / n_prob
+        if freq_central > 1.5 * esperado_central:
+            rank_histogram_sinaliza_desvio = True
+
+    # under/overdispersion "demonstrada" nunca depende só do ratio OU
+    # só do rank histogram isolado — qualquer um dos dois já é
+    # evidência de dispersão mal calibrada; quem decide a classificação
+    # final é sempre o cruzamento com a correlação, nunca este sinal
+    # isolado.
+    under_overdispersion_demonstrada = ratio_moderadamente_fora or rank_histogram_sinaliza_desvio
+    bem_calibrado = (not under_overdispersion_demonstrada) and (not ratio_extremo)
+
+    return {
+        'spread_error_ratio': ratio,
+        'ratio_moderadamente_fora_de_1': ratio_moderadamente_fora,
+        'ratio_extremo': ratio_extremo,
+        'rank_histogram_sinaliza_desvio': rank_histogram_sinaliza_desvio,
+        'under_overdispersion_demonstrada': under_overdispersion_demonstrada,
+        'bem_calibrado': bem_calibrado,
+    }
+
+
+def _classificacao_raw_pooled_referencia_apenas_por_horizonte(spread_skill_raw_pooled,
+                                                                  spread_error_ratio, probabilistico):
+    """Classificação de REFERÊNCIA apenas — usa a correlação spread×
+    erro POOLED (sem controlar por mês), exatamente a lógica original
+    desta seção antes da revisão sazonal. NUNCA usada para decidir o
+    próximo passo do gate a partir desta revisão: mantida só para
+    comparação/transparência, porque pode estar confundida pelo ciclo
+    sazonal da precipitação (ver `classificar_gate_por_horizonte`,
+    que agora é a classificação PRINCIPAL)."""
     resultado = {}
     for lead in v.LEADS_ESPERADOS:
-        ss = spread_skill.get(lead, {})
+        ss = spread_skill_raw_pooled.get(lead, {})
         ser = spread_error_ratio.get(lead, {})
         prob = probabilistico.get(lead, {})
 
@@ -519,70 +831,120 @@ def classificar_gate_por_horizonte(spread_skill, spread_error_ratio, probabilist
         pelo_menos_uma_corr_acima_zero = corr_pearson_acima_zero or corr_spearman_acima_zero
         ambas_corr_acima_zero = corr_pearson_acima_zero and corr_spearman_acima_zero
 
-        # Mesmos limiares 0,8/1,2 já usados em `spread_error_ratio_por_
-        # horizonte` para a leitura "muito abaixo/acima de 1" — nunca
-        # um segundo limiar paralelo para o mesmo julgamento. ratio
-        # fora de [0,8; 1,2] já é sinal de dispersão mal calibrada;
-        # <0,5 ou >2,0 é o caso extremo, que por si só barra
-        # "informativo" mesmo com correlação forte.
-        ratio = ser.get('spread_error_ratio')
-        ratio_moderadamente_fora = ratio is not None and (ratio < 0.8 or ratio > 1.2)
-        ratio_extremo = ratio is not None and (ratio < 0.5 or ratio > 2.0)
+        sinais = _sinais_calibracao_bruta(ser, prob)
 
-        rank_diag = prob.get('rank_histogram_diagnostico', {})
-        n_ranks = rank_diag.get('n_ranks_possiveis')
-        freq_extrema = rank_diag.get('frequencia_ranks_extremos')
-        freq_central = rank_diag.get('frequencia_central')
-        esperado = rank_diag.get('esperado_sob_uniformidade_por_rank')
-        n_prob = prob.get('n', 0)
-        rank_histogram_sinaliza_desvio = False
-        if freq_extrema is not None and n_ranks and esperado:
-            esperado_extrema = 2 * esperado / max(n_prob, 1) if n_prob else None
-            if esperado_extrema and freq_extrema > 2 * esperado_extrema:
-                rank_histogram_sinaliza_desvio = True
-        if freq_central is not None and n_ranks and esperado and n_prob:
-            tercio = max(1, n_ranks // 3)
-            esperado_central = (tercio * esperado) / n_prob
-            if freq_central > 1.5 * esperado_central:
-                rank_histogram_sinaliza_desvio = True
-
-        # under/overdispersion "demonstrada" (item 11) nunca depende só
-        # do ratio OU só do rank histogram isolado — qualquer um dos
-        # dois já é evidência de dispersão mal calibrada, mas a
-        # classificação final (abaixo) sempre cruza isso com a
-        # correlação spread×erro, nunca decide por um sinal isolado.
-        under_overdispersion_demonstrada = ratio_moderadamente_fora or rank_histogram_sinaliza_desvio
-
-        if ambas_corr_acima_zero and not under_overdispersion_demonstrada and not ratio_extremo:
+        if ambas_corr_acima_zero and sinais['bem_calibrado']:
             classificacao = CLASSIFICACAO_INFORMATIVO
-            justificativa = ('correlações Pearson e Spearman spread×erro com IC 95% '
-                              'totalmente acima de zero, E nenhum sinal de sob/overdispersão '
-                              '(spread_error_ratio dentro de [0,8; 1,2] e rank histogram sem '
-                              'desvio de uniformidade relevante) — dispersão do ensemble parece '
-                              'bem calibrada E reage à dificuldade da previsão')
-        elif pelo_menos_uma_corr_acima_zero and (under_overdispersion_demonstrada or ratio_extremo):
+            justificativa = ('[REFERÊNCIA, baseada no pooled — ver classificação principal '
+                              'controlada por mês] correlações Pearson e Spearman spread×erro '
+                              'pooled com IC 95% totalmente acima de zero, E nenhum sinal de '
+                              'sob/overdispersão')
+        elif pelo_menos_uma_corr_acima_zero and not sinais['bem_calibrado']:
             classificacao = CLASSIFICACAO_MAL_CALIBRADO_POTENCIAL
-            justificativa = ('pelo menos uma correlação spread×erro com IC 95% totalmente acima '
-                              'de zero, MAS spread_error_ratio e/ou rank histogram demonstram '
-                              'under/overdispersion — o ensemble bruto não está bem calibrado, '
-                              'porém o spread ainda carrega alguma informação sobre o erro '
-                              '(candidato a correção por EMOS ou equivalente, não a descarte)')
+            justificativa = ('[REFERÊNCIA, baseada no pooled] pelo menos uma correlação '
+                              'spread×erro pooled com IC 95% acima de zero, MAS ratio/rank '
+                              'histogram demonstram under/overdispersion')
         else:
             classificacao = CLASSIFICACAO_POUCO_INFORMATIVO
-            justificativa = ('nenhuma correlação spread×erro com IC 95% totalmente acima de '
-                              'zero — sem padrão consistente de que a dispersão reage à '
-                              'dificuldade da previsão, independentemente do estado de '
-                              'calibração do ratio/rank histogram')
+            justificativa = ('[REFERÊNCIA, baseada no pooled] nenhuma correlação spread×erro '
+                              'pooled com IC 95% totalmente acima de zero')
 
         resultado[lead] = {
             'classificacao': classificacao, 'justificativa': justificativa,
             'sinais': {
                 'corr_pearson_ic_acima_zero': corr_pearson_acima_zero,
                 'corr_spearman_ic_acima_zero': corr_spearman_acima_zero,
-                'spread_error_ratio': ratio,
-                'ratio_moderadamente_fora_de_1': ratio_moderadamente_fora,
-                'ratio_extremo': ratio_extremo,
-                'rank_histogram_sinaliza_desvio': rank_histogram_sinaliza_desvio,
+                **sinais,
+            },
+        }
+    return resultado
+
+
+def classificar_gate_por_horizonte(spread_skill_month_controlled, spread_error_ratio, probabilistico):
+    """Classificação PRINCIPAL do gate (revisão sazonal, item 6) —
+    usa prioritariamente `spread_skill_month_controlled_retrospective_
+    por_horizonte`, nunca mais `spread_skill_raw_pooled_por_horizonte`
+    isolada (que pode estar confundida pelo ciclo sazonal da
+    precipitação: meses chuvosos têm spread E erro absolutos maiores
+    por pura sazonalidade, o que gera correlação positiva mesmo sem
+    informação caso a caso).
+
+    4 rótulos possíveis, cruzando SEMPRE calibração de magnitude
+    (ratio/rank histogram, `_sinais_calibracao_bruta`) com
+    informatividade controlada por mês (Pearson e/ou Spearman dos
+    RESÍDUOS com IC 95% acima de zero):
+
+    - `spread_informativo`: bem calibrado E relação controlada por mês
+      robusta (reservado para ensemble já bem calibrado — item 6).
+    - `ensemble_mal_calibrado_mas_potencialmente_calibravel`: mal
+      calibrado em magnitude, MAS a relação controlada por mês ainda é
+      positiva — spread caso a caso carrega informação além do ciclo
+      sazonal.
+    - `ensemble_mal_calibrado_spread_pouco_informativo` (NOVO): mal
+      calibrado em magnitude E a correlação controlada por mês cai
+      para perto de zero/IC inclui amplamente zero — ainda pode haver
+      calibração da DISPERSÃO MÉDIA, mas o spread caso a caso não
+      demonstra valor como preditor dinâmico de incerteza.
+    - `spread_pouco_informativo`: bem calibrado em magnitude, mas sem
+      relação controlada por mês — nada precisa ser corrigido na
+      dispersão, e o spread também não ajuda caso a caso.
+
+    Nunca usa limiares escolhidos pós-hoc; nunca decide por correlação
+    isolada sem cruzar com a calibração de magnitude."""
+    resultado = {}
+    for lead in v.LEADS_ESPERADOS:
+        smc = spread_skill_month_controlled.get(lead, {})
+        ser = spread_error_ratio.get(lead, {})
+        prob = probabilistico.get(lead, {})
+
+        if not smc.get('amostra_suficiente', False):
+            resultado[lead] = {'classificacao': 'amostra_insuficiente',
+                                'justificativa': 'amostra insuficiente para avaliar spread-skill '
+                                                  'controlado por mês'}
+            continue
+
+        corr_pearson_resid_acima_zero = (smc.get('pearson_std_resid_vs_erro_abs_resid_ic_classificacao')
+                                           == 'ic_totalmente_acima_de_zero')
+        corr_spearman_resid_acima_zero = (smc.get('spearman_std_resid_vs_erro_abs_resid_ic_classificacao')
+                                            == 'ic_totalmente_acima_de_zero')
+        informativo_controlado_por_mes = corr_pearson_resid_acima_zero or corr_spearman_resid_acima_zero
+
+        sinais = _sinais_calibracao_bruta(ser, prob)
+        bem_calibrado = sinais['bem_calibrado']
+
+        if bem_calibrado and informativo_controlado_por_mes:
+            classificacao = CLASSIFICACAO_INFORMATIVO
+            justificativa = ('ensemble bem calibrado em magnitude (ratio e rank histogram sem '
+                              'sinal relevante de under/overdispersion) E correlação spread×erro '
+                              'CONTROLADA POR MÊS com IC 95% acima de zero — spread parece '
+                              'informativo caso a caso, além do ciclo sazonal')
+        elif (not bem_calibrado) and informativo_controlado_por_mes:
+            classificacao = CLASSIFICACAO_MAL_CALIBRADO_POTENCIAL
+            justificativa = ('ensemble mal calibrado em magnitude, MAS a correlação spread×erro '
+                              'CONTROLADA POR MÊS ainda tem IC 95% acima de zero — o spread caso '
+                              'a caso carrega informação além do ciclo sazonal (candidato a EMOS '
+                              'com média e variância, não a descarte)')
+        elif (not bem_calibrado) and not informativo_controlado_por_mes:
+            classificacao = CLASSIFICACAO_MAL_CALIBRADO_POUCO_INFORMATIVO
+            justificativa = ('ensemble mal calibrado em magnitude, E a correlação spread×erro '
+                              'CONTROLADA POR MÊS caiu para perto de zero (IC inclui amplamente '
+                              'zero) — ainda pode haver calibração da dispersão MÉDIA (constante '
+                              'por horizonte/mês), mas o spread caso a caso não demonstra valor '
+                              'como preditor dinâmico de incerteza; não recomendar EMOS com '
+                              'd*spread² a partir deste sinal')
+        else:
+            classificacao = CLASSIFICACAO_POUCO_INFORMATIVO
+            justificativa = ('ensemble bem calibrado em magnitude, mas sem correlação spread×erro '
+                              'CONTROLADA POR MÊS acima de zero — nada precisa ser corrigido na '
+                              'dispersão, e o spread caso a caso também não ajuda')
+
+        resultado[lead] = {
+            'classificacao': classificacao, 'justificativa': justificativa,
+            'sinais': {
+                'corr_pearson_resid_ic_acima_zero': corr_pearson_resid_acima_zero,
+                'corr_spearman_resid_ic_acima_zero': corr_spearman_resid_acima_zero,
+                'informativo_controlado_por_mes': informativo_controlado_por_mes,
+                **sinais,
             },
         }
     return resultado
@@ -640,58 +1002,67 @@ def executar_gate_probabilistico(n_resamples_bootstrap=500):
         return {'STOP_ON_FAILURE': True, 'motivo': 'NaN/Inf não explicado no spread_error_ratio',
                 'detalhe': nan_check}
 
-    spread_skill = spread_skill_por_horizonte(tabela_ensemble, n_resamples_bootstrap)
+    spread_skill_raw_pooled = spread_skill_raw_pooled_por_horizonte(tabela_ensemble, n_resamples_bootstrap)
+    spread_skill_month_controlled = spread_skill_month_controlled_retrospective_por_horizonte(
+        tabela_ensemble, n_resamples_bootstrap)
+    spread_skill_matriz_mes_lead_resultado = spread_skill_matriz_mes_lead(tabela_ensemble)
     cobertura = cobertura_intervalos_por_horizonte(tabela_ensemble)
     probabilistico = probabilistico_por_horizonte(base_enriquecida, chirps_df)
     matriz_mes_lead = probabilistico_matriz_mes_lead(base_enriquecida, chirps_df)
     matriz_grupo_sazonal = probabilistico_matriz_grupo_sazonal_lead(base_enriquecida, chirps_df)
     dependencia = dependencia_membros_por_horizonte(base)
 
-    classificacao = classificar_gate_por_horizonte(spread_skill, spread_error_ratio, probabilistico)
+    classificacao_raw_pooled_referencia = _classificacao_raw_pooled_referencia_apenas_por_horizonte(
+        spread_skill_raw_pooled, spread_error_ratio, probabilistico)
+    classificacao = classificar_gate_por_horizonte(
+        spread_skill_month_controlled, spread_error_ratio, probabilistico)
+
     classificacoes_distintas = {c['classificacao'] for c in classificacao.values()
                                  if c['classificacao'] != 'amostra_insuficiente'}
-    if classificacoes_distintas == {CLASSIFICACAO_INFORMATIVO}:
-        sintese = (f'{CLASSIFICACAO_INFORMATIVO} em todos os horizontes avaliáveis — '
-                   'recomenda-se protocolo de calibração probabilística simples (EMOS ou '
-                   'equivalente parcimonioso).')
-        proximo_passo = 'protocolo_calibracao_probabilistica_simples_recomendado'
-    elif classificacoes_distintas == {CLASSIFICACAO_POUCO_INFORMATIVO}:
-        sintese = (f'{CLASSIFICACAO_POUCO_INFORMATIVO} em todos os horizontes avaliáveis — não '
-                   'avançar automaticamente para um modelo probabilístico complexo. Considerar '
-                   'encerrar a calibração CFSv2 da Fase 2C.3D com a conclusão de que o bias '
-                   'climatológico é corrigível, o skill interanual determinístico é fraco, e '
-                   'o spread também não adiciona informação útil.')
-        proximo_passo = 'nao_avancar_calibracao_probabilistica_considerar_encerrar_fase'
-    elif classificacoes_distintas == {CLASSIFICACAO_MAL_CALIBRADO_POTENCIAL}:
-        sintese = (f'{CLASSIFICACAO_MAL_CALIBRADO_POTENCIAL} em todos os horizontes avaliáveis '
-                   '— o ensemble bruto está consistentemente mal calibrado em magnitude '
-                   '(spread_error_ratio e/ou rank histogram fora do esperado em todos os '
-                   'horizontes), mas o spread ainda carrega relação com o erro em todos eles '
-                   '(correlação com IC 95% acima de zero). Não é "pouco informativo" — é um '
-                   'candidato razoável a um protocolo de calibração probabilística simples '
-                   '(EMOS ou equivalente parcimonioso), que corrige explicitamente a relação '
-                   'spread-variância ao mesmo tempo em que usa o spread como preditor — mas '
-                   'isso é uma recomendação de próximo passo, nunca uma aprovação do Método 3.5 '
-                   'nesta atividade (item 11/13 do pedido).')
-        proximo_passo = 'protocolo_calibracao_probabilistica_simples_recomendado_com_correcao_de_dispersao'
+    rotulos_informativos_apos_controle = {CLASSIFICACAO_INFORMATIVO, CLASSIFICACAO_MAL_CALIBRADO_POTENCIAL}
+    rotulos_nao_informativos_apos_controle = {CLASSIFICACAO_POUCO_INFORMATIVO,
+                                               CLASSIFICACAO_MAL_CALIBRADO_POUCO_INFORMATIVO}
+
+    if classificacoes_distintas and classificacoes_distintas.issubset(rotulos_informativos_apos_controle):
+        sintese = (f'Classificação(ões) {sorted(classificacoes_distintas)} em todos os horizontes '
+                   'avaliáveis — em todos eles, a correlação spread×erro CONTROLADA POR MÊS '
+                   'continua com IC 95% acima de zero (spread informativo caso a caso, além do '
+                   'ciclo sazonal), mesmo quando o ensemble bruto está mal calibrado em '
+                   'magnitude. Recomenda-se protocolo de calibração probabilística simples '
+                   '(EMOS ou equivalente), ajustando média E variância.')
+        proximo_passo = 'emos_simples_media_e_variancia_recomendado'
+    elif classificacoes_distintas and classificacoes_distintas.issubset(rotulos_nao_informativos_apos_controle):
+        sintese = (f'Classificação(ões) {sorted(classificacoes_distintas)} em todos os horizontes '
+                   'avaliáveis — em todos eles, a correlação spread×erro CONTROLADA POR MÊS caiu '
+                   'para perto de zero/IC amplo (nenhuma informação caso a caso demonstrada além '
+                   'do ciclo sazonal). NÃO recomendar automaticamente EMOS com termo d*spread². '
+                   'Considerar primeiro uma calibração probabilística mais simples, com '
+                   'dispersão climatológica/constante por horizonte ou mês, antes de escolher '
+                   'um modelo com spread dinâmico como preditor.')
+        proximo_passo = 'nao_recomendar_emos_com_spread_considerar_dispersao_constante_ou_climatologica'
     else:
-        sintese = ('resultado MISTO entre horizontes — ver classificação por horizonte antes '
-                   'de qualquer decisão única; nenhuma média ou voto majoritário decide por '
-                   'si só.')
+        sintese = ('resultado MISTO entre horizontes (classificação controlada por mês) — ver '
+                   'classificação por horizonte antes de qualquer decisão única; nenhuma média '
+                   'ou voto majoritário decide por si só.')
         proximo_passo = 'resultado_misto_revisar_por_horizonte_antes_de_decidir'
 
     resultado = {
         'STOP_ON_FAILURE': False,
         'metodo': 'gate_diagnostico_calibracao_probabilistica_metodo_3_5',
+        'revisao': 'revisao_sazonal_pos_ad6caf5',
         'n_membros_esperado': v.N_MEMBROS_ESPERADO,
         'auditoria_membros': auditoria_membros,
         'spread_error_ratio_por_horizonte': spread_error_ratio,
-        'spread_skill_por_horizonte': spread_skill,
+        'spread_skill_raw_pooled_por_horizonte': spread_skill_raw_pooled,
+        'spread_skill_month_controlled_retrospective_por_horizonte': spread_skill_month_controlled,
+        'spread_skill_matriz_mes_lead': spread_skill_matriz_mes_lead_resultado,
         'cobertura_intervalos_por_horizonte': cobertura,
+        'cobertura_nota_metodologica': NOTA_COBERTURA_BIAS_VS_SPREAD,
         'probabilistico_por_horizonte': probabilistico,
         'matriz_mes_lead': matriz_mes_lead,
         'matriz_grupo_sazonal_lead': matriz_grupo_sazonal,
         'dependencia_membros_por_horizonte': dependencia,
+        'classificacao_raw_pooled_referencia_apenas_por_horizonte': classificacao_raw_pooled_referencia,
         'classificacao_gate_por_horizonte': classificacao,
         'sintese_gate': sintese,
         'proximo_passo_recomendado': proximo_passo,
