@@ -51,6 +51,25 @@ por ajuste, e um critério de sanidade adicional da solução
 (`status_emos = 'solucao_numericamente_invalida'`) além da simples
 convergência reportada pelo `scipy`.
 
+**Revisão de leakage observacional (commit `be31da1` → esta revisão):**
+identificado e corrigido um problema causal na seção 11 (treinamento):
+a regra `init_date_treino < init_date_avaliada` sozinha NÃO garante
+que a observação-alvo de uma linha de treino estivesse verificada no
+momento da inicialização avaliada — para H2 (`target_month = init_date
++ 1 mês`), a linha do mês imediatamente anterior sempre tem
+`target_month_treino = init_date_avaliada`, um caso claro de leakage
+de verificação. Corrigida a regra para exigir SIMULTANEAMENTE
+`init_date_treino < init_date_avaliada` E `target_month_treino <
+init_date_avaliada` (a condição principal, por ser a disponibilidade
+da observação supervisionada). `scripts/cfsv2_emos_h2_viabilidade_
+warmup.py` foi atualizado e os números de viabilidade recalculados
+programaticamente (nunca hardcoded): primeira `init_date` elegível
+passa de `2003-01` para `2003-02`; previsões avaliáveis de 96 para
+**95**. A regra antiga incluiria indevidamente 215 linhas, somadas ao
+longo de toda a sequência de 240 avaliações. Nota pendente registrada
+(sem modificar nada) sobre a mesma auditoria ser necessária no Método
+3.4. Nenhum parâmetro EMOS real foi ajustado.
+
 ## 1. Escopo
 
 O EMOS será testado **exclusivamente para H2**. Motivo pré-registrado
@@ -376,20 +395,56 @@ impedir silenciosamente) se o ajuste real produzir:
 - `b ≈ 1` (comportamento próximo do benchmark de localização, seção 6);
 - `b > 1` (amplificação da anomalia do CFSv2).
 
-## 11. Treinamento causal
+## 11. Treinamento causal (revisão pós-`be31da1` — regra corrigida)
 
-Avaliação principal: **expanding-window**. Para cada `init_date` de H2
-avaliada:
+Avaliação principal: **expanding-window**. **Correção obrigatória** (a
+versão anterior deste protocolo exigia só a disponibilidade do
+*forecast*, não da *observação verificada* — ver o exemplo abaixo):
+como H2 tem `target_month = init_date + 1 mês`, uma linha de treino
+pode ter `init_date_treino < init_date_avaliada` e, ainda assim,
+`target_month_treino >= init_date_avaliada` — ou seja, a OBSERVAÇÃO
+daquela linha (a variável resposta do ajuste supervisionado) não
+estaria verificada no momento da inicialização avaliada. Usá-la seria
+leakage de verificação.
 
-- usar SOMENTE casos de treino com `init_date_treino < init_date_avaliada`
-  (nunca `<=`);
-- nunca usar a própria linha avaliada no ajuste;
-- nunca usar informação futura;
-- todos os componentes causais de cada linha histórica (climatologia do
-  modelo, climatologia observada, `spread_clim_modelo_mes`,
-  `erro_clim_sd_mes`) devem ser os que estavam REALMENTE disponíveis
-  naquela `init_date` — nunca recalculados com o benefício de dados
-  publicados depois.
+**Exemplo concreto (o mesmo detectado na revisão):** avaliando
+`init_date_avaliada = 2003-01`, a linha de treino com `init_date =
+2002-12` tem `target_month = 2003-01` — apesar de `2002-12 < 2003-01`
+(passa a condição antiga), a observação de janeiro/2003 não poderia
+ser conhecida no momento da inicialização de janeiro/2003. Essa linha
+NUNCA pode entrar no treino para essa avaliação.
+
+Uma linha histórica H2 só pode participar do treinamento de uma
+previsão avaliada quando, SIMULTANEAMENTE:
+
+1. `init_date_treino < init_date_avaliada` (disponibilidade do
+   *forecast* — auditoria estrutural redundante, nunca decide por si
+   só);
+2. `target_month_treino < init_date_avaliada` (disponibilidade da
+   *observação verificada* — condição PRINCIPAL para um ajuste
+   supervisionado, já que `ensemble_mean`/`ensemble_std` podem existir
+   desde a própria `init_date_treino`, mas `observacao`/`erro_
+   assinado`/CRPS daquela linha dependem do `target_month` já ter sido
+   concluído/disponível — as duas disponibilidades nunca devem ser
+   confundidas);
+3. todos os campos causais daquela própria linha são válidos
+   (climatologia do modelo, climatologia observada, `spread_clim_
+   modelo_mes`, `erro_clim_sd_mes` — seção 8).
+
+**Nunca** usar `target_month_treino <= init_date_avaliada` — isso
+ainda permitiria usar a observação do próprio mês em que a previsão
+avaliada está sendo inicializada. Como a data exata de disponibilidade
+intramensal (emissão do CFSv2 vs. publicação da observação CHIRPS)
+nunca foi demonstrada, a regra conservadora usa `<` estrito.
+
+Além disso: nunca usar a própria linha avaliada no ajuste; nunca usar
+informação futura; todos os componentes causais de cada linha
+histórica devem ser os que estavam REALMENTE disponíveis naquela
+`init_date` — nunca recalculados com o benefício de dados publicados
+depois (nenhuma linha histórica que PASSE pelo filtro acima é
+recalculada usando informação disponível na data da previsão atual —
+seus próprios campos causais permanecem os que eram, calculados no seu
+próprio momento histórico).
 
 ## 12. Warm-up (revisão, item 10 — definitivo)
 
@@ -409,24 +464,53 @@ N_TREINO_MINIMO_EMOS = 120 casos válidos
   metodológica motivada pelo resultado — exatamente o que o protocolo
   existe para evitar.
 
-**Viabilidade estrutural** (calculada na atividade anterior, SEM
-nenhum CRPS/skill do EMOS — script `cfsv2_emos_h2_viabilidade_
-warmup.py`, não refeito nesta revisão):
+**Viabilidade estrutural** (RECALCULADA nesta revisão com a regra
+causal corrigida da seção 11 — script `cfsv2_emos_h2_viabilidade_
+warmup.py`; os números abaixo substituem os da atividade anterior, que
+usavam a regra incompleta):
 
 | Quantidade | Valor |
 |---|---|
 | Inicializações de H2 no total | 240 |
 | Pares H2 válidos (causal, ambas climatologias + spread/erro mensais > 0) | 216 |
-| Primeira `init_date` elegível (`n_treino_disponivel >= 120`) | `2003-01` |
-| `n_treino_disponivel` nessa data | 120 |
-| **Previsões finais avaliáveis** | **96** (≈ 8 anos) |
+| Primeira `init_date` elegível (`n_treino_emos >= 120`, regra corrigida) | `2003-02` |
+| `n_treino_emos` nessa data | 120 |
+| `max_init_date_treino` nessa data | `2002-12` |
+| `max_target_month_treino` nessa data | `2003-01` (`< 2003-02`, auditado — seção 13) |
+| **Previsões finais avaliáveis** | **95** (≈ 7 anos e 11 meses) |
+| Linhas que a regra ANTIGA incluiria indevidamente (total, somado sobre todas as avaliações) | **215** |
+
+A correção moveu a primeira data elegível de `2003-01` para `2003-02`
+(um mês mais tarde) e reduziu as previsões avaliáveis de 96 para
+**95** — uma perda pequena em relação ao tamanho do problema que
+corrige: a regra antiga incluiria indevidamente, em algum ponto do
+treino, 215 linhas ao longo de toda a sequência de 240 avaliações
+(aproximadamente 1 linha indevida por avaliação — a do mês
+imediatamente anterior, cujo `target_month` sempre coincide com o mês
+da própria avaliação).
 
 **Limitação registrada explicitamente, para constar em qualquer
 relatório futuro de resultados:** a avaliação principal cobre apenas
-**96 previsões (≈ 8 anos)** — uma janela sensivelmente mais curta que
-as 240 inicializações totais de H2, porque o warm-up consome 120 dos
-216 pares válidos (~56%). Isso é o preço da escolha conservadora da
-seção 9, aceito deliberadamente, não uma falha a corrigir depois.
+**95 previsões (quase 8 anos)** — uma janela sensivelmente mais curta
+que as 240 inicializações totais de H2, porque o warm-up consome 120
+dos 216 pares válidos (~56%) MAIS a defasagem adicional de 1 mês
+exigida pela disponibilidade da observação verificada (seção 11).
+Isso é o preço da escolha conservadora da seção 9 e da correção
+causal da seção 11, aceito deliberadamente, não uma falha a corrigir
+depois.
+
+**Nota pendente sobre o Método 3.4 (revisão, item 11 — fora do escopo
+desta atividade):** a mesma distinção entre disponibilidade do
+*forecast* (`init_date`) e disponibilidade da *observação verificada*
+(`target_month`) identificada aqui para o EMOS H2 precisa, em
+princípio, ser auditada separadamente no MOS linear pooled por lead
+(Método 3.4) — o warm-up `N_TREINO_MINIMO_MOS = 120` daquele método
+também conta "pares válidos" por ordem de `init_date`, sem a condição
+explícita sobre `target_month`. **Esta atividade NÃO modifica o
+Método 3.4, não recalcula seus resultados, e não afirma que ele
+contém o mesmo problema** — registra apenas que a auditoria é uma
+pendência científica independente, a ser investigada separadamente,
+nunca assumida nem corrigida de forma automática aqui.
 
 ## 13. Casos avaliáveis e congelamento da amostra (revisão, item 11)
 
@@ -437,7 +521,9 @@ Uma `init_date` de H2 entra na avaliação principal se, e somente se:
 
 1. é H2 (`lead = 2`);
 2. tem par causal válido (seção 8);
-3. `n_treino_disponivel >= 120` (seção 12);
+3. `n_treino_emos >= 120` (seção 12 — regra corrigida: exige
+   `target_month_treino < init_date_avaliada`, não só `init_date_
+   treino < init_date_avaliada`; seção 11);
 4. a otimização do **EMOS completo** convergiu, usando só o treino
    causal disponível até essa data;
 5. a otimização do **EMOS `d=0`** convergiu, de forma INDEPENDENTE
@@ -453,10 +539,11 @@ Se isso ocorrer na base real, **STOP-ON-FAILURE** — a implementação
 não decide por conta própria o que fazer com uma data que quebra essa
 regra.
 
-**Esperado estrutural:** `N = 96` (seção 12). Se o número real de
-casos avaliáveis divergir disso na implementação (por exemplo, por
-falhas de convergência), a divergência precisa ser explicada antes de
-calcular qualquer CRPS/skill — nunca silenciosamente aceita.
+**Esperado estrutural:** `N = 95` (seção 12, número corrigido nesta
+revisão). Se o número real de casos avaliáveis divergir disso na
+implementação (por exemplo, por falhas de convergência), a divergência
+precisa ser explicada antes de calcular qualquer CRPS/skill — nunca
+silenciosamente aceita.
 
 ## 14. Estimação dos parâmetros
 
@@ -588,7 +675,7 @@ nfev       (número de avaliações da função objetivo)
 crps_final (valor do CRPS objetivo na solução)
 ```
 
-**Falha de convergência** (`success = False`) em QUALQUER um dos 96
+**Falha de convergência** (`success = False`) em QUALQUER um dos 95
 casos previstos (seção 13):
 
 ```
@@ -665,7 +752,7 @@ CRPSS_spread_dinamico = 1 - CRPS_EMOS_completo / CRPS_EMOS_d0
 ```
 
 com bootstrap em blocos por `target_ano` (seção 21), sobre os mesmos
-96 casos congelados (seção 13). Este é o teste mais direto da hipótese
+95 casos congelados (seção 13). Este é o teste mais direto da hipótese
 levantada pelo gate — e deve ser calculado e reportado explicitamente,
 nunca inferido indiretamente de outras comparações.
 
@@ -779,7 +866,7 @@ gate) — superá-lo não é uma barra suficiente.
 
 Sempre em blocos por `target_ano` (mesmo padrão de todo o projeto desde
 a 2C.3C). **Esclarecimento explícito desta revisão:** depois de gerar a
-sequência causal das 96 previsões out-of-sample (seção 13), o bootstrap
+sequência causal das 95 previsões out-of-sample (seção 13), o bootstrap
 principal reamostra `target_ano` **sobre essas previsões JÁ
 produzidas** — ele **não reajusta** o EMOS (nem completo, nem `d=0`)
 dentro de cada reamostra. Em outras palavras, o IC resultante é
@@ -826,6 +913,23 @@ linear (Método 3.4).
 
 A implementação futura deve incluir testes para:
 
+- **a regra causal de treinamento (seção 11) exige SIMULTANEAMENTE
+  `init_date_treino < init_date_avaliada` E `target_month_treino <
+  init_date_avaliada`** — já coberto estruturalmente em
+  `tests/test_cfsv2_emos_h2_viabilidade_warmup.py`
+  (`RegraCausalCorrigidaTestCase`, exemplo literal com 3 linhas:
+  `init=2002-11`→elegível, `init=2002-12`→excluída porque
+  `target=2003-01` coincide com a avaliação, `init=2003-01`→a própria
+  linha avaliada); a implementação do ajuste real do EMOS precisa
+  repetir essa mesma checagem sobre o conjunto de treino que de fato
+  constrói;
+- **anti-leakage por observação futura** — já coberto estruturalmente
+  (`AntiLeakagePorObservacaoFuturaTestCase`): alterar drasticamente
+  uma linha com `target_month >= init_date_avaliada` não pode mudar
+  nada no conjunto de treino/parâmetros resultantes para essa
+  avaliação; a implementação do ajuste real precisa de um teste
+  equivalente alterando a OBSERVAÇÃO (não só a validade estrutural)
+  dessa linha e confirmando que `a,b,c,d` ajustados não mudam;
 - censura em zero corretamente aplicada (`Y = max(0, Z)`);
 - probabilidade em `Y = 0` corretamente calculada por `F_Y(0) =
   Phi(-mu_latente/sigma)` (seções 2/3);
@@ -855,7 +959,7 @@ A implementação futura deve incluir testes para:
   converge, para o modelo completo OU para o `d=0`, e confirmação de
   que a data correspondente é tratada explicitamente (nunca excluída
   em silêncio — seção 13);
-- o N de casos avaliáveis bate com o valor estrutural esperado (`96`,
+- o N de casos avaliáveis bate com o valor estrutural esperado (`95`,
   seção 12) ou, se divergir, a implementação levanta e documenta a
   divergência antes de calcular qualquer CRPS/skill;
 - o bootstrap (seção 21) reamostra só as previsões JÁ produzidas —
@@ -890,7 +994,7 @@ A implementação futura deve incluir testes para:
   internamente (12/12 exclusões mensais positivas, 11/12 e 10/12 com
   IC>0).
 - O período histórico é curto: 240 inicializações de H2, 216 pares
-  válidos, e o warm-up definitivo de 120 (seção 12) deixa só **96
+  válidos, e o warm-up definitivo de 120 (seção 12) deixa só **95
   previsões avaliáveis (≈ 8 anos)** — uma janela sensivelmente curta
   para inferência probabilística robusta. Isso não foi reduzido para
   aumentar a amostra, e deve ser comunicado junto com qualquer
@@ -919,14 +1023,32 @@ A implementação futura deve incluir testes para:
 - alteração do pipeline operacional;
 - alteração do dashboard.
 
-**Realizado nesta revisão** (e só isso, além deste documento):
+**Realizado em revisões anteriores deste protocolo** (verificação
+matemática pura, nenhum dado real de H2 usado para ajustar nada):
 verificação numérica da fórmula fechada do CRPS contra integração
 direta, usando exclusivamente valores sintéticos de `mu_latente`/
-`sigma`/`y` (seção 15) — matemática pura, nenhum dado real de H2
-envolvido. Os números estruturais de viabilidade (216 pares válidos,
-warm-up em `2003-01`, 96 previsões avaliáveis — seções 8/12) são os
-MESMOS já calculados na atividade anterior, não recalculados aqui.
+`sigma`/`y` (seção 15).
 
-Suíte de testes existente e `scripts/verificar_dashboard.py` foram
-executados só para confirmar ausência de regressão — não para validar
-nenhum resultado novo de EMOS (que não existe nesta atividade).
+**Realizado nesta revisão (correção de leakage observacional, pós-
+commit `be31da1`):** a regra de treinamento causal (seção 11) estava
+incompleta — exigia só `init_date_treino < init_date_avaliada`, sem
+checar `target_month_treino < init_date_avaliada` (a disponibilidade
+da OBSERVAÇÃO verificada, indispensável para um ajuste supervisionado).
+Isso foi corrigido em `scripts/cfsv2_emos_h2_viabilidade_warmup.py` —
+**ainda um diagnóstico puramente estrutural, sem nenhum CRPS/skill do
+EMOS** — e os números de viabilidade (seções 8/12) foram
+RECALCULADOS programaticamente com a regra corrigida, nunca
+hardcoded: primeira `init_date` elegível `2003-02` (antes `2003-01`),
+120 pares de treino disponíveis nessa data, **95** previsões
+avaliáveis (antes 96). A auditoria `max_target_month_treino <
+init_date_avaliada` passa para todas as 95 previsões avaliáveis
+(`auditoria_sem_leakage_observacional.ok = True`). Nenhum parâmetro
+`a/b/c/d` foi ajustado; nenhuma probabilidade foi produzida.
+
+Suíte de testes existente (mais os novos testes desta revisão —
+exemplo literal de elegibilidade causal, demonstração numérica do
+problema da regra antiga, e cenário sintético de anti-leakage por
+observação futura) e `scripts/verificar_dashboard.py` foram
+executados para confirmar ausência de regressão e a correção em si —
+não para validar nenhum resultado novo de EMOS (que não existe nesta
+atividade).

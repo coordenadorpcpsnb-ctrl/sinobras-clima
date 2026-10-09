@@ -5,10 +5,17 @@
     "n_treino_minimo_emos": 120,
     "n_total_inicializacoes_h2": 240,
     "n_pares_validos_total": 216,
-    "primeira_init_date_elegivel": "2003-01",
-    "n_treino_disponivel_nessa_data": 120,
-    "n_previsoes_avaliaveis_final": 96,
-    "nota": "Contagem puramente estrutural — nenhum CRPS/skill do EMOS foi calculado (item 10 do protocolo). Warm-up NÃO foi reduzido automaticamente mesmo que encurte a avaliação — qualquer ajuste exige revisão (item 10)."
+    "primeira_init_date_elegivel": "2003-02",
+    "n_treino_emos_nessa_data": 120,
+    "max_init_date_treino_nessa_data": "2002-12",
+    "max_target_month_treino_nessa_data": "2003-01",
+    "n_previsoes_avaliaveis_final": 95,
+    "auditoria_sem_leakage_observacional": {
+      "ok": true,
+      "violacoes": []
+    },
+    "n_linhas_indevidamente_incluidas_pela_regra_antiga_total": 215,
+    "nota": "Contagem puramente estrutural — nenhum CRPS/skill do EMOS foi calculado (item 10 do protocolo). Warm-up NÃO foi reduzido automaticamente mesmo que encurte a avaliação — qualquer ajuste exige revisão (item 10). Regra causal corrigida (revisão pós-be31da1): exige target_month_treino < init_date_avaliada, não só init_date_treino < init_date_avaliada."
   },
   "gate_viabilidade_escala": {
     "n_casos_validos_checados": 216,
@@ -129,5 +136,5 @@
   "nenhum_parametro_emos_ajustado": true,
   "nenhum_crps_emos_calculado": true,
   "nenhuma_probabilidade_calibrada_produzida": true,
-  "data_geracao_utc": "2026-10-08T19:30:40.097424+00:00"
+  "data_geracao_utc": "2026-10-09T16:14:10.419781+00:00"
 }

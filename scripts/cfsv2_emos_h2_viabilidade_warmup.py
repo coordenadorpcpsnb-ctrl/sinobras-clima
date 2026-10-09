@@ -7,9 +7,9 @@ Calcula SOMENTE a viabilidade ESTRUTURAL do warm-up proposto
 (`N_TREINO_MINIMO_EMOS = 120` pares válidos) e o gate de viabilidade
 da escala (item 6): quantos pares H2 válidos existem ao longo do
 tempo, a primeira `init_date` que alcançaria 120 pares de treino
-causal, e o número final de previsões avaliáveis. NÃO ajusta `a/b/c/d`,
-NÃO calcula CRPS/skill do EMOS, NÃO produz probabilidades calibradas —
-ver docs/nmme-fase2c3d-protocolo-emos-h2.md.
+REALMENTE verificáveis, e o número final de previsões avaliáveis. NÃO
+ajusta `a/b/c/d`, NÃO calcula CRPS/skill do EMOS, NÃO produz
+probabilidades calibradas — ver docs/nmme-fase2c3d-protocolo-emos-h2.md.
 
 Um "par H2 válido" exige, na própria `init_date` (tudo causal):
     - `climatologia_modelo_raw` (clim_modelo_media) disponível;
@@ -20,6 +20,25 @@ Um "par H2 válido" exige, na própria `init_date` (tudo causal):
     - `erro_clim_sd_mes` disponível e > 0 (desvio-padrão EXPANSÍVEL
       causal de `erro_assinado`, mesmo padrão, usado como escala base
       da dispersão — item 5 do protocolo).
+
+CORREÇÃO DE LEAKAGE OBSERVACIONAL (revisão pós-commit `be31da1`): como
+H2 tem `target_month = init_date + 1 mês`, uma linha de treino com
+`init_date_treino < init_date_avaliada` pode ainda assim ter
+`target_month_treino >= init_date_avaliada` — ou seja, sua observação
+(a variável resposta supervisionada: `obs_prec_mm`/`erro_assinado`,
+nunca `ensemble_mean`/`ensemble_std`, que existem desde a própria
+`init_date_treino`) não estaria verificada/disponível no momento da
+inicialização avaliada. Usar essa linha no ajuste seria leakage de
+verificação. Por isso, uma linha só entra no treino do EMOS se,
+SIMULTANEAMENTE:
+    1. `init_date_treino < init_date_avaliada`;
+    2. `target_month_treino < init_date_avaliada` (condição PRINCIPAL —
+       é a disponibilidade da observação verificada que importa para
+       um ajuste supervisionado, não só a disponibilidade do forecast).
+Nunca `target_month_treino <= init_date_avaliada` (ainda permitiria
+usar a observação do próprio mês da inicialização avaliada — a data
+exata de disponibilidade intramensal não foi demonstrada, então a
+regra conservadora usa `<` estrito).
 
 Roda com:
     python scripts/cfsv2_emos_h2_viabilidade_warmup.py --executar
@@ -97,8 +116,8 @@ def construir_pares_h2_com_validade(tabela_ensemble, base_enriquecida):
             and erro_clim_sd_mes is not None and erro_clim_sd_mes > 0
         )
         linhas.append({
-            'init_date': init_date, 'target_mes': int(row['target_mes']),
-            'target_ano': int(row['target_ano']),
+            'init_date': init_date, 'target_month': row['target_month'],
+            'target_mes': int(row['target_mes']), 'target_ano': int(row['target_ano']),
             'clim_modelo_media_disponivel': bool(pd.notna(clim_modelo_media)),
             'clim_media_disponivel': bool(pd.notna(clim_media)),
             'spread_clim_modelo_mes': spread_clim_modelo_mes,
@@ -108,31 +127,113 @@ def construir_pares_h2_com_validade(tabela_ensemble, base_enriquecida):
     return pd.DataFrame(linhas)
 
 
-def viabilidade_estrutural_h2(pares, n_treino_minimo=N_TREINO_MINIMO_EMOS):
-    """Item 10 do protocolo — SOMENTE contagens estruturais: n_treino
-    disponível (pares válidos ANTES de cada linha, nunca incluindo a
-    própria linha), primeira `init_date` que alcança o warm-up, e
-    quantas previsões seriam avaliáveis a partir daí (precisam
-    TAMBÉM ser válidas na própria linha — mesma exigência do Método
-    3.4). Nenhum CRPS/skill é calculado aqui."""
-    n_treino_disponivel = pares['valido'].shift(1, fill_value=False).astype(int).cumsum()
-    pares = pares.assign(n_treino_disponivel=n_treino_disponivel)
+def _contar_treino_emos_por_linha(pares):
+    """Núcleo ÚNICO da regra causal corrigida (item 2/4 da revisão) —
+    para cada `init_date_avaliada`, conta as linhas de treino válidas
+    que satisfazem SIMULTANEAMENTE `init_date_treino <
+    init_date_avaliada` E `target_month_treino < init_date_avaliada`
+    (a condição de disponibilidade da OBSERVAÇÃO verificada, principal
+    para um ajuste supervisionado — nunca só a disponibilidade do
+    forecast). Implementado por comparação explícita de `Period`,
+    nunca por deslocamento posicional (`shift`), que assumiria
+    implicitamente uma defasagem fixa entre `init_date` e
+    `target_month` sem checar."""
+    p_init = pd.PeriodIndex(pares['init_date'], freq='M')
+    p_target = pd.PeriodIndex(pares['target_month'], freq='M')
+    valido = pares['valido'].to_numpy()
 
-    elegiveis = pares[pares['n_treino_disponivel'] >= n_treino_minimo]
+    n_treino_emos, max_init_treino, max_target_treino = [], [], []
+    for i in range(len(pares)):
+        avaliada = p_init[i]
+        mascara = valido & (p_init < avaliada) & (p_target < avaliada)
+        n_treino_emos.append(int(mascara.sum()))
+        if mascara.any():
+            max_init_treino.append(p_init[mascara].max())
+            max_target_treino.append(p_target[mascara].max())
+        else:
+            max_init_treino.append(None)
+            max_target_treino.append(None)
+
+    return pares.assign(
+        n_treino_emos=n_treino_emos,
+        max_init_date_treino=[str(x) if x is not None else None for x in max_init_treino],
+        max_target_month_treino=[str(x) if x is not None else None for x in max_target_treino],
+        # auditoria estrutural REDUNDANTE (item 4) — nunca decide por si só,
+        # só confirma que a condição mais fraca também se sustenta.
+        _init_date_treino_ok_redundante=[
+            (m is None) or (pd.Period(m, freq='M') < p_init[i]) for i, m in enumerate(max_init_treino)
+        ],
+    )
+
+
+def _auditar_sem_leakage_observacional(pares_com_contagem):
+    """Item 6 da revisão — para toda linha que entraria na avaliação
+    principal (ver `viabilidade_estrutural_h2`), confirma
+    `max_target_month_treino < init_date_avaliada`. Nunca assumido —
+    verificado linha a linha; qualquer violação é STOP-ON-FAILURE."""
+    violacoes = []
+    p_init = pd.PeriodIndex(pares_com_contagem['init_date'], freq='M')
+    for i, row in pares_com_contagem.reset_index(drop=True).iterrows():
+        if row['max_target_month_treino'] is None:
+            continue
+        if not (pd.Period(row['max_target_month_treino'], freq='M') < p_init[i]):
+            violacoes.append({'init_date_avaliada': row['init_date'],
+                               'max_target_month_treino': row['max_target_month_treino']})
+    return {'ok': len(violacoes) == 0, 'violacoes': violacoes}
+
+
+def viabilidade_estrutural_h2(pares, n_treino_minimo=N_TREINO_MINIMO_EMOS):
+    """Item 4/10 da revisão — SOMENTE contagens estruturais, com a
+    regra causal CORRIGIDA: `n_treino_emos` exige
+    `target_month_treino < init_date_avaliada` (disponibilidade da
+    OBSERVAÇÃO verificada), não só `init_date_treino <
+    init_date_avaliada` (disponibilidade do forecast — insuficiente
+    para um ajuste supervisionado). Primeira `init_date` que alcança o
+    warm-up, e quantas previsões seriam avaliáveis a partir daí
+    (precisam TAMBÉM ser válidas na própria linha). Nenhum CRPS/skill
+    é calculado aqui — e o número relatado NUNCA é assumido a priori,
+    sempre recalculado programaticamente a partir da regra acima."""
+    pares = _contar_treino_emos_por_linha(pares)
+
+    elegiveis = pares[pares['n_treino_emos'] >= n_treino_minimo]
     primeira = elegiveis.iloc[0] if len(elegiveis) else None
     avaliaveis = elegiveis[elegiveis['valido']]
+
+    auditoria_leakage = _auditar_sem_leakage_observacional(avaliaveis)
+
+    # Diagnóstico comparativo (item 4 do pedido de revisão): quantas
+    # linhas a regra ANTIGA (só init_date_treino < init_date_avaliada,
+    # via posição imediatamente anterior) teria incluído indevidamente
+    # — nunca usado para decidir nada, só para registrar o tamanho do
+    # problema corrigido.
+    p_init = pd.PeriodIndex(pares['init_date'], freq='M')
+    p_target = pd.PeriodIndex(pares['target_month'], freq='M')
+    valido = pares['valido'].to_numpy()
+    n_linhas_indevidas_pela_regra_antiga = 0
+    for i in range(len(pares)):
+        avaliada = p_init[i]
+        indevida = valido & (p_init < avaliada) & ~(p_target < avaliada)
+        n_linhas_indevidas_pela_regra_antiga += int(indevida.sum())
 
     return {
         'n_treino_minimo_emos': n_treino_minimo,
         'n_total_inicializacoes_h2': int(len(pares)),
         'n_pares_validos_total': int(pares['valido'].sum()),
         'primeira_init_date_elegivel': primeira['init_date'] if primeira is not None else None,
-        'n_treino_disponivel_nessa_data': (int(primeira['n_treino_disponivel'])
-                                            if primeira is not None else None),
+        'n_treino_emos_nessa_data': (int(primeira['n_treino_emos'])
+                                      if primeira is not None else None),
+        'max_init_date_treino_nessa_data': (primeira['max_init_date_treino']
+                                             if primeira is not None else None),
+        'max_target_month_treino_nessa_data': (primeira['max_target_month_treino']
+                                                if primeira is not None else None),
         'n_previsoes_avaliaveis_final': int(len(avaliaveis)),
+        'auditoria_sem_leakage_observacional': auditoria_leakage,
+        'n_linhas_indevidamente_incluidas_pela_regra_antiga_total': n_linhas_indevidas_pela_regra_antiga,
         'nota': 'Contagem puramente estrutural — nenhum CRPS/skill do EMOS foi calculado '
                 '(item 10 do protocolo). Warm-up NÃO foi reduzido automaticamente mesmo que '
-                'encurte a avaliação — qualquer ajuste exige revisão (item 10).',
+                'encurte a avaliação — qualquer ajuste exige revisão (item 10). Regra causal '
+                'corrigida (revisão pós-be31da1): exige target_month_treino < '
+                'init_date_avaliada, não só init_date_treino < init_date_avaliada.',
     }
 
 
@@ -183,10 +284,17 @@ def executar_viabilidade():
     base_enriquecida = v._enriquecer_com_climatologia(base, chirps_df)
     pares = construir_pares_h2_com_validade(tabela_ensemble, base_enriquecida)
 
+    viabilidade = viabilidade_estrutural_h2(pares)
+    if not viabilidade['auditoria_sem_leakage_observacional']['ok']:
+        return {'STOP_ON_FAILURE': True,
+                'motivo': 'leakage observacional detectado — alguma previsão avaliável tem '
+                          'max_target_month_treino >= init_date_avaliada',
+                'detalhe': viabilidade['auditoria_sem_leakage_observacional']}
+
     resultado = {
         'STOP_ON_FAILURE': False,
         'metodo': 'protocolo_emos_h2_viabilidade_estrutural_metodo_3_5',
-        'viabilidade_estrutural_warmup': viabilidade_estrutural_h2(pares),
+        'viabilidade_estrutural_warmup': viabilidade,
         'gate_viabilidade_escala': gate_viabilidade_escala(pares),
         'nenhum_parametro_emos_ajustado': True,
         'nenhum_crps_emos_calculado': True,
