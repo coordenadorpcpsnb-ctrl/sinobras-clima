@@ -33,6 +33,24 @@ otimizador únicos, fixados agora; regra de congelamento da amostra
 avaliável; e convenção única de PIT (mid-PIT, determinística) para a
 massa em zero.
 
+**Última revisão exclusivamente documental (commit `68a142a` → esta
+revisão) — nenhum parâmetro real ajustado:** corrigida uma inversão de
+sinal na seção 6 (`E[Y] >= mu_latente` sempre, nunca o contrário —
+verificado numericamente); documentado explicitamente o caso de tercis
+`t33 = t67 = 0` na seção 19, com o alerta de que `P(seco)` e `P(umido)`
+nunca podem ser calculados como complementos independentes
+(duplicaria a massa em `Y=0`); adicionado bound NUMÉRICO (não
+científico) `gamma_c ∈ [-20, 20]` na seção 10, para evitar underflow/
+overflow de `c = exp(gamma_c)` em ponto flutuante — com isso, removida
+a proteção genérica `1e-12` em `sigma`, substituída por STOP-ON-FAILURE
+caso `sigma` ainda resulte inválido; e fixados, na seção 16, os vetores
+de parâmetros/bounds completos (`theta`/`theta_d0`), a configuração
+exata do `L-BFGS-B` (`maxiter=2000`, `ftol=1e-10`, `gtol=1e-6`), o
+registro obrigatório de `success/status/message/nit/nfev/crps_final`
+por ajuste, e um critério de sanidade adicional da solução
+(`status_emos = 'solucao_numericamente_invalida'`) além da simples
+convergência reportada pelo `scipy`.
+
 ## 1. Escopo
 
 O EMOS será testado **exclusivamente para H2**. Motivo pré-registrado
@@ -177,17 +195,30 @@ que é exatamente o `benchmark_anomalia_reconstruida` já definido e usado
 no Método 3.4 — a mesma identidade algébrica, mesmo nome, nunca uma
 segunda fórmula paralela.
 
-**Precisão exigida pela revisão:** essa equivalência é do **parâmetro
-de localização LATENTE**, não da previsão final. **Não afirmar que
-`E[Y] = benchmark_anomalia_reconstruida`** — depois da censura em zero,
-`E[Y] = mu_latente * Phi(k) + sigma * phi(k) != mu_latente` em geral
-(as duas quantidades só coincidiriam no limite degenerado `sigma → 0`
-ou `k → ∞`, que não ocorre na prática). A leitura correta do benchmark
-é: "o parâmetro de localização latente do EMOS, sem ajuste nenhum,
-coincide com a reconstrução causal pela anomalia" — a média preditiva
-final (`E[Y]`) é sempre menor que `mu_latente` em valor esperado,
-porque a censura em zero "puxa" a massa negativa da Normal latente
-para cima, em vez de descartá-la.
+**Precisão exigida pela revisão (correção matemática — a versão
+anterior deste documento tinha o sinal invertido):** essa equivalência
+é do **parâmetro de localização LATENTE**, não da previsão final.
+**Não afirmar que `E[Y] = benchmark_anomalia_reconstruida`.** Como
+`Y = max(0, Z) >= Z` ponto a ponto, segue que:
+
+```
+E[Y] = E[max(0,Z)] >= E[Z] = mu_latente
+```
+
+ou seja, `E[Y] >= mu_latente` **sempre**, com `E[Y] > mu_latente`
+estritamente sempre que `P(Z < 0) > 0` (o caso típico — a igualdade só
+ocorre no limite degenerado em que essa probabilidade tende a zero,
+equivalente a `k → ∞`). Verificado numericamente nesta revisão com
+`E[Y] = mu_latente*Phi(k) + sigma*phi(k)` para vários pares
+`(mu_latente, sigma)` — `E[Y] - mu_latente` nunca foi negativo em
+nenhum caso testado.
+
+A leitura correta do benchmark é: "o parâmetro de localização latente
+do EMOS, sem ajuste nenhum, coincide com a reconstrução causal pela
+anomalia" — mas **a censura em zero desloca para cima a média em
+relação à média da Normal latente, porque a massa negativa é
+concentrada em zero** (em vez de ser descartada, o que teria puxado a
+média para baixo). Nunca o inverso.
 
 ## 7. Dispersão — evitar confundimento sazonal
 
@@ -298,8 +329,8 @@ inválidos (divisão por zero em `z = (y-mu_latente)/sigma`). Corrigido
 com reparametrização:
 
 ```
-gamma_c irrestrito (qualquer real)
-c       = exp(gamma_c)           →  c > 0 ESTRITAMENTE, nunca c = 0
+gamma_c ∈ [-20, 20]               →  bound NUMÉRICO (não científico), ver abaixo
+c       = exp(gamma_c)            →  c > 0 ESTRITAMENTE, nunca c = 0
 d      >= 0                       →  bound direto no otimizador (seção 16)
 
 sigma = erro_clim_sd_mes * sqrt(c + d * spread_relativo²)
@@ -311,13 +342,30 @@ exponencial (nunca zero, para nenhum `gamma_c` finito), `sigma > 0` é
 **garantido algebricamente** — nunca dependente de um piso numérico
 escolhido por desempenho.
 
-**Proteção numérica (nunca parâmetro científico):** pode existir um
-termo extremamente pequeno (ex.: `1e-12`) somado dentro da raiz só como
-salvaguarda de ponto flutuante contra instabilidade numérica da CDF/CRPS
-em casos extremos de avaliação computacional — isso deve ser
-documentado explicitamente no código, exatamente como "proteção de
-ponto flutuante", e **nunca** apresentado como um piso científico ou
-ajustado para melhorar desempenho.
+**Bound numérico em `gamma_c` (revisão, item 3 — evita underflow, não é
+restrição científica):** matematicamente, `exp(gamma_c) > 0` para
+qualquer `gamma_c` real finito. Mas em aritmética de ponto flutuante,
+valores suficientemente negativos de `gamma_c` produzem underflow
+numérico para `0.0`. Por isso, pré-registrado:
+
+```
+gamma_c ∈ [-20, 20]
+```
+
+o que corresponde a `c = exp(gamma_c)` entre aproximadamente
+`2,06e-9` e `4,85e8` — uma faixa deliberadamente MUITO ampla, não
+escolhida por desempenho, com o único objetivo de evitar underflow
+(limite inferior) e overflow/extremos numéricos desnecessários (limite
+superior). **Nunca** interpretar este bound como uma restrição
+científica sobre a dispersão — é proteção numérica do otimizador,
+documentada como tal.
+
+Com esse bound em vigor, **não** somar nenhum termo pequeno (como
+`1e-12`) a `sigma` na implementação normal — o bound em `gamma_c` já
+torna isso desnecessário. Se, ainda assim, `sigma` resultar `<= 0` ou
+não finito em qualquer linha (o que só poderia indicar um erro de
+implementação, nunca um caso válido sob este protocolo): **STOP-ON-
+FAILURE** imediato, nunca uma correção numérica silenciosa.
 
 Para `a` e `b`, **não** impor truncamento arbitrário. Registrar (nunca
 impedir silenciosamente) se o ajuste real produzir:
@@ -460,44 +508,119 @@ para os mesmos 5 tipos de caso, com tolerância pré-definida (ex.:
 `1e-6`) fixada ANTES de rodar o teste — nunca ajustada depois de ver se
 passa. Ver seção 24.
 
-## 16. Otimização (revisão, itens 8/9)
+## 16. Otimização (revisão, itens 4/5/6/7/8/9)
 
-Fixado explicitamente ANTES da implementação real:
+Fixado explicitamente ANTES da implementação real.
+
+### 16.1. Vetores de parâmetros e bounds
+
+**Modelo completo:**
+
+```
+theta = [a, b, gamma_c, d]
+
+bounds:
+  a:        sem bound
+  b:        sem bound
+  gamma_c:  [-20, 20]      (bound NUMÉRICO — seção 10, nunca científico)
+  d:        [0, +inf)
+
+inicialização:
+  a0 = 0, b0 = 1, gamma_c0 = 0, d0 = 0,1
+```
+
+**Modelo restrito `d=0`:**
+
+```
+theta_d0 = [a_d0, b_d0, gamma_c_d0]     (d NÃO entra no vetor de otimização)
+
+bounds:
+  a_d0:        sem bound
+  b_d0:        sem bound
+  gamma_c_d0:  [-20, 20]
+
+inicialização:
+  a_d0=0, b_d0=1, gamma_c_d0=0
+```
+
+`d` é fixado em `0` por construção do modelo restrito (nunca um
+parâmetro livre nesse modelo) — os dois modelos continuam sendo
+ajustados de forma independente (seção 17), cada um com seu próprio
+vetor `theta`/`theta_d0` e sua própria chamada ao otimizador.
+
+### 16.2. Algoritmo e configuração
 
 **Algoritmo único:** `scipy.optimize.minimize(method='L-BFGS-B')` —
-suporta os `bounds` necessários (`d >= 0`; `gamma_c`, `a`, `b`
-irrestritos) sem exigir um bound explícito em `c` (a reparametrização
-`c = exp(gamma_c)` da seção 10 já garante `c > 0` sem bound). **Não**
-testar vários otimizadores e escolher o que produz o melhor score
-depois de ver os resultados — um único algoritmo, decidido agora.
+suporta nativamente os `bounds` acima. **Não** testar vários
+otimizadores e escolher o que produz o melhor score depois de ver os
+resultados — um único algoritmo, decidido agora, sem fallback
+automático para outro método em caso de falha.
 
-**Inicialização determinística, igual para TODAS as datas causais e
-para os dois modelos onde aplicável:**
+**Configuração fixada agora** (mesmos valores para TODAS as datas
+causais e para os dois modelos):
 
-- Localização: `a0 = 0`, `b0 = 1`.
-- Dispersão, EMOS completo: `gamma_c0 = 0` (ou seja, `c0 = 1`), `d0 = 0,1`.
-- Dispersão, EMOS `d=0`: `gamma_c0 = 0` (`c0 = 1`); `d` fica FIXO em 0
-  durante toda a otimização (nunca um parâmetro livre nesse modelo —
-  ver seção 17).
+```
+maxiter = 2000
+ftol    = 1e-10
+gtol    = 1e-6
+```
 
-**Não** experimentar múltiplos pontos de partida e selecionar o de
-menor CRPS depois de ver os resultados. Se problemas numéricos reais
-exigirem multi-start, isso precisa ser aprovado ANTES da implementação,
-com todos os pontos de partida fixados a priori (nunca escolhidos
-post-hoc).
+### 16.3. Inicialização determinística
 
-**Convergência:** tolerância, `maxiter` e critério de convergência
-devem ser fixados e documentados no código da implementação (valores
-exatos não fazem parte deste protocolo, mas precisam estar decididos
-antes de rodar contra dados reais). Falha de convergência:
+Mesma inicialização (seção 16.1) para TODAS as datas causais e para os
+dois modelos. **Não** experimentar múltiplos pontos de partida e
+selecionar o de menor CRPS depois de ver os resultados. Se problemas
+numéricos reais exigirem multi-start, isso precisa ser aprovado ANTES
+da implementação, com todos os pontos de partida fixados a priori
+(nunca escolhidos post-hoc).
+
+### 16.4. Registro obrigatório de cada ajuste
+
+Para CADA ajuste (cada data causal × cada um dos dois modelos),
+registrar na saída:
+
+```
+success    (bool, retornado pelo scipy)
+status     (int, retornado pelo scipy)
+message    (str, retornado pelo scipy)
+nit        (número de iterações)
+nfev       (número de avaliações da função objetivo)
+crps_final (valor do CRPS objetivo na solução)
+```
+
+**Falha de convergência** (`success = False`) em QUALQUER um dos 96
+casos previstos (seção 13):
 
 ```
 status_emos = 'otimizacao_nao_convergiu'
 ```
 
 e **STOP-ON-FAILURE** na base real antes de qualquer conclusão
-científica — nunca trocar de algoritmo automaticamente para contornar
-uma falha de convergência.
+científica — nunca trocar de algoritmo automaticamente, nunca excluir
+silenciosamente a data problemática.
+
+### 16.5. Critério adicional de sanidade da solução (revisão, item 7)
+
+Mesmo quando `success = True`, verificar adicionalmente, antes de
+aceitar a solução:
+
+- todos os parâmetros do vetor (`theta` ou `theta_d0`) são finitos;
+- `gamma_c` (ou `gamma_c_d0`) está dentro do bound `[-20, 20]`;
+- `d >= 0` (modelo completo);
+- `c = exp(gamma_c) > 0` (verificação direta, nunca assumida);
+- `sigma > 0` e finito, calculado para TODAS as linhas de treino
+  usadas no ajuste — nunca só na própria linha avaliada;
+- o CRPS objetivo final é finito.
+
+Se qualquer uma dessas condições falhar (mesmo com `success = True`
+reportado pelo `scipy`):
+
+```
+status_emos = 'solucao_numericamente_invalida'
+```
+
+e **STOP-ON-FAILURE** — uma convergência reportada pelo otimizador
+nunca é aceita sem essa checagem adicional.
 
 ## 17. Benchmarks probabilísticos obrigatórios (revisão, item 7)
 
@@ -561,16 +684,46 @@ paralela por métrica:
 - CRPSS vs. RAW;
 - CRPSS vs. climatologia causal;
 - CRPSS vs. EMOS `d=0` (seção 18 — o teste central);
-- **Brier Score por tercil** — reaproveitar EXATAMENTE os limiares `t33`/
-  `t67` já causais e aprovados (2C.3C/gate), nunca uma nova convenção de
-  tercis para o EMOS. Probabilidades calculadas a partir da `F_Y` única
-  (seção 3): `P(seco) = F_Y(t33)`, `P(umido) = 1 - F_Y(t67)`,
-  `P(normal) = 1 - P(seco) - P(umido)`. **Atenção explícita a meses
-  secos com `t33 = 0` ou muito próximo de zero** (possível, já que
-  `Y=0` tem massa própria): garantir que as três categorias não sejam
-  contadas duplamente (a massa em `Y=0` precisa cair inteiramente em
-  UMA categoria, nunca dividida), que as três probabilidades somem 1,
-  e que o Brier Score permaneça finito — caso sintético dedicado na
+- **Brier Score por tercil** (revisão, item 2 — convenção documentada
+  exatamente) — reaproveitar LITERALMENTE a função já aprovada
+  `categoria_tercil` da 2C.3C, nunca uma nova convenção de tercis para
+  o EMOS:
+  ```
+  valor <= t33  → seco
+  senão, valor >= t67  → umido
+  senão → normal
+  ```
+  (precedência sequencial: o teste de `seco` é avaliado primeiro; um
+  valor só chega a ser testado contra `t67` se já tiver falhado o
+  teste de `seco`). Probabilidades calculadas a partir da ÚNICA `F_Y`
+  (seção 3), respeitando essa MESMA precedência:
+  ```
+  P(seco)   = F_Y(t33)
+  P(umido)  = 1 - F_Y(t67)
+  P(normal) = 1 - P(seco) - P(umido)
+  ```
+  **Nunca** calcular `P(seco) = P(Y<=0)` e, independentemente,
+  `P(umido) = P(Y>=0)` como se fossem complementares — no caso
+  `t67 = 0`, `P(Y>=0) = 1` sempre (todo o suporte de `Y` é `>=0`), o
+  que duplicaria a massa discreta em `Y=0` em AMBAS as categorias
+  (soma > 1). A fórmula correta usa `1 - F_Y(t67)` (o complemento da
+  CDF, não `P(Y>=t67)` calculado à parte), que nunca duplica a massa.
+
+  **Caso explícito `t33 = t67 = 0`** (mês seco onde o tercil inferior e
+  o superior colapsam em zero — possível, já que `Y=0` tem massa
+  própria): pela precedência da regra, TODO valor `Y=0` cai em `seco`
+  (passa o primeiro teste `Y<=0`) e nenhum valor cai em `umido` por
+  esse caminho ser zero; valores `Y>0` falham o teste de `seco` e
+  passam o teste `Y>=t67=0` (sempre verdadeiro para `Y>0`), caindo
+  inteiramente em `umido`. Resultado:
+  ```
+  P(seco)   = F_Y(0)
+  P(umido)  = 1 - F_Y(0)
+  P(normal) = 1 - F_Y(0) - (1 - F_Y(0)) = 0
+  ```
+  As três categorias permanecem mutuamente exclusivas e somam
+  exatamente 1 (`P(normal) = 0`, nunca indefinido ou negativo), e o
+  Brier Score permanece finito — caso sintético dedicado na
   seção 24.
 - BSS (mesma referência nominal `mean((1/3-o_i)²)` já aprovada, nunca a
   constante `2/9`);
@@ -683,10 +836,15 @@ A implementação futura deve incluir testes para:
   pequeno; `sigma` grande) — a verificação numérica desta atividade
   (seção 15) não substitui este teste automatizado, só confirma que a
   fórmula escolhida é razoável antes de codificá-la;
-- `c = exp(gamma_c)` nunca produz `c <= 0` para nenhum `gamma_c` finito
-  avaliado; `d >= 0` sempre respeitado (nunca violado silenciosamente
-  pelo otimizador); `sigma` sempre estritamente positivo, linha a
-  linha, mesmo em casos extremos de `gamma_c`/`d` (seção 10);
+- `gamma_c` nunca sai do bound `[-20, 20]` (seção 10); `c = exp(gamma_c)`
+  nunca produz `c <= 0` nem underflow para `0.0` dentro desse bound;
+  `d >= 0` sempre respeitado (nunca violado silenciosamente pelo
+  otimizador); `sigma` sempre estritamente positivo e finito, linha a
+  linha, mesmo nos extremos do bound de `gamma_c`;
+- `status_emos = 'otimizacao_nao_convergiu'` e `status_emos =
+  'solucao_numericamente_invalida'` (seção 16.4/16.5) disparam
+  STOP-ON-FAILURE corretamente em casos sintéticos construídos para
+  cada um;
 - **os parâmetros `a_d0, b_d0, c_d0` do modelo `d=0` PODEM (e devem,
   tipicamente) diferir dos parâmetros `a, b, c` do modelo completo** —
   teste que compara os dois conjuntos de parâmetros e levanta alerta se
