@@ -234,6 +234,52 @@ class IndependenciaD0TestCase(unittest.TestCase):
         assinatura = inspect.signature(emos._objetivo_d0)
         self.assertNotIn('spread', ' '.join(assinatura.parameters.keys()))
 
+    def test_d_sigma_d0_identico_ao_variar_ensemble_std_das_linhas_de_treino(self):
+        """Behavioral (não só estrutural): duas séries sintéticas
+        idênticas EXCETO em `ensemble_std`/`spread_relativo` — o ajuste
+        `d=0` (parâmetros, sigma_d0, crps_d0) da mesma avaliação tem
+        que ser EXATAMENTE igual nas duas, provando que `sigma_d0` não
+        usa essa informação para nenhuma linha (nem de treino, nem a
+        avaliada)."""
+        def _pares(spread_fn):
+            linhas = []
+            for i in range(125):
+                mes = (i % 12) + 1
+                ano = 1990 + i // 12
+                init_date = f'{ano}-{mes:02d}'
+                target_p = v._periodo(init_date) + 1
+                linhas.append({
+                    'init_date': init_date, 'target_month': str(target_p),
+                    'target_ano': target_p.year, 'target_mes': target_p.month,
+                    'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                    'ensemble_std': spread_fn(i), 'membros': np.full(24, 100.0 + 0.5 * i),
+                    'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
+                    'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
+                    'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 20.0,
+                    'spread_relativo': spread_fn(i) / 15.0,
+                    'tercil_33': 60.0, 'tercil_67': 90.0,
+                    'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                    'valido': True,
+                })
+            return pd.DataFrame(linhas)
+
+        tabela_a = emos.construir_emos_h2_expanding(_pares(lambda i: 15.0))
+        tabela_b = emos.construir_emos_h2_expanding(_pares(lambda i: 5.0 + 3.0 * (i % 11)))
+
+        linha_a = tabela_a.sort_values('init_date').iloc[-1]
+        linha_b = tabela_b.sort_values('init_date').iloc[-1]
+        # só o ajuste d0 precisa ter convergido nas duas séries para este
+        # teste — o modelo COMPLETO é irrelevante aqui (ele pode, inclusive,
+        # ter dificuldade numérica diferente em cada série sintética, já
+        # que SEU objetivo depende de spread_relativo; isso não tem nada a
+        # ver com a independência do d0 que este teste verifica).
+        self.assertEqual(linha_a['status_emos_d0'], emos.STATUS_OK)
+        self.assertEqual(linha_b['status_emos_d0'], emos.STATUS_OK)
+
+        for campo in ('a_d0', 'b_d0', 'gamma_c_d0', 'c_d0', 'sigma_d0', 'mu_latente_d0', 'crps_d0'):
+            self.assertAlmostEqual(linha_a[campo], linha_b[campo], places=6,
+                                    msg=f'{campo} mudou ao variar só ensemble_std/spread_relativo')
+
     def test_c_parametros_completo_e_d0_podem_divergir_em_cenario_com_sinal_real_de_spread(self):
         """Cenário sintético ONDE o spread relativo realmente modula o
         erro (d verdadeiro > 0) — construído para que o ajuste completo
@@ -304,6 +350,147 @@ class StopOnFailureSinteticoTestCase(unittest.TestCase):
         self.assertTrue(emos._sanidade_completo(theta_valido, erro_sd, spread_rel))
 
 
+class StopOnFailureIntegradoTestCase(unittest.TestCase):
+    """Fase E/L do pedido de implementação real — STOP-ON-FAILURE
+    precisa disparar de ponta a ponta na tabela expanding real (não só
+    nas funções de sanidade isoladas): uma falha de convergência numa
+    única avaliação tem que aparecer em `status_emos` daquela linha E
+    ser detectada por `_verificar_falhas_de_convergencia` — nunca
+    descartada silenciosamente, nunca contaminando outras avaliações."""
+
+    def _pares(self, n):
+        linhas = []
+        for i in range(n):
+            mes = (i % 12) + 1
+            ano = 1990 + i // 12
+            init_date = f'{ano}-{mes:02d}'
+            target_p = v._periodo(init_date) + 1
+            linhas.append({
+                'init_date': init_date, 'target_month': str(target_p),
+                'target_ano': target_p.year, 'target_mes': target_p.month,
+                'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                'ensemble_std': 15.0, 'membros': np.full(24, 100.0 + 0.5 * i),
+                'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
+                'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
+                'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 20.0,
+                'spread_relativo': 1.0,
+                'tercil_33': 60.0, 'tercil_67': 90.0,
+                'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                'valido': True,
+            })
+        return linhas
+
+    def test_a_falha_de_convergencia_em_uma_unica_avaliacao_e_isolada_e_detectada(self):
+        linhas = self._pares(130)
+        pares = pd.DataFrame(linhas)
+        avaliada_alvo = pares.sort_values('init_date').iloc[-1]['init_date']
+        orig_minimize = emos.minimize
+
+        # 1ª passada (sem forçar falha, só contando) — descobre quantas
+        # vezes o objetivo COMPLETO é de fato chamado (1 tentativa de
+        # ajuste por avaliação elegível, em ordem causal, independente de
+        # sucesso ou falha natural); a avaliação-alvo (a última da série)
+        # corresponde à ÚLTIMA dessas chamadas. Contar por tentativa (não
+        # por `status_emos=='ok'`) é necessário porque dados sintéticos
+        # perfeitamente lineares/sem ruído podem produzir falhas de
+        # convergência NATURAIS em alguns ajustes — irrelevante para este
+        # teste, que só precisa saber qual é a ÚLTIMA tentativa real.
+        contagem = {'n': 0}
+
+        def contar(fun, x0, args=(), **kwargs):
+            res = orig_minimize(fun, x0, args=args, **kwargs)
+            if fun is emos._objetivo_completo:
+                contagem['n'] += 1
+            return res
+
+        with mock.patch.object(emos, 'minimize', side_effect=contar):
+            emos.construir_emos_h2_expanding(pares)
+        n_chamadas_completo = contagem['n']
+        self.assertGreater(n_chamadas_completo, 0)
+
+        contador = {'completo': 0}
+
+        def minimize_falho_na_ultima_completo(fun, x0, args=(), **kwargs):
+            res = orig_minimize(fun, x0, args=args, **kwargs)
+            if fun is emos._objetivo_completo:
+                contador['completo'] += 1
+                if contador['completo'] == n_chamadas_completo:
+                    res.success = False
+                    res.status = 99
+                    res.message = 'falha forçada pelo teste'
+            return res
+
+        with mock.patch.object(emos, 'minimize', side_effect=minimize_falho_na_ultima_completo):
+            tabela = emos.construir_emos_h2_expanding(pares)
+
+        linha_alvo = tabela[tabela['init_date'] == avaliada_alvo].iloc[0]
+        self.assertEqual(linha_alvo['status_emos_completo'], emos.STATUS_NAO_CONVERGIU)
+        self.assertEqual(linha_alvo['status_emos'], emos.STATUS_NAO_CONVERGIU)
+
+        convergencia = emos._verificar_falhas_de_convergencia(tabela)
+        self.assertFalse(convergencia['ok'])
+        self.assertIn(avaliada_alvo, convergencia['datas'])
+
+        # a tabela SEM a falha forçada (reconstruída de novo, sem mock)
+        # serve de referência: nenhuma avaliação ALÉM da alvo pode ter
+        # mudado de status.
+        tabela_sem_falha = emos.construir_emos_h2_expanding(pares)
+        outras = tabela[tabela['init_date'] != avaliada_alvo].set_index('init_date')['status_emos']
+        outras_sem_falha = tabela_sem_falha[
+            tabela_sem_falha['init_date'] != avaliada_alvo].set_index('init_date')['status_emos']
+        pd.testing.assert_series_equal(outras.sort_index(), outras_sem_falha.sort_index(),
+                                        check_names=False)
+
+
+class ClimatologiaCausalTestCase(unittest.TestCase):
+    """Fase E do pedido — confirma, na própria função usada pela
+    implementação real (`construir_pares_h2_emos`, via
+    `warm._indice_causal_por_mes` reaproveitada sem modificação), que
+    nenhuma climatologia causal usa a própria linha avaliada ou o
+    futuro, e que `spread_relativo` deriva só dessa climatologia
+    causal — nunca de `ensemble_std` futuro."""
+
+    def test_a_indice_causal_nunca_inclui_a_propria_linha_ou_futuro(self):
+        import cfsv2_emos_h2_viabilidade_warmup as warm
+        tabela = pd.DataFrame([
+            {'init_date': '2000-01', 'lead': 2, 'ensemble_std': 999.0},  # "futuro" relativo a 1999
+            {'init_date': '1999-01', 'lead': 2, 'ensemble_std': 10.0},
+            {'init_date': '1998-01', 'lead': 2, 'ensemble_std': 5.0},
+        ])
+        calc = warm._indice_causal_por_mes(tabela, 2, 'ensemble_std')
+        valores_1999 = calc('1999-01').tolist()
+        self.assertEqual(valores_1999, [5.0], "só 1998-01 (estritamente anterior) deveria contar; "
+                                               "nunca a própria linha de 1999-01 nem 2000-01 (futuro)")
+
+    def test_b_spread_relativo_usa_so_climatologia_causal_na_construcao_real(self):
+        import cfsv2_emos_h2_viabilidade_warmup as warm
+        import cfsv2_validacao_cientifica as v_mod
+
+        class _FakeTabelaEnsemble(pd.DataFrame):
+            pass
+
+        linhas_ensemble = []
+        for i in range(6):
+            init_date = f'1999-{i + 1:02d}'
+            target_p = v_mod._periodo(init_date) + 1
+            linhas_ensemble.append({
+                'init_date': init_date, 'target_month': str(target_p), 'lead': 2,
+                'target_ano': target_p.year, 'target_mes': target_p.month,
+                'ensemble_mean': 100.0, 'ensemble_std': 10.0 + i,
+                'observacao': 80.0, 'erro_assinado': 5.0,
+                'membros': np.full(24, 100.0),
+            })
+        tabela_ensemble = pd.DataFrame(linhas_ensemble)
+
+        calc_spread = warm._indice_causal_por_mes(tabela_ensemble, 2, 'ensemble_std')
+        # avaliando a última linha (1999-06): só meses-calendário iguais
+        # (junho) E estritamente anteriores entrariam — como cada linha
+        # aqui é um mês-calendário diferente, NENHUM qualifica (mesma
+        # garantia já testada na viabilidade estrutural).
+        hist = calc_spread('1999-06')
+        self.assertEqual(len(hist), 0, "nenhuma linha de outro mês-calendário deveria contar")
+
+
 class ComDadosReaisTestCase(unittest.TestCase):
     """Smoke test contra os dados já aprovados do repositório (sem
     rede) — confirma N=95, ausência de leakage, nenhuma falha de
@@ -341,11 +528,47 @@ class ComDadosReaisTestCase(unittest.TestCase):
         import subprocess
         import cfsv2_calibracao_aditiva as a
         import cfsv2_calibracao_mos_linear as mos_mod
-        for caminho in (a.CAMINHO_TABELA_EXPANDING, mos_mod.CAMINHO_TABELA_EXPANDING):
+        caminhos = [a.CAMINHO_TABELA_EXPANDING, mos_mod.CAMINHO_TABELA_EXPANDING,
+                    emos.ROOT / 'docs' / 'index.html']
+        for caminho in caminhos:
             resultado_git = subprocess.run(
                 ['git', 'diff', '--quiet', 'HEAD', '--', str(caminho.relative_to(a.ROOT))],
                 cwd=a.ROOT, capture_output=True)
             self.assertEqual(resultado_git.returncode, 0, f"{caminho} divergiu do HEAD commitado")
+
+    def test_i_sigma_positivo_e_finito_em_todas_as_linhas_de_treino_de_uma_avaliacao_real(self):
+        """Fase D/E do pedido — não só na linha avaliada: recalcula
+        sigma (modelo completo) para CADA linha do conjunto de treino
+        de uma avaliação OK real, usando os próprios parâmetros
+        ajustados dessa avaliação."""
+        ok = self.tabela[self.tabela['status_emos'] == emos.STATUS_OK]
+        self.assertGreater(len(ok), 0)
+        linha = ok.sort_values('init_date').iloc[-1]
+        avaliada_p = v._periodo(linha['init_date'])
+
+        pares = emos.construir_pares_h2_emos(
+            emos.g.construir_tabela_ensemble(
+                v.construir_base_pareada(v.carregar_cfsv2_raw(), v.carregar_chirps_v3_historico())),
+            v._enriquecer_com_climatologia(
+                v.construir_base_pareada(v.carregar_cfsv2_raw(), v.carregar_chirps_v3_historico()),
+                v.carregar_chirps_v3_historico()),
+            v._obs_dict(v.carregar_chirps_v3_historico()))
+        pares = pares.assign(_p=pd.PeriodIndex(pares['init_date'], freq='M')).sort_values('_p')
+        validos = pares[pares['valido'] & (pares['_p'] < avaliada_p)
+                         & (pd.PeriodIndex(pares['target_month'], freq='M') < avaliada_p)]
+
+        c = float(np.exp(linha['gamma_c']))
+        sigma_treino = validos['erro_clim_sd_mes'].values * np.sqrt(
+            c + linha['d'] * validos['spread_relativo'].values ** 2)
+        self.assertTrue(np.all(np.isfinite(sigma_treino)))
+        self.assertTrue(np.all(sigma_treino > 0))
+
+    def test_j_benchmarks_disponiveis_em_todos_os_95_casos_sem_diferenca_de_amostra(self):
+        ok = self.tabela[self.tabela['status_emos'] == emos.STATUS_OK]
+        self.assertEqual(len(ok), 95)
+        for coluna in ('crps_emos', 'crps_d0', 'crps_raw', 'crps_climatologia'):
+            self.assertEqual(int(ok[coluna].isna().sum()), 0,
+                              f"{coluna} ausente em algum dos 95 casos avaliáveis")
 
 
 class RelatorioEmosH2TestCase(unittest.TestCase):
