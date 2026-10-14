@@ -1,0 +1,241 @@
+{
+  "STOP_ON_FAILURE": false,
+  "metodo": "emos_h2_normal_censurada_zero_crps_minimizacao",
+  "n_treino_minimo_emos": 120,
+  "leakage_check": {
+    "ok": true,
+    "n_problemas": 0,
+    "problemas": []
+  },
+  "verificacao_falhas_convergencia": {
+    "ok": true,
+    "n_falhas": 0,
+    "datas": []
+  },
+  "n_casos": {
+    "n_final": 95,
+    "esperado_estrutural": 95,
+    "bate_com_esperado": true
+  },
+  "crps_medio": {
+    "emos_completo": 27.47707700461301,
+    "emos_d0": 27.477081044094717,
+    "raw": 39.77390199847445,
+    "climatologia": 26.71086587896073
+  },
+  "bootstrap_crpss": {
+    "n_anos_distintos": 9,
+    "n_resamples": 500,
+    "metodo": "bootstrap em blocos por target_ano, sem refit — EMOS completo/d0/RAW/climatologia usam os MESMOS blocos de ano sorteados em cada reamostra",
+    "CRPSS_vs_raw": {
+      "estimativa": 0.3091681825517921,
+      "ic95_lo": 0.2180789665707567,
+      "ic95_hi": 0.39833859960091933,
+      "ic_classificacao": "ic_totalmente_acima_de_zero",
+      "metrica": "CRPSS_vs_raw"
+    },
+    "CRPSS_vs_climatologia": {
+      "estimativa": -0.028685372055115677,
+      "ic95_lo": -0.07274225942092366,
+      "ic95_hi": 0.014613149696274563,
+      "ic_classificacao": "ic_inclui_zero",
+      "metrica": "CRPSS_vs_climatologia"
+    },
+    "CRPSS_spread_dinamico": {
+      "estimativa": 1.4701276673800834e-07,
+      "ic95_lo": -8.145095820033518e-10,
+      "ic95_hi": 3.6351254212585445e-07,
+      "ic_classificacao": "ic_inclui_zero",
+      "metrica": "CRPSS_spread_dinamico"
+    },
+    "CRPSS_d0_vs_raw": {
+      "estimativa": 0.3091680809906804,
+      "ic95_lo": 0.21807885091565435,
+      "ic95_hi": 0.3983384928003605,
+      "ic_classificacao": "ic_totalmente_acima_de_zero",
+      "metrica": "CRPSS_d0_vs_raw"
+    },
+    "CRPSS_d0_vs_climatologia": {
+      "estimativa": -0.028685523285020498,
+      "ic95_lo": -0.07274229705588625,
+      "ic95_hi": 0.014612931283073024,
+      "ic_classificacao": "ic_inclui_zero",
+      "metrica": "CRPSS_d0_vs_climatologia"
+    }
+  },
+  "brier_bss": {
+    "brier_score_por_categoria": {
+      "seco": 0.25786394496166476,
+      "normal": 0.20013136120735892,
+      "umido": 0.22814686631568518
+    },
+    "brier_referencia_nominal_por_categoria": {
+      "seco": 0.26198830409356727,
+      "normal": 0.19532163742690056,
+      "umido": 0.20935672514619888
+    },
+    "bss_por_categoria": {
+      "seco": 0.01574253150793148,
+      "normal": -0.02462463372629875,
+      "umido": -0.08975179161961333
+    },
+    "verificacao_probabilidades_somam_um": {
+      "max_desvio_abs": 1.1102230246251565e-16,
+      "ok": true
+    }
+  },
+  "cobertura_intervalos": {
+    "50": {
+      "cobertura_empirica": 0.45263157894736844,
+      "cobertura_nominal": 0.5,
+      "largura_media": 57.00491134210055
+    },
+    "80": {
+      "cobertura_empirica": 0.7263157894736842,
+      "cobertura_nominal": 0.8,
+      "largura_media": 108.42575333932632
+    },
+    "90": {
+      "cobertura_empirica": 0.8421052631578947,
+      "cobertura_nominal": 0.9,
+      "largura_media": 138.80376867284897
+    }
+  },
+  "cobertura_intervalos_raw": {
+    "50": {
+      "cobertura_empirica": 0.2736842105263158,
+      "cobertura_nominal": 0.5,
+      "largura_media": 56.44124210526316
+    },
+    "80": {
+      "cobertura_empirica": 0.5052631578947369,
+      "cobertura_nominal": 0.8,
+      "largura_media": 111.33259894736838
+    },
+    "90": {
+      "cobertura_empirica": 0.5684210526315789,
+      "cobertura_nominal": 0.9,
+      "largura_media": 142.51777736842104
+    }
+  },
+  "pit": {
+    "media": 0.5605422759501356,
+    "variancia": 0.0949321411510406,
+    "bins": [
+      0.0,
+      0.1,
+      0.2,
+      0.30000000000000004,
+      0.4,
+      0.5,
+      0.6000000000000001,
+      0.7000000000000001,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "contagens_por_bin": [
+      4,
+      13,
+      9,
+      8,
+      11,
+      6,
+      7,
+      9,
+      6,
+      22
+    ],
+    "n": 95
+  },
+  "bias": {
+    "bias_mu_latente": -5.154918953919892,
+    "bias_media_preditiva_censurada": -3.736524919323909,
+    "nota": "bias_media_preditiva_censurada (usa E[Y]) é a métrica PRINCIPAL de bias da previsão final — bias_mu_latente é só diagnóstico do parâmetro latente (protocolo, seção 19)."
+  },
+  "diagnostico_parametros": {
+    "a": {
+      "n": 95,
+      "minimo": -12.017881251946974,
+      "p10": -11.209050354286314,
+      "mediana": -10.270978899403593,
+      "media": -10.085273233556855,
+      "p90": -8.918697955581854,
+      "maximo": -4.355846901277682
+    },
+    "b": {
+      "n": 95,
+      "minimo": 0.0643883122814118,
+      "p10": 0.08458830625374758,
+      "mediana": 0.26918961162318095,
+      "media": 0.24611935198132787,
+      "p90": 0.32324282052375386,
+      "maximo": 0.3472569463706444
+    },
+    "c": {
+      "n": 95,
+      "minimo": 0.7393900285391228,
+      "p10": 0.7509846808409052,
+      "mediana": 0.7792668586389225,
+      "media": 0.7788345082877492,
+      "p90": 0.8016730351405984,
+      "maximo": 0.8249093598214415
+    },
+    "d": {
+      "n": 95,
+      "minimo": 0.0,
+      "p10": 0.0,
+      "mediana": 0.0,
+      "media": 0.0,
+      "p90": 0.0,
+      "maximo": 0.0
+    },
+    "a_d0": {
+      "n": 95,
+      "minimo": -12.01787804826283,
+      "p10": -11.209040577135582,
+      "mediana": -10.270972058282771,
+      "media": -10.08526817483755,
+      "p90": -8.918701783675468,
+      "maximo": -4.355844411732213
+    },
+    "b_d0": {
+      "n": 95,
+      "minimo": 0.06438824528840689,
+      "p10": 0.08458856956068779,
+      "mediana": 0.2691926610234953,
+      "media": 0.24611997661390944,
+      "p90": 0.3232432252962011,
+      "maximo": 0.3472568747228479
+    },
+    "c_d0": {
+      "n": 95,
+      "minimo": 0.7393902113508662,
+      "p10": 0.7509847502584369,
+      "mediana": 0.7792667990548183,
+      "media": 0.7788345314928722,
+      "p90": 0.8016720319975459,
+      "maximo": 0.8249099629846679
+    },
+    "destaques": {
+      "n_d_proximo_de_zero": 95,
+      "n_d_no_bound_inferior": 95,
+      "n_gamma_c_no_bound": 0,
+      "n_gamma_c_d0_no_bound": 0,
+      "n_b_negativo": 0,
+      "n_b_d0_negativo": 0
+    }
+  },
+  "decisao_criterio_pre_registrado": {
+    "criterio_1_crpss_spread_dinamico_ic_acima_de_zero": false,
+    "criterio_2_crpss_vs_climatologia_ic_acima_de_zero": false,
+    "criterio_3_sem_degradacao_grave_brier_bss": true,
+    "criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis": true,
+    "aprovado_componente_dinamico_de_spread": false,
+    "nota": "Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar só o RAW sem superar a climatologia NÃO basta (seção 20, \"se o EMOS só superar o RAW mas não a climatologia: não aprovar\")."
+  },
+  "primeira_init_date_avaliavel": "2003-02",
+  "nenhum_pipeline_operacional_alterado": true,
+  "nenhum_dashboard_alterado": true,
+  "data_geracao_utc": "2026-10-14T12:45:37.902968+00:00"
+}
