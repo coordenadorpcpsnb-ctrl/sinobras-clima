@@ -274,15 +274,25 @@
     "criterio_1_crpss_spread_dinamico_ic_acima_de_zero": false,
     "criterio_2_crpss_vs_climatologia_ic_acima_de_zero": false,
     "criterio_3_sem_degradacao_grave_brier_bss": true,
+    "criterio_3_bss_dentro_do_limiar_calculado": true,
+    "criterio_3_classificacao": "diagnostico_condicionado_a_limiar_nao_pre_registrado",
+    "criterio_3_limiar_nao_pre_registrado": true,
     "criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis": true,
+    "criterio_4_cobertura_dentro_do_esperado_vs_raw": true,
+    "criterio_4_classificacao": "nao_integralmente_verificado",
     "aprovado_componente_dinamico_de_spread": false,
+    "motivos_suficientes_para_nao_aprovacao": [
+      "IC95% do ganho em relação ao EMOS d=0 (CRPSS_spread_dinamico) inclui zero",
+      "EMOS não supera a climatologia probabilística causal (IC95% de CRPSS vs. climatologia inclui zero)"
+    ],
     "limiar_bss_degradacao_grave": -0.1,
     "bss_valor_mais_proximo_do_limiar": -0.08975179161961333,
-    "criterio_4_limitacao": "O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia só cobertura (3 níveis) — operacionalização mais estreita, registrada aqui sem alterar o critério já aprovado. Não afeta a decisão final (critérios 1/2 já reprovam).",
-    "nota": "Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar só o RAW sem superar a climatologia NÃO basta (seção 20, \"se o EMOS só superar o RAW mas não a climatologia: não aprovar\")."
+    "criterio_3_limitacao": "O limiar BSS > -0,10 não tem artefato de pré-registro datado independente dos resultados reais — foi introduzido no mesmo commit que produziu os primeiros resultados do EMOS H2. Reportado como diagnóstico condicionado, nunca como critério certificadamente pré-registrado.",
+    "criterio_4_limitacao": "O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia formalmente só cobertura (3 níveis) — avaliação PARCIAL do critério, nunca reportada como aprovação integral. Não afeta a decisão final (critérios 1/2 já reprovam, isoladamente suficientes).",
+    "nota": "O protocolo (seção 20) exige os 4 critérios SIMULTANEAMENTE para aprovar. A NÃO aprovação do componente dinâmico de spread já está decidida pelos critérios 1 e 2 (ambos pré-registrados sem ressalva, ambos False) — ver motivos_suficientes_para_nao_aprovacao. Critérios 3/4 são diagnósticos complementares (classificação, não aprovação binária certificada) e nunca mudariam essa conclusão. Superar só o RAW sem superar a climatologia NÃO basta (seção 20, \"se o EMOS só superar o RAW mas não a climatologia: não aprovar\")."
   },
   "primeira_init_date_avaliavel": "2003-02",
   "nenhum_pipeline_operacional_alterado": true,
   "nenhum_dashboard_alterado": true,
-  "data_geracao_utc": "2026-10-14T16:07:42.128531+00:00"
+  "data_geracao_utc": "2026-10-14T17:30:01.091284+00:00"
 }

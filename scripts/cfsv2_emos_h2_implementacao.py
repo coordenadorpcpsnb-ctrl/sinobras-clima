@@ -867,57 +867,91 @@ def executar_emos_h2(n_resamples_bootstrap=500):
     cond2 = boot['CRPSS_vs_climatologia']['ic_classificacao'] == 'ic_totalmente_acima_de_zero'
 
     # Critério 3 — "ausência de degradação grave de Brier/BSS" (protocolo,
-    # seção 20, item 3) não define um limiar numérico — a implementação
-    # precisa de um, e usa BSS > -0.10 como limiar genérico de "não grave",
-    # ESCOLHIDO POR CONVENÇÃO DE VERIFICAÇÃO PROBABILÍSTICA (não ajustado a
-    # este resultado nem a nenhum outro): BSS mede a fração de melhora/
-    # degradação do Brier Score em relação à referência nominal
-    # (BSS = 1 - BS/BS_ref); uma degradação de até 10% sobre essa
-    # referência é tratada como "ruído aceitável" na literatura de
-    # verificação de previsão categórica, enquanto quedas maiores
-    # (tipicamente -0.20 a -0.30 ou piores) são as convencionalmente
-    # citadas como degradação clara. Auditoria externa, item 3 — o valor
-    # observado mais próximo do limiar é úmido = -0.0898, a ~10% ACIMA do
-    # limiar (não abaixo) — um caso LIMÍTROFE, não uma folga confortável;
-    # isso é registrado explicitamente aqui e no relatório, sem redefinir
-    # o limiar (nunca escolhido observando se -0.0898 passa ou não).
+    # seção 20, item 3) não define um limiar numérico. A implementação usa
+    # BSS > -0.10 como limiar operacional — mas esse limiar foi introduzido
+    # NESTA implementação (mesmo commit que produziu os primeiros resultados
+    # reais), não existe um artefato de pré-registro datado e independente
+    # que o fixasse ANTES de qualquer ajuste real do EMOS H2. Auditoria
+    # externa (2ª rodada) — correto NÃO afirmar que o limiar foi
+    # pré-registrado sem essa evidência documental verificável. Por isso o
+    # critério 3 é reportado como DIAGNÓSTICO condicionado a um limiar não
+    # pré-registrado (`criterio_3_classificacao`), nunca como aprovação
+    # certificada — o valor calculado (`cond3`) é preservado sem alteração
+    # para rastreabilidade (`criterio_3_bss_dentro_do_limiar_calculado`).
+    # BSS mede a fração de melhora/degradação do Brier Score em relação à
+    # referência nominal (BSS = 1 - BS/BS_ref); o valor observado mais
+    # próximo do limiar é úmido = -0.0898, um caso LIMÍTROFE.
     LIMIAR_BSS_DEGRADACAO_GRAVE = -0.10
     bss_vals = [val for val in tercil['bss_por_categoria'].values() if val is not None]
     cond3 = all(val > LIMIAR_BSS_DEGRADACAO_GRAVE for val in bss_vals) if bss_vals else False
 
     # Critério 4 — o protocolo (seção 20, item 4) pede "melhora substancial
-    # na calibração de cobertura/PIT frente ao RAW", mas a implementação
-    # abaixo avalia SÓ cobertura (os 3 níveis nominais), nunca o PIT.
-    # Auditoria externa, item 3 — isso é uma operacionalização MAIS
-    # ESTREITA do que o texto do protocolo, registrada aqui honestamente
-    # (não corrigida nesta atividade, por instrução explícita de não
-    # alterar os critérios científicos já aprovados). O PIT é calculado,
-    # reportado e discutido integralmente (`pit`, seção de limitações do
-    # relatório), mas NÃO entra em `cond4` — isso não muda a decisão
-    # final porque os critérios 1 e 2 já reprovam por conta própria.
+    # na calibração de cobertura/PIT frente ao RAW" (calibração E cobertura
+    # E PIT, conjuntamente); a implementação abaixo avalia SÓ cobertura (3
+    # níveis nominais), nunca o PIT. Auditoria externa (2ª rodada) —
+    # avaliação formalmente PARCIAL do critério não pode ser reportada como
+    # aprovação integral. Reportado como `nao_integralmente_verificado`
+    # (`criterio_4_classificacao`) SEMPRE, independente do resultado da
+    # cobertura isolada — o valor calculado da cobertura isolada é
+    # preservado sem alteração para rastreabilidade
+    # (`criterio_4_cobertura_dentro_do_esperado_vs_raw`). O PIT é calculado,
+    # reportado e discutido integralmente (seção `pit`), mas nunca decide
+    # este critério.
     cobertura_melhor_que_raw = all(
         abs(cobertura[nivel]['cobertura_empirica'] - cobertura[nivel]['cobertura_nominal'])
         <= abs(cobertura_raw[nivel]['cobertura_empirica'] - cobertura_raw[nivel]['cobertura_nominal'])
         for nivel in cobertura)
     cond4 = cobertura_melhor_que_raw
+
+    # Decisão de aprovação: o protocolo (seção 20) exige os 4 critérios
+    # SIMULTANEAMENTE para APROVAR — fórmula mantida sem alteração (ainda
+    # resulta em False, pois cond1/cond2 já são False). A NÃO aprovação,
+    # porém, já está decidida só pelos critérios 1 e 2 (ambos booleanos,
+    # pré-registrados sem ressalva, e ambos False) — critérios 3/4 são
+    # diagnósticos complementares que nunca mudariam essa conclusão.
     aprovado = bool(cond1 and cond2 and cond3 and cond4)
+    motivos_suficientes_para_nao_aprovacao = []
+    if not cond1:
+        motivos_suficientes_para_nao_aprovacao.append(
+            'IC95% do ganho em relação ao EMOS d=0 (CRPSS_spread_dinamico) inclui zero')
+    if not cond2:
+        motivos_suficientes_para_nao_aprovacao.append(
+            'EMOS não supera a climatologia probabilística causal (IC95% de CRPSS vs. '
+            'climatologia inclui zero)')
+
     decisao = {
         'criterio_1_crpss_spread_dinamico_ic_acima_de_zero': cond1,
         'criterio_2_crpss_vs_climatologia_ic_acima_de_zero': cond2,
         'criterio_3_sem_degradacao_grave_brier_bss': cond3,
+        'criterio_3_bss_dentro_do_limiar_calculado': cond3,
+        'criterio_3_classificacao': 'diagnostico_condicionado_a_limiar_nao_pre_registrado',
+        'criterio_3_limiar_nao_pre_registrado': True,
         'criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis': cond4,
+        'criterio_4_cobertura_dentro_do_esperado_vs_raw': cond4,
+        'criterio_4_classificacao': 'nao_integralmente_verificado',
         'aprovado_componente_dinamico_de_spread': aprovado,
+        'motivos_suficientes_para_nao_aprovacao': motivos_suficientes_para_nao_aprovacao,
         'limiar_bss_degradacao_grave': LIMIAR_BSS_DEGRADACAO_GRAVE,
         'bss_valor_mais_proximo_do_limiar': (min(bss_vals, key=lambda x: abs(x - LIMIAR_BSS_DEGRADACAO_GRAVE))
                                               if bss_vals else None),
+        'criterio_3_limitacao': ('O limiar BSS > -0,10 não tem artefato de pré-registro datado '
+                                  'independente dos resultados reais — foi introduzido no mesmo '
+                                  'commit que produziu os primeiros resultados do EMOS H2. '
+                                  'Reportado como diagnóstico condicionado, nunca como critério '
+                                  'certificadamente pré-registrado.'),
         'criterio_4_limitacao': ('O protocolo (seção 20, item 4) pede melhora de calibração/'
-                                  'cobertura/PIT; esta implementação avalia só cobertura (3 '
-                                  'níveis) — operacionalização mais estreita, registrada aqui '
-                                  'sem alterar o critério já aprovado. Não afeta a decisão '
-                                  'final (critérios 1/2 já reprovam).'),
-        'nota': ('Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar '
-                 'só o RAW sem superar a climatologia NÃO basta (seção 20, "se o EMOS só '
-                 'superar o RAW mas não a climatologia: não aprovar").'),
+                                  'cobertura/PIT; esta implementação avalia formalmente só '
+                                  'cobertura (3 níveis) — avaliação PARCIAL do critério, nunca '
+                                  'reportada como aprovação integral. Não afeta a decisão '
+                                  'final (critérios 1/2 já reprovam, isoladamente suficientes).'),
+        'nota': ('O protocolo (seção 20) exige os 4 critérios SIMULTANEAMENTE para aprovar. A '
+                 'NÃO aprovação do componente dinâmico de spread já está decidida pelos '
+                 'critérios 1 e 2 (ambos pré-registrados sem ressalva, ambos False) — ver '
+                 'motivos_suficientes_para_nao_aprovacao. Critérios 3/4 são diagnósticos '
+                 'complementares (classificação, não aprovação binária certificada) e nunca '
+                 'mudariam essa conclusão. Superar só o RAW sem superar a climatologia NÃO '
+                 'basta (seção 20, "se o EMOS só superar o RAW mas não a climatologia: não '
+                 'aprovar").'),
     }
 
     resultado = {

@@ -44,7 +44,7 @@ N anos distintos: 9, N reamostras: 500, semente determinística: `20261001`. Nen
 
 Verificação de que as probabilidades somam 1 em todos os casos: True (desvio máximo: 1.11e-16).
 
-**Justificativa do limiar do critério 3 (BSS > -0.10):** o protocolo (seção 20, item 3) exige "ausência de degradação grave", sem fixar um número — a implementação usa BSS > -0,10 como limiar genérico de "não grave" em verificação probabilística categórica (uma queda de até 10% sobre a referência nominal é tratada como ruído aceitável; quedas de -0,20 a -0,30 ou piores são as convencionalmente citadas como degradação clara). Este limiar não foi ajustado olhando para o resultado desta avaliação. **Nota de auditoria:** o valor mais próximo do limiar é `umido = -0.0898` — cerca de 10% ACIMA do limiar, um caso LIMÍTROFE, não uma folga confortável; isso é registrado aqui explicitamente, sem redefinir o limiar.
+**Critério 3 — classificação: `diagnostico_condicionado_a_limiar_nao_pre_registrado` (diagnóstico, não aprovação certificada).** O protocolo (seção 20, item 3) exige "ausência de degradação grave" de Brier/BSS, sem fixar um limiar numérico. A implementação usa BSS > -0.10 como limiar operacional de "não grave" (convenção comum em verificação probabilística categórica: uma queda de até 10% sobre a referência nominal costuma ser tratada como ruído aceitável, enquanto quedas de -0,20 a -0,30 ou piores são as convencionalmente citadas como degradação clara) — **mas esse limiar foi introduzido nesta implementação, no mesmo commit que produziu os primeiros resultados reais do EMOS H2, e não existe um artefato de pré-registro datado e independente que o fixasse antes disso.** Por honestidade metodológica, o critério 3 é reportado como diagnóstico CONDICIONADO a esse limiar não pré-registrado, nunca como aprovação certificada — o valor calculado (BSS dentro do limiar escolhido) é preservado integralmente para rastreabilidade. O valor mais próximo do limiar é `umido = -0.0898` — um caso LIMÍTROFE, não uma folga confortável.
 
 ## 5. Cobertura dos intervalos — EMOS vs. RAW (mesmos 95 casos)
 | Nível nominal | Cobertura EMOS | Largura média EMOS (mm) | Cobertura RAW | Largura média RAW (mm) |
@@ -82,20 +82,26 @@ Destaques: `d` praticamente zero em 95/95 avaliações; `d` no bound inferior (0
 **Achado consistente nas 95 avaliações:** o otimizador converge para `d ≈ 0` (bound inferior) em TODAS elas — o EMOS completo colapsa estruturalmente ao EMOS `d=0` nesta amostra. Isso não é um sinal de implementação malfeita (os dois modelos são ajustados de forma independente — ver `tests/test_cfsv2_emos_h2_implementacao.py::IndependenciaD0TestCase`, que confirma divergência genuína num cenário sintético onde o sinal do spread é real); é o próprio otimizador descobrindo, a partir dos dados, que o termo dinâmico do spread não reduz o CRPS médio de treino — coerente com a informação MODESTA do spread já registrada no gate (correlações residuais 0,07-0,24) e nas limitações do protocolo (seção 25).
 
 ## 9. Decisão segundo o critério pré-registrado (protocolo, seção 20)
-| Critério | Resultado |
-|---|---|
-| 1. IC95(CRPSS_spread_dinamico) > 0 | False |
-| 2. IC95(CRPSS vs. climatologia) > 0 | False |
-| 3. Sem degradação grave de Brier/BSS | True |
-| 4. Cobertura melhor ou igual ao RAW (3 níveis) | True |
-| **Aprovado o componente dinâmico de spread?** | **False** |
+| Critério | Resultado | Natureza |
+|---|---|---|
+| 1. IC95(CRPSS_spread_dinamico) > 0 | False | pré-registrado, sem ressalva |
+| 2. IC95(CRPSS vs. climatologia) > 0 | False | pré-registrado, sem ressalva |
+| 3. Sem degradação grave de Brier/BSS | BSS dentro do limiar calculado: True | **`diagnostico_condicionado_a_limiar_nao_pre_registrado`** (limiar não pré-registrado) |
+| 4. Cobertura/calibração/PIT melhor que RAW | cobertura isolada dentro do esperado: True | **`nao_integralmente_verificado`** (avaliação parcial) |
+| **Aprovado o componente dinâmico de spread?** | **False** | — |
 
-Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar só o RAW sem superar a climatologia NÃO basta (seção 20, "se o EMOS só superar o RAW mas não a climatologia: não aprovar").
+**Motivos suficientes para a não aprovação** (independentes da classificação dos critérios 3/4 acima):
+1. IC95% do ganho em relação ao EMOS d=0 (CRPSS_spread_dinamico) inclui zero.
+2. EMOS não supera a climatologia probabilística causal (IC95% de CRPSS vs. climatologia inclui zero).
 
-**Limitação do critério 4 (auditoria externa):** O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia só cobertura (3 níveis) — operacionalização mais estreita, registrada aqui sem alterar o critério já aprovado. Não afeta a decisão final (critérios 1/2 já reprovam).
+O protocolo (seção 20) exige os 4 critérios SIMULTANEAMENTE para aprovar. A NÃO aprovação do componente dinâmico de spread já está decidida pelos critérios 1 e 2 (ambos pré-registrados sem ressalva, ambos False) — ver motivos_suficientes_para_nao_aprovacao. Critérios 3/4 são diagnósticos complementares (classificação, não aprovação binária certificada) e nunca mudariam essa conclusão. Superar só o RAW sem superar a climatologia NÃO basta (seção 20, "se o EMOS só superar o RAW mas não a climatologia: não aprovar").
+
+**Limitação do critério 3:** O limiar BSS > -0,10 não tem artefato de pré-registro datado independente dos resultados reais — foi introduzido no mesmo commit que produziu os primeiros resultados do EMOS H2. Reportado como diagnóstico condicionado, nunca como critério certificadamente pré-registrado.
+
+**Limitação do critério 4:** O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia formalmente só cobertura (3 níveis) — avaliação PARCIAL do critério, nunca reportada como aprovação integral. Não afeta a decisão final (critérios 1/2 já reprovam, isoladamente suficientes).
 
 ## 10. Conclusão
-O critério pré-registrado NÃO foi satisfeito (2/4 critério(s) reprovado(s)) — o componente dinâmico de spread NÃO tem evidência suficiente para ser considerado como acrescentando valor sobre corrigir só média e dispersão climatológica. O EMOS (completo e `d=0`, estruturalmente equivalentes nesta amostra) supera claramente o ensemble RAW (CRPSS≈0.3092, IC95 totalmente acima de zero) mas não supera a climatologia probabilística causal (CRPSS≈-0.0287, IC95 inclui zero) — pelo protocolo (seção 20), superar só o RAW não basta.
+O critério pré-registrado NÃO foi satisfeito — 2 motivo(s) já suficiente(s) para a não aprovação, ambos pré-registrados sem ressalva (ver seção 9): IC95% do ganho em relação ao EMOS d=0 (CRPSS_spread_dinamico) inclui zero; EMOS não supera a climatologia probabilística causal (IC95% de CRPSS vs. climatologia inclui zero). O componente dinâmico de spread NÃO tem evidência suficiente para ser considerado como acrescentando valor sobre corrigir só média e dispersão climatológica. O EMOS (completo e `d=0`, estruturalmente equivalentes nesta amostra) supera claramente o ensemble RAW (CRPSS≈0.3092, IC95 totalmente acima de zero) mas não supera a climatologia probabilística causal (CRPSS≈-0.0287, IC95 inclui zero) — pelo protocolo (seção 20), superar só o RAW não basta. Os critérios 3 e 4 (classificados como `diagnostico_condicionado_a_limiar_nao_pre_registrado` e `nao_integralmente_verificado`, nunca como aprovação binária certificada) não alteram esta conclusão.
 
 ## Limitações (protocolo, seção 25 — reafirmadas aqui)
 - Amostra curta: 95 previsões avaliáveis (~8 anos), warm-up de 120 pares consome a maior parte do histórico disponível.

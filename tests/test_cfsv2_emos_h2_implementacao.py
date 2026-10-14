@@ -652,6 +652,35 @@ class ComDadosReaisTestCase(unittest.TestCase):
         self.assertIn('aprovado_componente_dinamico_de_spread',
                        self.resultado['decisao_criterio_pre_registrado'])
 
+    def test_f2_criterios_3_e_4_reclassificados_como_diagnostico_nao_binario(self):
+        """Auditoria externa, 3ª rodada — critérios 3/4 nunca podem ser
+        reportados como aprovação binária certificada: critério 3 é
+        diagnóstico condicionado a limiar não pré-registrado; critério 4
+        é explicitamente não integralmente verificado (avalia só
+        cobertura, nunca PIT). A decisão final (False) e os valores
+        numéricos calculados (cond3/cond4) permanecem preservados.
+
+        Usa o JSON já gerado por `--executar` (bootstrap com as 500
+        reamostras de produção), NUNCA `self.resultado` desta classe —
+        este teste usa só 30 reamostras (por velocidade), amostra
+        pequena o bastante para o IC de CRPSS_spread_dinamico (ponto
+        central ~1,5e-7, essencialmente zero) cruzar por acaso para o
+        lado positivo, mudando cond1 sem nenhuma mudança real na
+        ciência — não é a quantidade que este teste quer verificar."""
+        if not emos.CAMINHO_METRICAS_JSON.exists():
+            self.skipTest("métricas do EMOS H2 ainda não geradas nesta árvore de trabalho")
+        import json
+        resultado_producao = json.loads(emos.CAMINHO_METRICAS_JSON.read_text())
+        decisao = resultado_producao['decisao_criterio_pre_registrado']
+        self.assertEqual(decisao['criterio_3_classificacao'],
+                          'diagnostico_condicionado_a_limiar_nao_pre_registrado')
+        self.assertEqual(decisao['criterio_4_classificacao'], 'nao_integralmente_verificado')
+        self.assertFalse(decisao['aprovado_componente_dinamico_de_spread'])
+        self.assertEqual(len(decisao['motivos_suficientes_para_nao_aprovacao']), 2)
+        # valores calculados preservados (rastreabilidade)
+        self.assertIn('criterio_3_bss_dentro_do_limiar_calculado', decisao)
+        self.assertIn('criterio_4_cobertura_dentro_do_esperado_vs_raw', decisao)
+
     def test_g_probabilidades_tercil_somam_um(self):
         self.assertTrue(self.resultado['brier_bss']['verificacao_probabilidades_somam_um']['ok'])
 

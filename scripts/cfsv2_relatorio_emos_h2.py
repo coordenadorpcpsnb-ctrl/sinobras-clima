@@ -147,15 +147,20 @@ def gerar_relatorio_markdown(resultados):
     limiar_bss = decisao.get('limiar_bss_degradacao_grave')
     bss_proximo = decisao.get('bss_valor_mais_proximo_do_limiar')
     linhas.append(
-        f"\n**Justificativa do limiar do critério 3 (BSS > {_fmt(limiar_bss, 2)}):** o protocolo "
-        "(seção 20, item 3) exige \"ausência de degradação grave\", sem fixar um número — a "
-        "implementação usa BSS > -0,10 como limiar genérico de \"não grave\" em verificação "
-        "probabilística categórica (uma queda de até 10% sobre a referência nominal é tratada "
-        "como ruído aceitável; quedas de -0,20 a -0,30 ou piores são as convencionalmente "
-        "citadas como degradação clara). Este limiar não foi ajustado olhando para o resultado "
-        "desta avaliação. **Nota de auditoria:** o valor mais próximo do limiar é "
-        f"`umido = {_fmt(bss_proximo)}` — cerca de 10% ACIMA do limiar, um caso LIMÍTROFE, não "
-        "uma folga confortável; isso é registrado aqui explicitamente, sem redefinir o limiar.\n")
+        f"\n**Critério 3 — classificação: `{decisao.get('criterio_3_classificacao')}` "
+        f"(diagnóstico, não aprovação certificada).** O protocolo (seção 20, item 3) exige "
+        "\"ausência de degradação grave\" de Brier/BSS, sem fixar um limiar numérico. A "
+        f"implementação usa BSS > {_fmt(limiar_bss, 2)} como limiar operacional de \"não grave\" "
+        "(convenção comum em verificação probabilística categórica: uma queda de até 10% sobre "
+        "a referência nominal costuma ser tratada como ruído aceitável, enquanto quedas de "
+        "-0,20 a -0,30 ou piores são as convencionalmente citadas como degradação clara) — "
+        "**mas esse limiar foi introduzido nesta implementação, no mesmo commit que produziu os "
+        "primeiros resultados reais do EMOS H2, e não existe um artefato de pré-registro datado "
+        "e independente que o fixasse antes disso.** Por honestidade metodológica, o critério 3 "
+        "é reportado como diagnóstico CONDICIONADO a esse limiar não pré-registrado, nunca como "
+        "aprovação certificada — o valor calculado (BSS dentro do limiar escolhido) é preservado "
+        "integralmente para rastreabilidade. O valor mais próximo do limiar é "
+        f"`umido = {_fmt(bss_proximo)}` — um caso LIMÍTROFE, não uma folga confortável.\n")
 
     linhas.append("\n## 5. Cobertura dos intervalos — EMOS vs. RAW (mesmos 95 casos)\n")
     linhas.append("| Nível nominal | Cobertura EMOS | Largura média EMOS (mm) | Cobertura RAW | Largura média RAW (mm) |\n|---|---|---|---|---|\n")
@@ -208,14 +213,24 @@ def gerar_relatorio_markdown(resultados):
 
     linhas.append("\n## 9. Decisão segundo o critério pré-registrado (protocolo, seção 20)\n")
     linhas.append(
-        f"| Critério | Resultado |\n|---|---|\n"
-        f"| 1. IC95(CRPSS_spread_dinamico) > 0 | {decisao['criterio_1_crpss_spread_dinamico_ic_acima_de_zero']} |\n"
-        f"| 2. IC95(CRPSS vs. climatologia) > 0 | {decisao['criterio_2_crpss_vs_climatologia_ic_acima_de_zero']} |\n"
-        f"| 3. Sem degradação grave de Brier/BSS | {decisao['criterio_3_sem_degradacao_grave_brier_bss']} |\n"
-        f"| 4. Cobertura melhor ou igual ao RAW (3 níveis) | {decisao['criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis']} |\n"
-        f"| **Aprovado o componente dinâmico de spread?** | **{decisao['aprovado_componente_dinamico_de_spread']}** |\n\n"
-        f"{decisao['nota']}\n\n"
-        f"**Limitação do critério 4 (auditoria externa):** {decisao.get('criterio_4_limitacao')}\n")
+        f"| Critério | Resultado | Natureza |\n|---|---|---|\n"
+        f"| 1. IC95(CRPSS_spread_dinamico) > 0 | {decisao['criterio_1_crpss_spread_dinamico_ic_acima_de_zero']} | "
+        f"pré-registrado, sem ressalva |\n"
+        f"| 2. IC95(CRPSS vs. climatologia) > 0 | {decisao['criterio_2_crpss_vs_climatologia_ic_acima_de_zero']} | "
+        f"pré-registrado, sem ressalva |\n"
+        f"| 3. Sem degradação grave de Brier/BSS | BSS dentro do limiar calculado: "
+        f"{decisao['criterio_3_bss_dentro_do_limiar_calculado']} | "
+        f"**`{decisao.get('criterio_3_classificacao')}`** (limiar não pré-registrado) |\n"
+        f"| 4. Cobertura/calibração/PIT melhor que RAW | cobertura isolada dentro do esperado: "
+        f"{decisao['criterio_4_cobertura_dentro_do_esperado_vs_raw']} | "
+        f"**`{decisao.get('criterio_4_classificacao')}`** (avaliação parcial) |\n"
+        f"| **Aprovado o componente dinâmico de spread?** | **{decisao['aprovado_componente_dinamico_de_spread']}** | — |\n\n"
+        "**Motivos suficientes para a não aprovação** (independentes da classificação dos "
+        "critérios 3/4 acima):\n"
+        + ''.join(f"{i+1}. {m}.\n" for i, m in enumerate(decisao.get('motivos_suficientes_para_nao_aprovacao', [])))
+        + f"\n{decisao['nota']}\n\n"
+        f"**Limitação do critério 3:** {decisao.get('criterio_3_limitacao')}\n\n"
+        f"**Limitação do critério 4:** {decisao.get('criterio_4_limitacao')}\n")
 
     linhas.append("\n## 10. Conclusão\n")
     if decisao['aprovado_componente_dinamico_de_spread']:
@@ -223,18 +238,21 @@ def gerar_relatorio_markdown(resultados):
                       "componente dinâmico de spread do EMOS tem evidência suficiente, segundo "
                       "este protocolo, para ser considerado como acrescentando valor.")
     else:
-        criterios_falhos = [k for k, v2 in decisao.items()
-                             if k.startswith('criterio_') and v2 is False]
+        motivos = decisao.get('motivos_suficientes_para_nao_aprovacao', [])
         conclusao = (
-            f"O critério pré-registrado NÃO foi satisfeito "
-            f"({len(criterios_falhos)}/4 critério(s) reprovado(s)) — o componente dinâmico de "
-            f"spread NÃO tem evidência suficiente para ser considerado como acrescentando valor "
-            f"sobre corrigir só média e dispersão climatológica. O EMOS (completo e `d=0`, "
-            f"estruturalmente equivalentes nesta amostra) supera claramente o ensemble RAW "
+            f"O critério pré-registrado NÃO foi satisfeito — {len(motivos)} motivo(s) já "
+            f"suficiente(s) para a não aprovação, ambos pré-registrados sem ressalva (ver "
+            f"seção 9): " + '; '.join(motivos) + ". O componente dinâmico de spread NÃO tem "
+            f"evidência suficiente para ser considerado como acrescentando valor sobre corrigir "
+            f"só média e dispersão climatológica. O EMOS (completo e `d=0`, estruturalmente "
+            f"equivalentes nesta amostra) supera claramente o ensemble RAW "
             f"(CRPSS≈{_fmt(boot['CRPSS_vs_raw']['estimativa'])}, IC95 totalmente acima de zero) "
             f"mas não supera a climatologia probabilística causal "
             f"(CRPSS≈{_fmt(boot['CRPSS_vs_climatologia']['estimativa'])}, IC95 inclui zero) — "
-            f"pelo protocolo (seção 20), superar só o RAW não basta.")
+            f"pelo protocolo (seção 20), superar só o RAW não basta. Os critérios 3 e 4 "
+            f"(classificados como `{decisao.get('criterio_3_classificacao')}` e "
+            f"`{decisao.get('criterio_4_classificacao')}`, nunca como aprovação binária "
+            f"certificada) não alteram esta conclusão.")
     linhas.append(conclusao + "\n")
 
     linhas.append("\n## Limitações (protocolo, seção 25 — reafirmadas aqui)\n")
