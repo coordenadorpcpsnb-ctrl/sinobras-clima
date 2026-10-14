@@ -26,41 +26,60 @@
   "bootstrap_crpss": {
     "n_anos_distintos": 9,
     "n_resamples": 500,
+    "seed": 20261001,
     "metodo": "bootstrap em blocos por target_ano, sem refit — EMOS completo/d0/RAW/climatologia usam os MESMOS blocos de ano sorteados em cada reamostra",
+    "nenhuma_reamostra_descartada": true,
+    "n_resamples_efetivos_por_metrica": {
+      "CRPSS_vs_raw": 500,
+      "CRPSS_vs_climatologia": 500,
+      "CRPSS_spread_dinamico": 500,
+      "CRPSS_d0_vs_raw": 500,
+      "CRPSS_d0_vs_climatologia": 500
+    },
     "CRPSS_vs_raw": {
       "estimativa": 0.3091681825517921,
       "ic95_lo": 0.2180789665707567,
       "ic95_hi": 0.39833859960091933,
       "ic_classificacao": "ic_totalmente_acima_de_zero",
-      "metrica": "CRPSS_vs_raw"
+      "metrica": "CRPSS_vs_raw",
+      "estimativa_notacao_cientifica": "3.091682e-01",
+      "n_resamples_efetivos": 500
     },
     "CRPSS_vs_climatologia": {
       "estimativa": -0.028685372055115677,
       "ic95_lo": -0.07274225942092366,
       "ic95_hi": 0.014613149696274563,
       "ic_classificacao": "ic_inclui_zero",
-      "metrica": "CRPSS_vs_climatologia"
+      "metrica": "CRPSS_vs_climatologia",
+      "estimativa_notacao_cientifica": "-2.868537e-02",
+      "n_resamples_efetivos": 500
     },
     "CRPSS_spread_dinamico": {
       "estimativa": 1.4701276673800834e-07,
       "ic95_lo": -8.145095820033518e-10,
       "ic95_hi": 3.6351254212585445e-07,
       "ic_classificacao": "ic_inclui_zero",
-      "metrica": "CRPSS_spread_dinamico"
+      "metrica": "CRPSS_spread_dinamico",
+      "estimativa_notacao_cientifica": "1.470128e-07",
+      "n_resamples_efetivos": 500
     },
     "CRPSS_d0_vs_raw": {
       "estimativa": 0.3091680809906804,
       "ic95_lo": 0.21807885091565435,
       "ic95_hi": 0.3983384928003605,
       "ic_classificacao": "ic_totalmente_acima_de_zero",
-      "metrica": "CRPSS_d0_vs_raw"
+      "metrica": "CRPSS_d0_vs_raw",
+      "estimativa_notacao_cientifica": "3.091681e-01",
+      "n_resamples_efetivos": 500
     },
     "CRPSS_d0_vs_climatologia": {
       "estimativa": -0.028685523285020498,
       "ic95_lo": -0.07274229705588625,
       "ic95_hi": 0.014612931283073024,
       "ic_classificacao": "ic_inclui_zero",
-      "metrica": "CRPSS_d0_vs_climatologia"
+      "metrica": "CRPSS_d0_vs_climatologia",
+      "estimativa_notacao_cientifica": "-2.868552e-02",
+      "n_resamples_efetivos": 500
     }
   },
   "brier_bss": {
@@ -146,7 +165,11 @@
       6,
       22
     ],
-    "n": 95
+    "n": 95,
+    "n_ultimo_decil": 22,
+    "fracao_ultimo_decil": 0.23157894736842105,
+    "fracao_ultimo_decil_esperada_sob_uniformidade": 0.1,
+    "nota_limitacao": "PIT de distribuição MISTA (massa discreta em Y=0) não é comparável à uniforme contínua do mesmo jeito que um PIT de distribuição puramente contínua — a massa em Y=0 concentra-se no ponto único F_Y(0)/2 em vez de se espalhar pelo intervalo [0, F_Y(0)], então algum desvio da uniformidade é estruturalmente esperado mesmo sob calibração perfeita. Nunca usado como critério único de aprovação (protocolo, seção 19, último parágrafo)."
   },
   "bias": {
     "bias_mu_latente": -5.154918953919892,
@@ -226,16 +249,40 @@
       "n_b_d0_negativo": 0
     }
   },
+  "crps_final_treino_resumo": {
+    "completo": {
+      "n": 95,
+      "minimo": 27.63355592606165,
+      "p10": 28.025236323112,
+      "mediana": 28.471057317432955,
+      "media": 28.497053059414057,
+      "p90": 29.044845296536995,
+      "maximo": 29.434866032982605
+    },
+    "d0": {
+      "n": 95,
+      "minimo": 27.633555926015358,
+      "p10": 28.02523632311393,
+      "mediana": 28.47105731746357,
+      "media": 28.497053059464672,
+      "p90": 29.04484529653594,
+      "maximo": 29.43486603297405
+    },
+    "nota": "res.fun na solução — CRPS médio sobre a JANELA DE TREINO efetivamente minimizada em cada data causal, distinto de crps_emos/crps_d0 (CRPS retrospectivo da única observação avaliada, fora de amostra)."
+  },
   "decisao_criterio_pre_registrado": {
     "criterio_1_crpss_spread_dinamico_ic_acima_de_zero": false,
     "criterio_2_crpss_vs_climatologia_ic_acima_de_zero": false,
     "criterio_3_sem_degradacao_grave_brier_bss": true,
     "criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis": true,
     "aprovado_componente_dinamico_de_spread": false,
+    "limiar_bss_degradacao_grave": -0.1,
+    "bss_valor_mais_proximo_do_limiar": -0.08975179161961333,
+    "criterio_4_limitacao": "O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia só cobertura (3 níveis) — operacionalização mais estreita, registrada aqui sem alterar o critério já aprovado. Não afeta a decisão final (critérios 1/2 já reprovam).",
     "nota": "Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar só o RAW sem superar a climatologia NÃO basta (seção 20, \"se o EMOS só superar o RAW mas não a climatologia: não aprovar\")."
   },
   "primeira_init_date_avaliavel": "2003-02",
   "nenhum_pipeline_operacional_alterado": true,
   "nenhum_dashboard_alterado": true,
-  "data_geracao_utc": "2026-10-14T12:45:37.902968+00:00"
+  "data_geracao_utc": "2026-10-14T16:07:42.128531+00:00"
 }

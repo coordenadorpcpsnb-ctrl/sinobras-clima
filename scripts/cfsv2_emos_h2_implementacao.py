@@ -270,7 +270,13 @@ def ajustar_emos_d0(clim_obs_arr, anom_arr, erro_sd_arr, y_arr):
     return res
 
 
-def _sanidade_completo(theta, erro_sd_arr, spread_rel_arr):
+def _sanidade_completo(theta, erro_sd_arr, spread_rel_arr, crps_final):
+    """Protocolo, seção 16.5 — as 6 condições de sanidade, incluindo a
+    sexta (`o CRPS objetivo final é finito`), que a auditoria externa
+    identificou como ausente desta função até esta revisão: `crps_final`
+    é `res.fun` (o valor da função objetivo na solução), nunca o CRPS
+    retrospectivo da linha avaliada (que é uma quantidade separada,
+    fora de amostra, e não decide a sanidade do AJUSTE em si)."""
     a, b, gamma_c, d = theta
     if not np.all(np.isfinite(theta)):
         return False
@@ -284,10 +290,14 @@ def _sanidade_completo(theta, erro_sd_arr, spread_rel_arr):
     sigma = erro_sd_arr * np.sqrt(c + d * spread_rel_arr ** 2)
     if not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
         return False
+    if not np.isfinite(crps_final):
+        return False
     return True
 
 
-def _sanidade_d0(theta_d0, erro_sd_arr):
+def _sanidade_d0(theta_d0, erro_sd_arr, crps_final):
+    """Protocolo, seção 16.5 — mesmas 6 condições, versão restrita
+    (sem `d`)."""
     a_d0, b_d0, gamma_c_d0 = theta_d0
     if not np.all(np.isfinite(theta_d0)):
         return False
@@ -298,6 +308,23 @@ def _sanidade_d0(theta_d0, erro_sd_arr):
         return False
     sigma = erro_sd_arr * np.sqrt(c_d0)
     if not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
+        return False
+    if not np.isfinite(crps_final):
+        return False
+    return True
+
+
+def _sanidade_linha_avaliada(mu_latente, sigma, prob_zero_v, media_censurada_v, mediana_v, crps_v):
+    """Protocolo, seção 16.5 — a sanidade numérica não pode se limitar
+    às linhas de TREINO: a própria linha avaliada (fora de amostra)
+    também precisa ter sigma>0 finito e todos os campos probabilísticos
+    derivados finitos. Identificado pela auditoria externa como
+    ausente (a implementação original só verificava as linhas de
+    treino, nunca a avaliada)."""
+    valores = (mu_latente, sigma, prob_zero_v, media_censurada_v, mediana_v, crps_v)
+    if not all(np.isfinite(v_) for v_ in valores):
+        return False
+    if sigma <= 0:
         return False
     return True
 
@@ -338,9 +365,9 @@ def construir_emos_h2_expanding(pares):
             'a_d0': None, 'b_d0': None, 'gamma_c_d0': None, 'c_d0': None,
             'mu_latente_d0': None, 'sigma_d0': None, 'crps_d0': None,
             'success_completo': None, 'status_opt_completo': None, 'message_completo': None,
-            'nit_completo': None, 'nfev_completo': None,
+            'nit_completo': None, 'nfev_completo': None, 'crps_final_treino_completo': None,
             'success_d0': None, 'status_opt_d0': None, 'message_d0': None,
-            'nit_d0': None, 'nfev_d0': None,
+            'nit_d0': None, 'nfev_d0': None, 'crps_final_treino_d0': None,
             'crps_raw': None, 'crps_climatologia': None,
             'status_emos_completo': None, 'status_emos_d0': None, 'status_emos': None,
         }
@@ -364,52 +391,84 @@ def construir_emos_h2_expanding(pares):
             res_completo = ajustar_emos_completo(clim_obs_t, anom_t, erro_sd_t, spread_rel_t, y_t)
             res_d0 = ajustar_emos_d0(clim_obs_t, anom_t, erro_sd_t, y_t)
 
+            # crps_final_treino_* = res.fun — o valor da função objetivo
+            # (CRPS médio sobre a janela de TREINO) na solução retornada
+            # pelo otimizador. Registrado para TODO ajuste, mesmo quando
+            # success=False (protocolo, seção 16.4) — nunca confundido
+            # com crps_emos/crps_d0 abaixo, que são o CRPS calculado
+            # retrospectivamente sobre a ÚNICA observação AVALIADA
+            # (fora de amostra, não é o que o otimizador minimizou).
+            crps_final_treino_completo = float(res_completo.fun)
+            crps_final_treino_d0 = float(res_d0.fun)
+
             linha['success_completo'] = bool(res_completo.success)
             linha['status_opt_completo'] = int(res_completo.status)
             linha['message_completo'] = str(res_completo.message)
             linha['nit_completo'] = int(res_completo.nit)
             linha['nfev_completo'] = int(res_completo.nfev)
+            linha['crps_final_treino_completo'] = crps_final_treino_completo
 
             linha['success_d0'] = bool(res_d0.success)
             linha['status_opt_d0'] = int(res_d0.status)
             linha['message_d0'] = str(res_d0.message)
             linha['nit_d0'] = int(res_d0.nit)
             linha['nfev_d0'] = int(res_d0.nfev)
+            linha['crps_final_treino_d0'] = crps_final_treino_d0
 
             if not res_completo.success:
                 linha['status_emos_completo'] = STATUS_NAO_CONVERGIU
-            elif not _sanidade_completo(res_completo.x, erro_sd_t, spread_rel_t):
+            elif not _sanidade_completo(res_completo.x, erro_sd_t, spread_rel_t,
+                                         crps_final_treino_completo):
                 linha['status_emos_completo'] = STATUS_INVALIDO
             else:
-                linha['status_emos_completo'] = STATUS_OK
                 a, b, gamma_c, d = res_completo.x
                 c = float(np.exp(gamma_c))
                 mu_latente = float(row['climatologia_observada'] + a + b * row['anom_ensemble'])
                 sigma = float(row['erro_clim_sd_mes'] * np.sqrt(c + d * row['spread_relativo'] ** 2))
-                linha.update({
-                    'a': float(a), 'b': float(b), 'gamma_c': float(gamma_c), 'c': c, 'd': float(d),
-                    'mu_latente': mu_latente, 'sigma': sigma,
-                    'prob_zero': float(prob_zero(mu_latente, sigma)),
-                    'media_preditiva_censurada': float(media_preditiva_censurada(mu_latente, sigma)),
-                    'mediana_preditiva': float(quantil_censurado(0.5, mu_latente, sigma)),
-                    'crps_emos': float(crps_normal_censurada(row['observacao'], mu_latente, sigma)),
-                })
+                prob_zero_v = float(prob_zero(mu_latente, sigma))
+                media_censurada_v = float(media_preditiva_censurada(mu_latente, sigma))
+                mediana_v = float(quantil_censurado(0.5, mu_latente, sigma))
+                crps_emos_v = float(crps_normal_censurada(row['observacao'], mu_latente, sigma))
+                # sanidade numérica da PRÓPRIA LINHA AVALIADA (fora de
+                # amostra) — distinta da sanidade do ajuste sobre o
+                # treino acima; a auditoria externa identificou que a
+                # implementação original só verificava as linhas de
+                # treino, nunca esta.
+                if not _sanidade_linha_avaliada(mu_latente, sigma, prob_zero_v, media_censurada_v,
+                                                 mediana_v, crps_emos_v):
+                    linha['status_emos_completo'] = STATUS_INVALIDO
+                else:
+                    linha['status_emos_completo'] = STATUS_OK
+                    linha.update({
+                        'a': float(a), 'b': float(b), 'gamma_c': float(gamma_c), 'c': c,
+                        'd': float(d), 'mu_latente': mu_latente, 'sigma': sigma,
+                        'prob_zero': prob_zero_v, 'media_preditiva_censurada': media_censurada_v,
+                        'mediana_preditiva': mediana_v, 'crps_emos': crps_emos_v,
+                    })
 
             if not res_d0.success:
                 linha['status_emos_d0'] = STATUS_NAO_CONVERGIU
-            elif not _sanidade_d0(res_d0.x, erro_sd_t):
+            elif not _sanidade_d0(res_d0.x, erro_sd_t, crps_final_treino_d0):
                 linha['status_emos_d0'] = STATUS_INVALIDO
             else:
-                linha['status_emos_d0'] = STATUS_OK
                 a_d0, b_d0, gamma_c_d0 = res_d0.x
                 c_d0 = float(np.exp(gamma_c_d0))
                 mu_latente_d0 = float(row['climatologia_observada'] + a_d0 + b_d0 * row['anom_ensemble'])
                 sigma_d0 = float(row['erro_clim_sd_mes'] * np.sqrt(c_d0))
-                linha.update({
-                    'a_d0': float(a_d0), 'b_d0': float(b_d0), 'gamma_c_d0': float(gamma_c_d0),
-                    'c_d0': c_d0, 'mu_latente_d0': mu_latente_d0, 'sigma_d0': sigma_d0,
-                    'crps_d0': float(crps_normal_censurada(row['observacao'], mu_latente_d0, sigma_d0)),
-                })
+                prob_zero_d0_v = float(prob_zero(mu_latente_d0, sigma_d0))
+                media_censurada_d0_v = float(media_preditiva_censurada(mu_latente_d0, sigma_d0))
+                mediana_d0_v = float(quantil_censurado(0.5, mu_latente_d0, sigma_d0))
+                crps_d0_v = float(crps_normal_censurada(row['observacao'], mu_latente_d0, sigma_d0))
+                if not _sanidade_linha_avaliada(mu_latente_d0, sigma_d0, prob_zero_d0_v,
+                                                 media_censurada_d0_v, mediana_d0_v, crps_d0_v):
+                    linha['status_emos_d0'] = STATUS_INVALIDO
+                else:
+                    linha['status_emos_d0'] = STATUS_OK
+                    linha.update({
+                        'a_d0': float(a_d0), 'b_d0': float(b_d0), 'gamma_c_d0': float(gamma_c_d0),
+                        'c_d0': c_d0, 'mu_latente_d0': mu_latente_d0, 'sigma_d0': sigma_d0,
+                        'crps_d0': crps_d0_v,
+                    })
 
             if linha['status_emos_completo'] == STATUS_OK and linha['status_emos_d0'] == STATUS_OK:
                 linha['status_emos'] = STATUS_OK
@@ -475,6 +534,17 @@ def _verificar_falhas_de_convergencia(tabela):
 # ══════════════════════════════════════════════════════════════════════════
 
 def bootstrap_crpss_por_target_ano(tabela_ok, n_resamples=500, seed=20261001):
+    """Protocolo, seção 21 — bootstrap em blocos por `target_ano`, SEM
+    refit (reamostra só os forecasts já produzidos pela sequência
+    causal expanding). Auditoria externa, item 4 — rastreabilidade
+    explícita: cada reamostra sorteia os anos UMA VEZ e usa o MESMO
+    `amostra` resultante para as 5 métricas (`_crpss` sempre lê os
+    dois lados — modelo e referência — da mesma `amostra`, nunca de
+    sorteios separados), e o número de reamostras EFETIVAMENTE usadas
+    por métrica é contado e comparado a `n_resamples` — uma reamostra
+    só seria descartada de uma métrica se `crps_ref==0` nela (nunca
+    observado com CRPS real de precipitação, mas verificado, nunca
+    assumido)."""
     rng = np.random.default_rng(seed)
     anos = np.array(sorted(tabela_ok['target_ano'].unique()))
     por_ano = {ano: tabela_ok[tabela_ok['target_ano'] == ano] for ano in anos}
@@ -510,16 +580,32 @@ def bootstrap_crpss_por_target_ano(tabela_ok, n_resamples=500, seed=20261001):
     pontual_d0_vs_raw = _crpss(tabela_ok, 'crps_d0', 'crps_raw')
     pontual_d0_vs_clim = _crpss(tabela_ok, 'crps_d0', 'crps_climatologia')
 
+    listas_boot = {
+        'CRPSS_vs_raw': boot_vs_raw, 'CRPSS_vs_climatologia': boot_vs_clim,
+        'CRPSS_spread_dinamico': boot_spread_dinamico,
+        'CRPSS_d0_vs_raw': boot_d0_vs_raw, 'CRPSS_d0_vs_climatologia': boot_d0_vs_clim,
+    }
+    n_efetivos_por_metrica = {nome: len(lst) for nome, lst in listas_boot.items()}
+    nenhuma_reamostra_descartada = all(n == n_resamples for n in n_efetivos_por_metrica.values())
+
     def _rotulo(nome, pontual, boot):
         r = v._resumo_bootstrap(pontual, boot)
         r['ic_classificacao'] = v._classificar_ic_relativo_a_zero(r['ic95_lo'], r['ic95_hi'])
         r['metrica'] = nome
+        # precisão explícita adicional — distingue um ganho EXATAMENTE
+        # nulo (ou algebricamente garantido perto de zero, como quando
+        # d converge a 0 em toda a amostra) de um ganho numericamente
+        # muito pequeno mas não-nulo (auditoria externa, item 4).
+        r['estimativa_notacao_cientifica'] = f'{pontual:.6e}' if pontual is not None else None
+        r['n_resamples_efetivos'] = n_efetivos_por_metrica[nome]
         return r
 
     return {
-        'n_anos_distintos': int(len(anos)), 'n_resamples': n_resamples,
+        'n_anos_distintos': int(len(anos)), 'n_resamples': n_resamples, 'seed': seed,
         'metodo': 'bootstrap em blocos por target_ano, sem refit — EMOS completo/d0/RAW/'
                   'climatologia usam os MESMOS blocos de ano sorteados em cada reamostra',
+        'nenhuma_reamostra_descartada': nenhuma_reamostra_descartada,
+        'n_resamples_efetivos_por_metrica': n_efetivos_por_metrica,
         'CRPSS_vs_raw': _rotulo('CRPSS_vs_raw', pontual_vs_raw, boot_vs_raw),
         'CRPSS_vs_climatologia': _rotulo('CRPSS_vs_climatologia', pontual_vs_clim, boot_vs_clim),
         'CRPSS_spread_dinamico': _rotulo('CRPSS_spread_dinamico', pontual_spread_dinamico,
@@ -613,15 +699,39 @@ def metricas_cobertura_raw(tabela_ok):
 
 
 def metricas_pit(tabela_ok):
+    """Protocolo, seção 19 — mid-PIT. Auditoria externa, item 3 —
+    acrescenta a concentração no último decil (`[0.9,1.0]`) e uma nota
+    explícita de limitação: como a distribuição é MISTA (massa
+    discreta em `Y=0` via `F_Y(0)/2`, seção 19 do protocolo), o PIT
+    nunca pode ser comparado à uniforme contínua do mesmo jeito que
+    numa distribuição puramente contínua — valores de PIT abaixo de
+    `F_Y(0)` nunca ocorrem por construção (a massa em `Y=0` é mapeada
+    toda para o ponto único `F_Y(0)/2`, não distribuída no intervalo
+    `[0, F_Y(0)]`), então um histograma de PIT desta família SEMPRE
+    terá uma concentração artificial no bin que contém `F_Y(0)/2`
+    mesmo sob calibração perfeita — isso não é, por si só, evidência
+    de mau ajuste."""
     pit = mid_pit(tabela_ok['observacao'].values, tabela_ok['mu_latente'].values,
                    tabela_ok['sigma'].values)
     bins = np.linspace(0, 1, 11)
     contagens, _ = np.histogram(pit, bins=bins)
+    n = int(len(pit))
+    n_ultimo_decil = int(contagens[-1])
     return {
         'media': float(np.mean(pit)), 'variancia': float(np.var(pit)),
         'bins': [float(b) for b in bins],
         'contagens_por_bin': [int(c) for c in contagens],
-        'n': int(len(pit)),
+        'n': n,
+        'n_ultimo_decil': n_ultimo_decil,
+        'fracao_ultimo_decil': float(n_ultimo_decil / n) if n else None,
+        'fracao_ultimo_decil_esperada_sob_uniformidade': 0.1,
+        'nota_limitacao': ('PIT de distribuição MISTA (massa discreta em Y=0) não é comparável '
+                            'à uniforme contínua do mesmo jeito que um PIT de distribuição '
+                            'puramente contínua — a massa em Y=0 concentra-se no ponto único '
+                            'F_Y(0)/2 em vez de se espalhar pelo intervalo [0, F_Y(0)], então '
+                            'algum desvio da uniformidade é estruturalmente esperado mesmo sob '
+                            'calibração perfeita. Nunca usado como critério único de aprovação '
+                            '(protocolo, seção 19, último parágrafo).'),
     }
 
 
@@ -638,18 +748,19 @@ def metricas_bias(tabela_ok):
     }
 
 
-def diagnostico_parametros(tabela_ok):
-    def _stats(serie):
-        s = np.asarray(serie, dtype=float)
-        s = s[np.isfinite(s)]
-        if len(s) == 0:
-            return {'n': 0}
-        return {'n': int(len(s)), 'minimo': float(s.min()), 'p10': float(np.percentile(s, 10)),
-                'mediana': float(np.median(s)), 'media': float(s.mean()),
-                'p90': float(np.percentile(s, 90)), 'maximo': float(s.max())}
+def _stats_resumo(serie):
+    s = np.asarray(serie, dtype=float)
+    s = s[np.isfinite(s)]
+    if len(s) == 0:
+        return {'n': 0}
+    return {'n': int(len(s)), 'minimo': float(s.min()), 'p10': float(np.percentile(s, 10)),
+            'mediana': float(np.median(s)), 'media': float(s.mean()),
+            'p90': float(np.percentile(s, 90)), 'maximo': float(s.max())}
 
+
+def diagnostico_parametros(tabela_ok):
     campos = ['a', 'b', 'c', 'd', 'a_d0', 'b_d0', 'c_d0']
-    resultado = {campo: _stats(tabela_ok[campo]) for campo in campos}
+    resultado = {campo: _stats_resumo(tabela_ok[campo]) for campo in campos}
     resultado['destaques'] = {
         'n_d_proximo_de_zero': int((tabela_ok['d'].abs() < 1e-6).sum()),
         'n_d_no_bound_inferior': int((tabela_ok['d'] <= 1e-12).sum()),
@@ -724,6 +835,13 @@ def executar_emos_h2(n_resamples_bootstrap=500):
         return {'STOP_ON_FAILURE': True, 'motivo': 'NaN/Inf inesperado em CRPS calculado'}, tabela
 
     boot = bootstrap_crpss_por_target_ano(tabela_ok, n_resamples_bootstrap)
+    if not boot['nenhuma_reamostra_descartada']:
+        return {'STOP_ON_FAILURE': True,
+                'motivo': 'alguma reamostra do bootstrap foi descartada silenciosamente em pelo '
+                          'menos uma métrica (auditoria externa, item 4) — nunca esperado com '
+                          'CRPS real de precipitação',
+                'detalhe': boot['n_resamples_efetivos_por_metrica']}, tabela
+
     tercil = metricas_tercil_brier(tabela_ok)
     if not tercil['verificacao_probabilidades_somam_um']['ok']:
         return {'STOP_ON_FAILURE': True,
@@ -735,13 +853,48 @@ def executar_emos_h2(n_resamples_bootstrap=500):
     pit = metricas_pit(tabela_ok)
     bias = metricas_bias(tabela_ok)
     diagnostico = diagnostico_parametros(tabela_ok)
+    crps_final_treino_resumo = {
+        'completo': _stats_resumo(tabela_ok['crps_final_treino_completo']),
+        'd0': _stats_resumo(tabela_ok['crps_final_treino_d0']),
+        'nota': ('res.fun na solução — CRPS médio sobre a JANELA DE TREINO efetivamente '
+                 'minimizada em cada data causal, distinto de crps_emos/crps_d0 (CRPS '
+                 'retrospectivo da única observação avaliada, fora de amostra).'),
+    }
 
     # Critério de aprovação pré-registrado (protocolo, seção 20) —
     # mantido integralmente, nunca alterado após ver os resultados.
     cond1 = boot['CRPSS_spread_dinamico']['ic_classificacao'] == 'ic_totalmente_acima_de_zero'
     cond2 = boot['CRPSS_vs_climatologia']['ic_classificacao'] == 'ic_totalmente_acima_de_zero'
+
+    # Critério 3 — "ausência de degradação grave de Brier/BSS" (protocolo,
+    # seção 20, item 3) não define um limiar numérico — a implementação
+    # precisa de um, e usa BSS > -0.10 como limiar genérico de "não grave",
+    # ESCOLHIDO POR CONVENÇÃO DE VERIFICAÇÃO PROBABILÍSTICA (não ajustado a
+    # este resultado nem a nenhum outro): BSS mede a fração de melhora/
+    # degradação do Brier Score em relação à referência nominal
+    # (BSS = 1 - BS/BS_ref); uma degradação de até 10% sobre essa
+    # referência é tratada como "ruído aceitável" na literatura de
+    # verificação de previsão categórica, enquanto quedas maiores
+    # (tipicamente -0.20 a -0.30 ou piores) são as convencionalmente
+    # citadas como degradação clara. Auditoria externa, item 3 — o valor
+    # observado mais próximo do limiar é úmido = -0.0898, a ~10% ACIMA do
+    # limiar (não abaixo) — um caso LIMÍTROFE, não uma folga confortável;
+    # isso é registrado explicitamente aqui e no relatório, sem redefinir
+    # o limiar (nunca escolhido observando se -0.0898 passa ou não).
+    LIMIAR_BSS_DEGRADACAO_GRAVE = -0.10
     bss_vals = [val for val in tercil['bss_por_categoria'].values() if val is not None]
-    cond3 = all(val > -0.10 for val in bss_vals) if bss_vals else False
+    cond3 = all(val > LIMIAR_BSS_DEGRADACAO_GRAVE for val in bss_vals) if bss_vals else False
+
+    # Critério 4 — o protocolo (seção 20, item 4) pede "melhora substancial
+    # na calibração de cobertura/PIT frente ao RAW", mas a implementação
+    # abaixo avalia SÓ cobertura (os 3 níveis nominais), nunca o PIT.
+    # Auditoria externa, item 3 — isso é uma operacionalização MAIS
+    # ESTREITA do que o texto do protocolo, registrada aqui honestamente
+    # (não corrigida nesta atividade, por instrução explícita de não
+    # alterar os critérios científicos já aprovados). O PIT é calculado,
+    # reportado e discutido integralmente (`pit`, seção de limitações do
+    # relatório), mas NÃO entra em `cond4` — isso não muda a decisão
+    # final porque os critérios 1 e 2 já reprovam por conta própria.
     cobertura_melhor_que_raw = all(
         abs(cobertura[nivel]['cobertura_empirica'] - cobertura[nivel]['cobertura_nominal'])
         <= abs(cobertura_raw[nivel]['cobertura_empirica'] - cobertura_raw[nivel]['cobertura_nominal'])
@@ -754,6 +907,14 @@ def executar_emos_h2(n_resamples_bootstrap=500):
         'criterio_3_sem_degradacao_grave_brier_bss': cond3,
         'criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis': cond4,
         'aprovado_componente_dinamico_de_spread': aprovado,
+        'limiar_bss_degradacao_grave': LIMIAR_BSS_DEGRADACAO_GRAVE,
+        'bss_valor_mais_proximo_do_limiar': (min(bss_vals, key=lambda x: abs(x - LIMIAR_BSS_DEGRADACAO_GRAVE))
+                                              if bss_vals else None),
+        'criterio_4_limitacao': ('O protocolo (seção 20, item 4) pede melhora de calibração/'
+                                  'cobertura/PIT; esta implementação avalia só cobertura (3 '
+                                  'níveis) — operacionalização mais estreita, registrada aqui '
+                                  'sem alterar o critério já aprovado. Não afeta a decisão '
+                                  'final (critérios 1/2 já reprovam).'),
         'nota': ('Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar '
                  'só o RAW sem superar a climatologia NÃO basta (seção 20, "se o EMOS só '
                  'superar o RAW mas não a climatologia: não aprovar").'),
@@ -779,6 +940,7 @@ def executar_emos_h2(n_resamples_bootstrap=500):
         'pit': pit,
         'bias': bias,
         'diagnostico_parametros': diagnostico,
+        'crps_final_treino_resumo': crps_final_treino_resumo,
         'decisao_criterio_pre_registrado': decisao,
         'primeira_init_date_avaliavel': tabela_ok.sort_values('init_date').iloc[0]['init_date'],
         'nenhum_pipeline_operacional_alterado': True,

@@ -162,6 +162,106 @@ class RegraCausalTreinoTestCase(unittest.TestCase):
                           "antiga indevidamente incluiria")
 
 
+class CrpsFinalTreinoTestCase(unittest.TestCase):
+    """Auditoria externa, item 1 — `crps_final_treino_completo`/`_d0`
+    registrados para toda tentativa de ajuste (protocolo, seção 16.4),
+    finitos quando a otimização converge, e numericamente iguais a
+    `res.fun` (o valor da função objetivo na solução) — nunca
+    confundidos com `crps_emos`/`crps_d0` (CRPS retrospectivo,
+    calculado só sobre a observação avaliada, fora da amostra de
+    treino que o otimizador de fato minimizou)."""
+
+    def _pares(self, n):
+        linhas = []
+        for i in range(n):
+            mes = (i % 12) + 1
+            ano = 1990 + i // 12
+            init_date = f'{ano}-{mes:02d}'
+            target_p = v._periodo(init_date) + 1
+            linhas.append({
+                'init_date': init_date, 'target_month': str(target_p),
+                'target_ano': target_p.year, 'target_mes': target_p.month,
+                'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                'ensemble_std': 15.0, 'membros': np.full(24, 100.0 + 0.5 * i),
+                'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
+                'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
+                'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 20.0,
+                'spread_relativo': 1.0,
+                'tercil_33': 60.0, 'tercil_67': 90.0,
+                'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                'valido': True,
+            })
+        return pd.DataFrame(linhas)
+
+    def test_a_registrado_e_finito_para_avaliacao_ok(self):
+        pares = self._pares(130)
+        tabela = emos.construir_emos_h2_expanding(pares)
+        ok = tabela[tabela['status_emos'] == emos.STATUS_OK]
+        self.assertGreater(len(ok), 0)
+        self.assertTrue(np.isfinite(ok['crps_final_treino_completo']).all())
+        self.assertTrue(np.isfinite(ok['crps_final_treino_d0']).all())
+
+    def test_b_registrado_mesmo_quando_fitting_e_tentado_mas_falha(self):
+        """`crps_final_treino_*` precisa existir mesmo para ajustes que
+        NÃO chegaram a status_emos_completo/d0=='ok' — o registro
+        obrigatório da seção 16.4 do protocolo não é condicional a
+        sucesso."""
+        pares = self._pares(130)
+        tabela = emos.construir_emos_h2_expanding(pares)
+        tentativas = tabela[tabela['n_treino_emos'] >= emos.N_TREINO_MINIMO_EMOS]
+        tentativas = tentativas[tentativas['status_emos'] != emos.STATUS_PAR_INVALIDO]
+        self.assertGreater(len(tentativas), 0)
+        self.assertEqual(int(tentativas['crps_final_treino_completo'].isna().sum()), 0,
+                          "toda tentativa de ajuste completo precisa ter crps_final registrado, "
+                          "mesmo quando o ajuste falha")
+        self.assertEqual(int(tentativas['crps_final_treino_d0'].isna().sum()), 0)
+
+    def test_c_crps_final_treino_e_numericamente_igual_a_res_fun(self):
+        pares = self._pares(130)
+        pares_p = pares.assign(_p=pd.PeriodIndex(pares['init_date'], freq='M')).sort_values('_p')
+        tabela = emos.construir_emos_h2_expanding(pares)
+        linha = tabela[tabela['status_emos'] == emos.STATUS_OK].sort_values('init_date').iloc[-1]
+        avaliada_p = v._periodo(linha['init_date'])
+
+        validos = pares_p[pares_p['_p'] < avaliada_p].copy()
+        validos = validos.assign(
+            _target_p=pd.PeriodIndex(validos['target_month'], freq='M'))
+        validos = validos[validos['_target_p'] < avaliada_p]
+
+        res_completo = emos.ajustar_emos_completo(
+            validos['climatologia_observada'].to_numpy(dtype=float),
+            validos['anom_ensemble'].to_numpy(dtype=float),
+            validos['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos['spread_relativo'].to_numpy(dtype=float),
+            validos['observacao'].to_numpy(dtype=float))
+        self.assertAlmostEqual(float(res_completo.fun), linha['crps_final_treino_completo'],
+                                places=9)
+
+    def test_d_crps_final_treino_e_diferente_de_crps_retrospectivo_da_avaliada(self):
+        """Confirma que as duas quantidades são conceitualmente (e
+        numericamente) DIFERENTES — se coincidissem sempre, seria sinal
+        de que uma está lendo o valor da outra por engano. Precisa de
+        ruído na série: a série sintética LINEAR SEM ruído de `_pares`
+        tem ajuste quase perfeito em TODOS os pontos (resíduo ~0 em
+        toda parte, inclusive na linha avaliada), o que faz as duas
+        quantidades coincidirem por coincidência — não por engano. Com
+        ruído, o resíduo da única linha avaliada passa a divergir do
+        resíduo médio das dezenas de linhas de treino."""
+        rng = np.random.default_rng(7)
+        linhas = self._pares(130).to_dict('records')
+        for i, linha in enumerate(linhas):
+            linha['observacao'] = 80.0 + 0.3 * i + rng.normal(0, 8.0)
+        pares = pd.DataFrame(linhas)
+        tabela = emos.construir_emos_h2_expanding(pares)
+        ok = tabela[tabela['status_emos'] == emos.STATUS_OK]
+        self.assertGreater(len(ok), 0)
+        # crps_final_treino é a MÉDIA do CRPS sobre decenas de linhas de
+        # treino; crps_emos é o CRPS de 1 única observação avaliada — não
+        # há razão estrutural para serem iguais, e de fato não são aqui.
+        diffs = (ok['crps_final_treino_completo'] - ok['crps_emos']).abs()
+        self.assertTrue((diffs > 1e-6).any())
+
+
 class MutacaoObservacaoFuturaTestCase(unittest.TestCase):
     """Protocolo, seção 23 (item 14 do pedido de implementação) —
     alterar drasticamente a OBSERVAÇÃO de uma linha com
@@ -330,24 +430,55 @@ class StopOnFailureSinteticoTestCase(unittest.TestCase):
         theta_invalido = np.array([0.0, 1.0, 999.0, 0.0])  # gamma_c fora do bound [-20,20]
         erro_sd = np.full(5, 20.0)
         spread_rel = np.ones(5)
-        self.assertFalse(emos._sanidade_completo(theta_invalido, erro_sd, spread_rel))
+        self.assertFalse(emos._sanidade_completo(theta_invalido, erro_sd, spread_rel, 1.0))
 
     def test_c_solucao_numericamente_invalida_d_negativo(self):
         theta_invalido = np.array([0.0, 1.0, 0.0, -0.5])
         erro_sd = np.full(5, 20.0)
         spread_rel = np.ones(5)
-        self.assertFalse(emos._sanidade_completo(theta_invalido, erro_sd, spread_rel))
+        self.assertFalse(emos._sanidade_completo(theta_invalido, erro_sd, spread_rel, 1.0))
 
     def test_d_sanidade_d0_gamma_c_fora_do_bound(self):
         theta_invalido = np.array([0.0, 1.0, -999.0])
         erro_sd = np.full(5, 20.0)
-        self.assertFalse(emos._sanidade_d0(theta_invalido, erro_sd))
+        self.assertFalse(emos._sanidade_d0(theta_invalido, erro_sd, 1.0))
 
     def test_e_sanidade_ok_em_caso_valido(self):
         theta_valido = np.array([0.0, 1.0, 0.0, 0.1])
         erro_sd = np.full(5, 20.0)
         spread_rel = np.ones(5)
-        self.assertTrue(emos._sanidade_completo(theta_valido, erro_sd, spread_rel))
+        self.assertTrue(emos._sanidade_completo(theta_valido, erro_sd, spread_rel, 1.0))
+
+    def test_f_crps_final_nao_finito_invalida_a_solucao_completo(self):
+        """Auditoria externa, item 1/2 — `crps_final` (res.fun) não
+        finito tem que invalidar a solução mesmo com todo o resto
+        numericamente correto (condição 6 da seção 16.5, ausente até
+        esta revisão)."""
+        theta_valido = np.array([0.0, 1.0, 0.0, 0.1])
+        erro_sd = np.full(5, 20.0)
+        spread_rel = np.ones(5)
+        self.assertFalse(emos._sanidade_completo(theta_valido, erro_sd, spread_rel, np.inf))
+        self.assertFalse(emos._sanidade_completo(theta_valido, erro_sd, spread_rel, np.nan))
+
+    def test_g_crps_final_nao_finito_invalida_a_solucao_d0(self):
+        theta_valido = np.array([0.0, 1.0, 0.0])
+        erro_sd = np.full(5, 20.0)
+        self.assertFalse(emos._sanidade_d0(theta_valido, erro_sd, np.inf))
+        self.assertFalse(emos._sanidade_d0(theta_valido, erro_sd, np.nan))
+
+    def test_h_sanidade_linha_avaliada_detecta_sigma_nao_finito(self):
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, np.inf, 0.3, 6.0, 5.0, 2.0))
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, 0.0, 0.3, 6.0, 5.0, 2.0))
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, -1.0, 0.3, 6.0, 5.0, 2.0))
+
+    def test_i_sanidade_linha_avaliada_detecta_campo_probabilistico_nao_finito(self):
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, 10.0, np.nan, 6.0, 5.0, 2.0))
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, 10.0, 0.3, np.inf, 5.0, 2.0))
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, 10.0, 0.3, 6.0, np.nan, 2.0))
+        self.assertFalse(emos._sanidade_linha_avaliada(5.0, 10.0, 0.3, 6.0, 5.0, np.inf))
+
+    def test_j_sanidade_linha_avaliada_ok_em_caso_valido(self):
+        self.assertTrue(emos._sanidade_linha_avaliada(5.0, 10.0, 0.3, 6.0, 5.0, 2.0))
 
 
 class StopOnFailureIntegradoTestCase(unittest.TestCase):

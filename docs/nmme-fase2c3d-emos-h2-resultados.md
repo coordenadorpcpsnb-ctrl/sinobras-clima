@@ -15,17 +15,25 @@ Implementação real do EMOS (Normal censurada em zero, CRPS minimizado analitic
 | Ensemble RAW CFSv2 | 39.7739 |
 | Climatologia causal | 26.7109 |
 
-## 3. CRPSS e intervalos de confiança (bootstrap em blocos por target_ano, sem refit)
-N anos distintos: 9, N reamostras: 500.
-| Comparação | Estimativa pontual | IC 95% | Classificação |
-|---|---|---|---|
-| EMOS completo vs. RAW | 0.3092 | [0.2181, 0.3983] | IC 95% totalmente ACIMA de zero |
-| EMOS completo vs. climatologia causal | -0.0287 | [-0.0727, 0.0146] | IC 95% inclui zero (indeterminado) |
-| EMOS completo vs. EMOS d=0 (teste CENTRAL) | 0.0000 | [-0.0000, 0.0000] | IC 95% inclui zero (indeterminado) |
-| EMOS d=0 vs. RAW | 0.3092 | [0.2181, 0.3983] | IC 95% totalmente ACIMA de zero |
-| EMOS d=0 vs. climatologia causal | -0.0287 | [-0.0727, 0.0146] | IC 95% inclui zero (indeterminado) |
+## 2.5. Rastreabilidade do CRPS final de treino (res.fun)
+| Modelo | mín | mediana | máx | N finitos |
+|---|---|---|---|---|
+| completo | 27.6336 | 28.4711 | 29.4349 | 95 |
+| d=0 | 27.6336 | 28.4711 | 29.4349 | 95 |
 
-**Teste central (CRPSS_spread_dinamico):** se o IC 95% inclui zero, o termo dinâmico de spread (`d * spread_relativo²`) não acrescenta valor comprovado sobre corrigir só média e dispersão climatológica — qualquer melhoria do EMOS completo sobre o RAW, nesse caso, vem da correção de localização/escala, não do spread caso a caso (protocolo, seção 18).
+`crps_final_treino_completo`/`crps_final_treino_d0` (protocolo, seção 16.4) registram, para CADA data causal, o valor da função objetivo (`res.fun`) na solução do otimizador — o CRPS médio sobre a JANELA DE TREINO que de fato foi minimizada. É uma quantidade DIFERENTE de `crps_emos`/`crps_d0` (seções 2/3 abaixo), que são o CRPS calculado retrospectivamente sobre a ÚNICA observação AVALIADA, fora da amostra de treino. As duas nunca coincidem por construção (uma é média de dezenas/centenas de linhas históricas; a outra é um único ponto fora de amostra) — ver `tests/test_cfsv2_emos_h2_implementacao.py::CrpsFinalTreinoTestCase`, que confirma numericamente a diferença e a igualdade de `crps_final_treino_completo` com `res.fun` recomputado de forma independente.
+
+## 3. CRPSS e intervalos de confiança (bootstrap em blocos por target_ano, sem refit)
+N anos distintos: 9, N reamostras: 500, semente determinística: `20261001`. Nenhuma reamostra descartada em nenhuma métrica: **True** (contagens efetivas: {'CRPSS_vs_raw': 500, 'CRPSS_vs_climatologia': 500, 'CRPSS_spread_dinamico': 500, 'CRPSS_d0_vs_raw': 500, 'CRPSS_d0_vs_climatologia': 500}).
+| Comparação | Estimativa pontual | Notação científica | IC 95% | Classificação | N efetivo |
+|---|---|---|---|---|---|
+| EMOS completo vs. RAW | 0.3092 | `3.091682e-01` | [0.2181, 0.3983] | IC 95% totalmente ACIMA de zero | 500 |
+| EMOS completo vs. climatologia causal | -0.0287 | `-2.868537e-02` | [-0.0727, 0.0146] | IC 95% inclui zero (indeterminado) | 500 |
+| EMOS completo vs. EMOS d=0 (teste CENTRAL) | 0.0000 | `1.470128e-07` | [-0.0000, 0.0000] | IC 95% inclui zero (indeterminado) | 500 |
+| EMOS d=0 vs. RAW | 0.3092 | `3.091681e-01` | [0.2181, 0.3983] | IC 95% totalmente ACIMA de zero | 500 |
+| EMOS d=0 vs. climatologia causal | -0.0287 | `-2.868552e-02` | [-0.0727, 0.0146] | IC 95% inclui zero (indeterminado) | 500 |
+
+**Teste central (CRPSS_spread_dinamico):** a notação científica acima (`1.470128e-07`) mostra que o ganho pontual é numericamente muito pequeno mas NÃO matematicamente zero exato — consistente com `d` convergindo para um valor extremamente próximo do bound inferior (0) em todas as 95 avaliações (seção 8), nunca exatamente 0.0 em ponto flutuante. O IC 95% inclui zero, então o termo dinâmico de spread (`d * spread_relativo²`) não acrescenta valor comprovado sobre corrigir só média e dispersão climatológica — qualquer melhoria do EMOS completo sobre o RAW, nesse caso, vem da correção de localização/escala, não do spread caso a caso (protocolo, seção 18).
 
 ## 4. Brier Score e BSS por categoria de tercil
 | Categoria | Brier Score (EMOS) | Brier ref. nominal (1/3) | BSS |
@@ -35,6 +43,8 @@ N anos distintos: 9, N reamostras: 500.
 | umido | 0.2281 | 0.2094 | -0.0898 |
 
 Verificação de que as probabilidades somam 1 em todos os casos: True (desvio máximo: 1.11e-16).
+
+**Justificativa do limiar do critério 3 (BSS > -0.10):** o protocolo (seção 20, item 3) exige "ausência de degradação grave", sem fixar um número — a implementação usa BSS > -0,10 como limiar genérico de "não grave" em verificação probabilística categórica (uma queda de até 10% sobre a referência nominal é tratada como ruído aceitável; quedas de -0,20 a -0,30 ou piores são as convencionalmente citadas como degradação clara). Este limiar não foi ajustado olhando para o resultado desta avaliação. **Nota de auditoria:** o valor mais próximo do limiar é `umido = -0.0898` — cerca de 10% ACIMA do limiar, um caso LIMÍTROFE, não uma folga confortável; isso é registrado aqui explicitamente, sem redefinir o limiar.
 
 ## 5. Cobertura dos intervalos — EMOS vs. RAW (mesmos 95 casos)
 | Nível nominal | Cobertura EMOS | Largura média EMOS (mm) | Cobertura RAW | Largura média RAW (mm) |
@@ -47,6 +57,10 @@ Verificação de que as probabilidades somam 1 em todos os casos: True (desvio m
 Média: 0.5605 (ideal: 0,5). Variância: 0.0949 (ideal: 1/12 ≈ 0,0833). N: 95.
 
 Contagens por decil (0,0-1,0): [4, 13, 9, 8, 11, 6, 7, 9, 6, 22]
+
+**Concentração no último decil [0,9; 1,0]:** 22/95 observações (fração = 0.232, esperado sob uniformidade = 0.10) — mais que o dobro do esperado, consistente com o viés leve de PIT médio acima de 0,5 (sub-previsão sistemática discutida no bias, seção 7).
+
+**Limitação da comparação com a uniforme:** PIT de distribuição MISTA (massa discreta em Y=0) não é comparável à uniforme contínua do mesmo jeito que um PIT de distribuição puramente contínua — a massa em Y=0 concentra-se no ponto único F_Y(0)/2 em vez de se espalhar pelo intervalo [0, F_Y(0)], então algum desvio da uniformidade é estruturalmente esperado mesmo sob calibração perfeita. Nunca usado como critério único de aprovação (protocolo, seção 19, último parágrafo).
 
 ## 7. Bias
 - `bias_mu_latente` (diagnóstico do parâmetro latente): -5.1549 mm.
@@ -77,6 +91,8 @@ Destaques: `d` praticamente zero em 95/95 avaliações; `d` no bound inferior (0
 | **Aprovado o componente dinâmico de spread?** | **False** |
 
 Os 4 critérios são exigidos SIMULTANEAMENTE (protocolo, seção 20). Superar só o RAW sem superar a climatologia NÃO basta (seção 20, "se o EMOS só superar o RAW mas não a climatologia: não aprovar").
+
+**Limitação do critério 4 (auditoria externa):** O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia só cobertura (3 níveis) — operacionalização mais estreita, registrada aqui sem alterar o critério já aprovado. Não afeta a decisão final (critérios 1/2 já reprovam).
 
 ## 10. Conclusão
 O critério pré-registrado NÃO foi satisfeito (2/4 critério(s) reprovado(s)) — o componente dinâmico de spread NÃO tem evidência suficiente para ser considerado como acrescentando valor sobre corrigir só média e dispersão climatológica. O EMOS (completo e `d=0`, estruturalmente equivalentes nesta amostra) supera claramente o ensemble RAW (CRPSS≈0.3092, IC95 totalmente acima de zero) mas não supera a climatologia probabilística causal (CRPSS≈-0.0287, IC95 inclui zero) — pelo protocolo (seção 20), superar só o RAW não basta.

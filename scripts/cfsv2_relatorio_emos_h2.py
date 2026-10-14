@@ -83,9 +83,35 @@ def gerar_relatorio_markdown(resultados):
         f"| Ensemble RAW CFSv2 | {_fmt(crps['raw'])} |\n"
         f"| Climatologia causal | {_fmt(crps['climatologia'])} |\n")
 
+    linhas.append("\n## 2.5. Rastreabilidade do CRPS final de treino (res.fun)\n")
+    cft = resultados.get('crps_final_treino_resumo')
+    if cft:
+        linhas.append(
+            "| Modelo | mín | mediana | máx | N finitos |\n|---|---|---|---|---|\n"
+            f"| completo | {_fmt(cft['completo']['minimo'])} | {_fmt(cft['completo']['mediana'])} | "
+            f"{_fmt(cft['completo']['maximo'])} | {cft['completo']['n']} |\n"
+            f"| d=0 | {_fmt(cft['d0']['minimo'])} | {_fmt(cft['d0']['mediana'])} | "
+            f"{_fmt(cft['d0']['maximo'])} | {cft['d0']['n']} |\n\n")
+    linhas.append(
+        "`crps_final_treino_completo`/`crps_final_treino_d0` (protocolo, seção 16.4) registram, "
+        "para CADA data causal, o valor da função objetivo (`res.fun`) na solução do otimizador "
+        "— o CRPS médio sobre a JANELA DE TREINO que de fato foi minimizada. É uma quantidade "
+        "DIFERENTE de `crps_emos`/`crps_d0` (seções 2/3 abaixo), que são o CRPS calculado "
+        "retrospectivamente sobre a ÚNICA observação AVALIADA, fora da amostra de treino. As "
+        "duas nunca coincidem por construção (uma é média de dezenas/centenas de linhas "
+        "históricas; a outra é um único ponto fora de amostra) — ver "
+        "`tests/test_cfsv2_emos_h2_implementacao.py::CrpsFinalTreinoTestCase`, que confirma "
+        "numericamente a diferença e a igualdade de `crps_final_treino_completo` com `res.fun` "
+        "recomputado de forma independente.\n")
+
     linhas.append("\n## 3. CRPSS e intervalos de confiança (bootstrap em blocos por target_ano, sem refit)\n")
-    linhas.append(f"N anos distintos: {boot['n_anos_distintos']}, N reamostras: {boot['n_resamples']}.\n")
-    linhas.append("| Comparação | Estimativa pontual | IC 95% | Classificação |\n|---|---|---|---|\n")
+    linhas.append(
+        f"N anos distintos: {boot['n_anos_distintos']}, N reamostras: {boot['n_resamples']}, "
+        f"semente determinística: `{boot.get('seed')}`. Nenhuma reamostra descartada em "
+        f"nenhuma métrica: **{boot.get('nenhuma_reamostra_descartada')}** "
+        f"(contagens efetivas: {boot.get('n_resamples_efetivos_por_metrica')}).\n")
+    linhas.append("| Comparação | Estimativa pontual | Notação científica | IC 95% | Classificação | N efetivo |\n"
+                   "|---|---|---|---|---|---|\n")
     for chave, rotulo in (
         ('CRPSS_vs_raw', 'EMOS completo vs. RAW'),
         ('CRPSS_vs_climatologia', 'EMOS completo vs. climatologia causal'),
@@ -95,13 +121,19 @@ def gerar_relatorio_markdown(resultados):
     ):
         r = boot[chave]
         linhas.append(f"| {rotulo} | {_fmt(r['estimativa'])} | "
-                       f"[{_fmt(r['ic95_lo'])}, {_fmt(r['ic95_hi'])}] | {_ic_texto(r['ic_classificacao'])} |\n")
+                       f"`{r.get('estimativa_notacao_cientifica', 'N/D')}` | "
+                       f"[{_fmt(r['ic95_lo'])}, {_fmt(r['ic95_hi'])}] | {_ic_texto(r['ic_classificacao'])} | "
+                       f"{r.get('n_resamples_efetivos', 'N/D')} |\n")
     linhas.append(
-        "\n**Teste central (CRPSS_spread_dinamico):** se o IC 95% inclui zero, o termo "
-        "dinâmico de spread (`d * spread_relativo²`) não acrescenta valor comprovado sobre "
-        "corrigir só média e dispersão climatológica — qualquer melhoria do EMOS completo "
-        "sobre o RAW, nesse caso, vem da correção de localização/escala, não do spread "
-        "caso a caso (protocolo, seção 18).\n")
+        "\n**Teste central (CRPSS_spread_dinamico):** a notação científica acima "
+        f"(`{boot['CRPSS_spread_dinamico'].get('estimativa_notacao_cientifica')}`) mostra que o "
+        "ganho pontual é numericamente muito pequeno mas NÃO matematicamente zero exato — "
+        "consistente com `d` convergindo para um valor extremamente próximo do bound inferior "
+        "(0) em todas as 95 avaliações (seção 8), nunca exatamente 0.0 em ponto flutuante. O IC "
+        "95% inclui zero, então o termo dinâmico de spread (`d * spread_relativo²`) não "
+        "acrescenta valor comprovado sobre corrigir só média e dispersão climatológica — "
+        "qualquer melhoria do EMOS completo sobre o RAW, nesse caso, vem da correção de "
+        "localização/escala, não do spread caso a caso (protocolo, seção 18).\n")
 
     linhas.append("\n## 4. Brier Score e BSS por categoria de tercil\n")
     linhas.append("| Categoria | Brier Score (EMOS) | Brier ref. nominal (1/3) | BSS |\n|---|---|---|---|\n")
@@ -112,6 +144,18 @@ def gerar_relatorio_markdown(resultados):
     linhas.append(f"\nVerificação de que as probabilidades somam 1 em todos os casos: "
                   f"{brier['verificacao_probabilidades_somam_um']['ok']} "
                   f"(desvio máximo: {brier['verificacao_probabilidades_somam_um']['max_desvio_abs']:.2e}).\n")
+    limiar_bss = decisao.get('limiar_bss_degradacao_grave')
+    bss_proximo = decisao.get('bss_valor_mais_proximo_do_limiar')
+    linhas.append(
+        f"\n**Justificativa do limiar do critério 3 (BSS > {_fmt(limiar_bss, 2)}):** o protocolo "
+        "(seção 20, item 3) exige \"ausência de degradação grave\", sem fixar um número — a "
+        "implementação usa BSS > -0,10 como limiar genérico de \"não grave\" em verificação "
+        "probabilística categórica (uma queda de até 10% sobre a referência nominal é tratada "
+        "como ruído aceitável; quedas de -0,20 a -0,30 ou piores são as convencionalmente "
+        "citadas como degradação clara). Este limiar não foi ajustado olhando para o resultado "
+        "desta avaliação. **Nota de auditoria:** o valor mais próximo do limiar é "
+        f"`umido = {_fmt(bss_proximo)}` — cerca de 10% ACIMA do limiar, um caso LIMÍTROFE, não "
+        "uma folga confortável; isso é registrado aqui explicitamente, sem redefinir o limiar.\n")
 
     linhas.append("\n## 5. Cobertura dos intervalos — EMOS vs. RAW (mesmos 95 casos)\n")
     linhas.append("| Nível nominal | Cobertura EMOS | Largura média EMOS (mm) | Cobertura RAW | Largura média RAW (mm) |\n|---|---|---|---|---|\n")
@@ -124,7 +168,13 @@ def gerar_relatorio_markdown(resultados):
     linhas.append("\n## 6. PIT (mid-PIT, determinístico, sem RNG)\n")
     linhas.append(f"Média: {_fmt(pit['media'], 4)} (ideal: 0,5). Variância: {_fmt(pit['variancia'], 4)} "
                   f"(ideal: 1/12 ≈ 0,0833). N: {pit['n']}.\n\n"
-                  "Contagens por decil (0,0-1,0): " + str(pit['contagens_por_bin']) + "\n")
+                  "Contagens por decil (0,0-1,0): " + str(pit['contagens_por_bin']) + "\n\n"
+                  f"**Concentração no último decil [0,9; 1,0]:** {pit.get('n_ultimo_decil')}/"
+                  f"{pit['n']} observações (fração = {_fmt(pit.get('fracao_ultimo_decil'), 3)}, "
+                  f"esperado sob uniformidade = {_fmt(pit.get('fracao_ultimo_decil_esperada_sob_uniformidade'), 2)}) "
+                  "— mais que o dobro do esperado, consistente com o viés leve de PIT médio "
+                  "acima de 0,5 (sub-previsão sistemática discutida no bias, seção 7).\n\n"
+                  f"**Limitação da comparação com a uniforme:** {pit.get('nota_limitacao')}\n")
 
     linhas.append("\n## 7. Bias\n")
     linhas.append(
@@ -164,7 +214,8 @@ def gerar_relatorio_markdown(resultados):
         f"| 3. Sem degradação grave de Brier/BSS | {decisao['criterio_3_sem_degradacao_grave_brier_bss']} |\n"
         f"| 4. Cobertura melhor ou igual ao RAW (3 níveis) | {decisao['criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis']} |\n"
         f"| **Aprovado o componente dinâmico de spread?** | **{decisao['aprovado_componente_dinamico_de_spread']}** |\n\n"
-        f"{decisao['nota']}\n")
+        f"{decisao['nota']}\n\n"
+        f"**Limitação do critério 4 (auditoria externa):** {decisao.get('criterio_4_limitacao')}\n")
 
     linhas.append("\n## 10. Conclusão\n")
     if decisao['aprovado_componente_dinamico_de_spread']:
