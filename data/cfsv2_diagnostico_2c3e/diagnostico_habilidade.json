@@ -1,0 +1,260 @@
+{
+  "por_horizonte": {
+    "1": {
+      "raw_rmsess_absoluto": {
+        "estimativa": -0.22467082681090722,
+        "ic95_lo": -0.3288537095535768,
+        "ic95_hi": -0.14316431413590716
+      },
+      "raw_rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "raw_rmsess_anomalia_corrigida": {
+        "estimativa": 0.044815248181959255,
+        "ic95_lo": -0.043262429791122034,
+        "ic95_hi": 0.13254545657862074
+      },
+      "raw_rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+      "raw_crpss": {
+        "estimativa": -0.5192694508419826,
+        "ic95_lo": -0.6524021266020944,
+        "ic95_hi": -0.4163300133792567
+      },
+      "raw_crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "aditivo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.040294096718318184,
+        "ic95_lo": 0.0024606180095468446,
+        "ic95_hi": 0.08819627993612777
+      },
+      "aditivo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_totalmente_acima_de_zero",
+      "multiplicativo_skill_vs_anomalia_reconstruida": {
+        "estimativa": -0.09743860995173326,
+        "ic95_lo": -0.248047253216298,
+        "ic95_hi": 0.03965474716944114
+      },
+      "multiplicativo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "mos_linear_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.010367619059827526,
+        "ic95_lo": -0.07895679222498218,
+        "ic95_hi": 0.1291346347291663
+      },
+      "mos_linear_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "gate_classificacao_spread": "ensemble_mal_calibrado_spread_pouco_informativo"
+    },
+    "2": {
+      "raw_rmsess_absoluto": {
+        "estimativa": -0.2777337158892277,
+        "ic95_lo": -0.38741471243070047,
+        "ic95_hi": -0.19359706324149323
+      },
+      "raw_rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "raw_rmsess_anomalia_corrigida": {
+        "estimativa": -0.0441728577038869,
+        "ic95_lo": -0.11058301058079446,
+        "ic95_hi": 0.008118683220779079
+      },
+      "raw_rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+      "raw_crpss": {
+        "estimativa": -0.49011317041705005,
+        "ic95_lo": -0.6163659078140391,
+        "ic95_hi": -0.3795565258124841
+      },
+      "raw_crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "aditivo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.03633969040165075,
+        "ic95_lo": -0.0011411551303811213,
+        "ic95_hi": 0.07504485090101203
+      },
+      "aditivo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "multiplicativo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.020971396553805977,
+        "ic95_lo": -0.03316004021435776,
+        "ic95_hi": 0.07263069932872168
+      },
+      "multiplicativo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "mos_linear_skill_vs_anomalia_reconstruida": {
+        "estimativa": -0.0022925330491643248,
+        "ic95_lo": -0.08433333823189279,
+        "ic95_hi": 0.0933726553506119
+      },
+      "mos_linear_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "gate_classificacao_spread": "ensemble_mal_calibrado_mas_potencialmente_calibravel",
+      "emos_h2_CRPSS_vs_raw": {
+        "estimativa": 0.3091681825517921,
+        "ic95_lo": 0.2180789665707567,
+        "ic95_hi": 0.39833859960091933
+      },
+      "emos_h2_CRPSS_vs_climatologia": {
+        "estimativa": -0.028685372055115677,
+        "ic95_lo": -0.07274225942092366,
+        "ic95_hi": 0.014613149696274563
+      },
+      "emos_h2_CRPSS_spread_dinamico": {
+        "estimativa": 1.4701276673800834e-07,
+        "ic95_lo": -8.145095820033518e-10,
+        "ic95_hi": 3.6351254212585445e-07
+      }
+    },
+    "3": {
+      "raw_rmsess_absoluto": {
+        "estimativa": -0.31563289007061224,
+        "ic95_lo": -0.47918119590263414,
+        "ic95_hi": -0.1588870128888983
+      },
+      "raw_rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "raw_rmsess_anomalia_corrigida": {
+        "estimativa": -0.01076964236269462,
+        "ic95_lo": -0.07560595342858133,
+        "ic95_hi": 0.056007365437825106
+      },
+      "raw_rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+      "raw_crpss": {
+        "estimativa": -0.4871431189639368,
+        "ic95_lo": -0.6723243505728678,
+        "ic95_hi": -0.3040324531377689
+      },
+      "raw_crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "aditivo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.02715970712687854,
+        "ic95_lo": -0.010179102016816493,
+        "ic95_hi": 0.06003140176259085
+      },
+      "aditivo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "multiplicativo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.007357513136141969,
+        "ic95_lo": -0.09939892669903727,
+        "ic95_hi": 0.08491636863256384
+      },
+      "multiplicativo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "mos_linear_skill_vs_anomalia_reconstruida": {
+        "estimativa": -0.012457189708392491,
+        "ic95_lo": -0.08810164860175662,
+        "ic95_hi": 0.048667749620039766
+      },
+      "mos_linear_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "gate_classificacao_spread": "ensemble_mal_calibrado_spread_pouco_informativo"
+    },
+    "4": {
+      "raw_rmsess_absoluto": {
+        "estimativa": -0.37893911502500477,
+        "ic95_lo": -0.5176432633307237,
+        "ic95_hi": -0.24392471315213243
+      },
+      "raw_rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "raw_rmsess_anomalia_corrigida": {
+        "estimativa": 0.008416556725930002,
+        "ic95_lo": -0.035156717016528186,
+        "ic95_hi": 0.049963224880323814
+      },
+      "raw_rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+      "raw_crpss": {
+        "estimativa": -0.5688410583772399,
+        "ic95_lo": -0.7387608268631481,
+        "ic95_hi": -0.3995624453337833
+      },
+      "raw_crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "aditivo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.02180478348540482,
+        "ic95_lo": -0.01682487349142069,
+        "ic95_hi": 0.06366349578996497
+      },
+      "aditivo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "multiplicativo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.004057843758877189,
+        "ic95_lo": -0.04730784953644043,
+        "ic95_hi": 0.042309957311741066
+      },
+      "multiplicativo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "mos_linear_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.0027447562698774686,
+        "ic95_lo": -0.028260978552862193,
+        "ic95_hi": 0.04576149708455541
+      },
+      "mos_linear_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "gate_classificacao_spread": "ensemble_mal_calibrado_spread_pouco_informativo"
+    },
+    "5": {
+      "raw_rmsess_absoluto": {
+        "estimativa": -0.4471199300234603,
+        "ic95_lo": -0.5919077025865161,
+        "ic95_hi": -0.3071649570206794
+      },
+      "raw_rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "raw_rmsess_anomalia_corrigida": {
+        "estimativa": -0.019745022250230893,
+        "ic95_lo": -0.07602859280866471,
+        "ic95_hi": 0.027935983312524934
+      },
+      "raw_rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+      "raw_crpss": {
+        "estimativa": -0.656367914105298,
+        "ic95_lo": -0.830613280142152,
+        "ic95_hi": -0.4794106485938135
+      },
+      "raw_crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "aditivo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.030182094449654362,
+        "ic95_lo": -0.0102083502904093,
+        "ic95_hi": 0.0723453177332607
+      },
+      "aditivo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "multiplicativo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.015179476856093332,
+        "ic95_lo": -0.04590495996215307,
+        "ic95_hi": 0.05604093768462768
+      },
+      "multiplicativo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "mos_linear_skill_vs_anomalia_reconstruida": {
+        "estimativa": -0.006099245918830931,
+        "ic95_lo": -0.03210413835352164,
+        "ic95_hi": 0.020939872059025016
+      },
+      "mos_linear_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "gate_classificacao_spread": "ensemble_mal_calibrado_spread_pouco_informativo"
+    },
+    "6": {
+      "raw_rmsess_absoluto": {
+        "estimativa": -0.49054855492951965,
+        "ic95_lo": -0.6264798421055934,
+        "ic95_hi": -0.3400549828178135
+      },
+      "raw_rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "raw_rmsess_anomalia_corrigida": {
+        "estimativa": -0.018201409118048018,
+        "ic95_lo": -0.05974145954348204,
+        "ic95_hi": 0.03096682537143401
+      },
+      "raw_rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+      "raw_crpss": {
+        "estimativa": -0.7070727509109425,
+        "ic95_lo": -0.8965565506424936,
+        "ic95_hi": -0.5082888957824103
+      },
+      "raw_crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+      "aditivo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.01315280815723241,
+        "ic95_lo": -0.02532146316170436,
+        "ic95_hi": 0.0534017671138621
+      },
+      "aditivo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "multiplicativo_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.005745748043043286,
+        "ic95_lo": -0.09206812197562708,
+        "ic95_hi": 0.05502880660568818
+      },
+      "multiplicativo_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "mos_linear_skill_vs_anomalia_reconstruida": {
+        "estimativa": 0.02876345003752445,
+        "ic95_lo": -0.005246938060072937,
+        "ic95_hi": 0.05742985067932813
+      },
+      "mos_linear_skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+      "gate_classificacao_spread": "ensemble_mal_calibrado_spread_pouco_informativo"
+    }
+  },
+  "nota_metodologica": "RMSESS e CRPSS NUNCA combinados numa única classificação — são famílias de skill score distintas (determinística vs. probabilística). Precipitação absoluta e anomalia corrigida são leituras independentes (ver RAW 2C.3C, Seção 8 do protocolo). Amostra plena (RAW, N=240) e amostra comum/elegível (métodos calibrados, N menor por warm-up) nunca misturadas na mesma linha.",
+  "leitura_lead_vs_skill_raw_absoluto": {
+    "nota": "Descritivo — compara RMSESS absoluto do RAW entre H1 e H6 (mesma métrica/definição/amostra plena); nunca um teste de significância sobre a diferença.",
+    "rmsess_absoluto_h1": -0.22467082681090722,
+    "rmsess_absoluto_h6": -0.49054855492951965
+  },
+  "data_geracao_utc": "2026-10-14T19:26:19.727785+00:00"
+}
