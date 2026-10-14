@@ -85,6 +85,7 @@ COLUNAS_TABELA_EXPANDING = [
     'forecast_raw', 'observacao', 'climatologia_modelo_raw', 'climatologia_observada',
     'anom_modelo_raw', 'anom_observada', 'par_anomalia_valido',
     'n_treino_mos', 'periodo_treino_inicio', 'periodo_treino_fim',
+    'max_init_date_treino', 'max_target_month_treino',
     'alpha', 'beta', 'r2_treino', 'condicao_numerica', 'forecast_mos', 'anom_mos',
     'benchmark_anomalia_reconstruida', 'status_mos',
 ]
@@ -176,13 +177,34 @@ def _ajustar_ols_simples(x_historico, y_historico):
     return float(alpha), float(beta), r2, condicao, STATUS_OK
 
 
+def _indices_treino_causal(inits_p, targets_p, avaliada_p):
+    """Auditoria de disponibilidade observacional (2ª rodada desta
+    revisão) — mesma lacuna já encontrada e corrigida no protocolo
+    EMOS H2: `init_date_treino < init_date_avaliada` sozinha garante só
+    que a PREVISÃO da linha de treino já existia, nunca que sua
+    OBSERVAÇÃO-ALVO (`target_month_treino = init_date_treino +
+    (lead-1)`) já tinha sido verificada. Para lead=1 as duas condições
+    coincidem (target_month==init_date) — H1 é, por desenho, um
+    controle negativo desta correção. Retorna os índices (em
+    `inits_p`/`targets_p`, já em ordem causal de init_date) elegíveis
+    SIMULTANEAMENTE pelas duas condições — nunca `<=`, que presumiria
+    uma disponibilidade intramês nunca demonstrada."""
+    return [i for i, (ip, tp) in enumerate(zip(inits_p, targets_p))
+            if ip < avaliada_p and tp < avaliada_p]
+
+
 def construir_tabela_mos_linear(base_enriquecida):
     """Constrói, para cada (init_date, lead), a linha do Método 3.4 —
     expansão ordenada no tempo DENTRO DE CADA LEAD (pooling entre
     meses, nunca entre leads): o histórico de PARES VÁLIDOS só cresce
     DEPOIS de processar a linha atual, garantindo estruturalmente que
     ela nunca entra no seu próprio ajuste (mesma garantia anti-leakage
-    já usada nos Métodos 3.1/3.2)."""
+    já usada nos Métodos 3.1/3.2). O conjunto de treino usado em CADA
+    avaliação é filtrado por `_indices_treino_causal` — exige
+    SIMULTANEAMENTE `init_date_treino < init_date_avaliada` E
+    `target_month_treino < init_date_avaliada` (correção desta
+    revisão; ver `docs/nmme-fase2c3d-mos-linear-auditoria-
+    disponibilidade.md`)."""
     media_membros = base_enriquecida.groupby(
         ['init_date', 'target_month', 'target_ano', 'target_mes', 'lead'], as_index=False
     ).agg(forecast_raw=('forecast_prec_mm', 'mean'),
@@ -193,27 +215,38 @@ def construir_tabela_mos_linear(base_enriquecida):
     linhas = []
     for lead, grupo in media_membros.groupby('lead'):
         grupo = grupo.assign(_p=pd.PeriodIndex(grupo['init_date'], freq='M')).sort_values('_p')
-        x_pares_validos, y_pares_validos, inits_pares_validos = [], [], []
+        x_pares_validos, y_pares_validos = [], []
+        inits_pares_validos, inits_pares_validos_p = [], []
+        targets_pares_validos, targets_pares_validos_p = [], []
 
         for _, row in grupo.iterrows():
             base = _montar_linha_base(row)
-            n_treino_mos = len(x_pares_validos)
+            avaliada_p = v._periodo(row['init_date'])
+            idx_treino = _indices_treino_causal(inits_pares_validos_p, targets_pares_validos_p,
+                                                 avaliada_p)
+            n_treino_mos = len(idx_treino)
 
             if not base['par_anomalia_valido']:
                 status = STATUS_ANOMALIA_INDISPONIVEL
                 alpha = beta = r2_treino = condicao = None
                 forecast_mos = None
                 periodo_inicio = periodo_fim = None
+                max_init_treino = max_target_treino = None
             elif n_treino_mos < N_TREINO_MINIMO_MOS:
                 status = STATUS_WARMUP
                 alpha = beta = r2_treino = condicao = None
                 forecast_mos = None
                 periodo_inicio = periodo_fim = None
+                max_init_treino = max_target_treino = None
             else:
-                periodo_inicio = inits_pares_validos[0]
-                periodo_fim = inits_pares_validos[-1]
+                x_treino = [x_pares_validos[i] for i in idx_treino]
+                y_treino = [y_pares_validos[i] for i in idx_treino]
+                periodo_inicio = inits_pares_validos[idx_treino[0]]
+                periodo_fim = inits_pares_validos[idx_treino[-1]]
+                max_init_treino = periodo_fim
+                max_target_treino = max(targets_pares_validos[i] for i in idx_treino)
                 alpha, beta, r2_treino, condicao, status = _ajustar_ols_simples(
-                    x_pares_validos, y_pares_validos)
+                    x_treino, y_treino)
                 if status == STATUS_OK:
                     forecast_mos = float(base['climatologia_observada'] + alpha
                                           + beta * base['anom_modelo_raw'])
@@ -239,6 +272,8 @@ def construir_tabela_mos_linear(base_enriquecida):
                 'par_anomalia_valido': base['par_anomalia_valido'],
                 'n_treino_mos': n_treino_mos,
                 'periodo_treino_inicio': periodo_inicio, 'periodo_treino_fim': periodo_fim,
+                'max_init_date_treino': max_init_treino,
+                'max_target_month_treino': max_target_treino,
                 'alpha': alpha, 'beta': beta, 'r2_treino': r2_treino,
                 'condicao_numerica': condicao, 'forecast_mos': forecast_mos, 'anom_mos': anom_mos,
                 'benchmark_anomalia_reconstruida': base['benchmark_anomalia_reconstruida'],
@@ -252,6 +287,9 @@ def construir_tabela_mos_linear(base_enriquecida):
                 x_pares_validos.append(base['anom_modelo_raw'])
                 y_pares_validos.append(base['anom_observada'])
                 inits_pares_validos.append(row['init_date'])
+                inits_pares_validos_p.append(avaliada_p)
+                targets_pares_validos.append(row['target_month'])
+                targets_pares_validos_p.append(v._periodo(row['target_month']))
 
     tabela = pd.DataFrame(linhas)[COLUNAS_TABELA_EXPANDING]
     tabela = tabela.assign(_p=pd.PeriodIndex(tabela['init_date'], freq='M')).sort_values(
@@ -264,40 +302,55 @@ def construir_tabela_mos_linear(base_enriquecida):
 # ══════════════════════════════════════════════════════════════════════════
 
 def _verificar_nenhum_leakage_na_tabela_mos(tabela):
+    """Correção desta revisão (auditoria de disponibilidade
+    observacional) — além de `periodo_treino_fim < init_date_avaliada`
+    (disponibilidade da PREVISÃO), exige também
+    `max_target_month_treino < init_date_avaliada` (disponibilidade da
+    OBSERVAÇÃO-ALVO) — a condição que a regra antiga não garantia para
+    lead>=2."""
     problemas = []
     ok = tabela[tabela['status_mos'] == STATUS_OK]
     for _, row in ok.iterrows():
-        if row['periodo_treino_fim'] is None:
+        avaliada_p = v._periodo(row['init_date'])
+        if row['periodo_treino_fim'] is None or row['max_target_month_treino'] is None:
             problemas.append(f"{row['init_date']} lead={row['lead']}: status=ok mas "
-                              "periodo_treino_fim ausente")
+                              "periodo_treino_fim/max_target_month_treino ausente")
             continue
         fim_p = v._periodo(row['periodo_treino_fim'])
-        avaliada_p = v._periodo(row['init_date'])
         if not (fim_p < avaliada_p):
             problemas.append(f"{row['init_date']} lead={row['lead']}: periodo_treino_fim="
                               f"{row['periodo_treino_fim']} >= init_date avaliada")
+        max_target_p = v._periodo(row['max_target_month_treino'])
+        if not (max_target_p < avaliada_p):
+            problemas.append(f"{row['init_date']} lead={row['lead']}: max_target_month_treino="
+                              f"{row['max_target_month_treino']} >= init_date avaliada "
+                              "(leakage observacional)")
     return {'ok': len(problemas) == 0, 'n_problemas': len(problemas), 'problemas': problemas[:20]}
 
 
 def _verificar_outro_lead_nunca_contaminou_treino(tabela):
-    """Item 8/21 do pedido — checagem defensiva adicional: todo
-    `n_treino_mos` reportado tem que ser reproduzível filtrando SÓ pelo
-    mesmo lead e por pares válidos estritamente anteriores — nunca
-    maior do que isso (o que indicaria contaminação de outro lead)."""
+    """Item 8/21 do pedido, estendido pela correção desta revisão:
+    todo `n_treino_mos` reportado tem que ser reproduzível filtrando SÓ
+    pelo mesmo lead e por pares válidos que satisfaçam SIMULTANEAMENTE
+    `init_date_treino < init_date_avaliada` E `target_month_treino <
+    init_date_avaliada` — nunca maior do que isso (o que indicaria
+    contaminação de outro lead OU reintrodução da regra causal
+    antiga/incompleta)."""
     problemas = []
     ok_e_degenerada = tabela[tabela['status_mos'].isin(
         (STATUS_OK, STATUS_DEGENERADA, STATUS_COEF_INVALIDO))]
     for lead, grupo_lead in tabela.groupby('lead'):
         pares_validos_lead = grupo_lead[grupo_lead['par_anomalia_valido']]
+        inits_p = pd.PeriodIndex(pares_validos_lead['init_date'], freq='M')
+        targets_p = pd.PeriodIndex(pares_validos_lead['target_month'], freq='M')
         sub = ok_e_degenerada[ok_e_degenerada['lead'] == lead]
         for _, row in sub.iterrows():
             avaliada_p = v._periodo(row['init_date'])
-            esperado = int((pd.PeriodIndex(pares_validos_lead['init_date'], freq='M')
-                             < avaliada_p).sum())
+            esperado = int(((inits_p < avaliada_p) & (targets_p < avaliada_p)).sum())
             if esperado != row['n_treino_mos']:
                 problemas.append(f"{row['init_date']} lead={row['lead']}: n_treino_mos="
-                                  f"{row['n_treino_mos']}, recalculado só com o mesmo lead="
-                                  f"{esperado}")
+                                  f"{row['n_treino_mos']}, recalculado só com o mesmo lead e a "
+                                  f"regra causal corrigida={esperado}")
     return {'ok': len(problemas) == 0, 'n_problemas': len(problemas), 'problemas': problemas[:20]}
 
 

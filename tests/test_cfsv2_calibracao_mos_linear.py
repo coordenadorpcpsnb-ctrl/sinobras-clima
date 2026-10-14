@@ -406,12 +406,27 @@ class CorrAnomaliaMosTestCase(unittest.TestCase):
 
 
 class ResultadosPrincipaisPermanecemIdenticosTestCase(unittest.TestCase):
-    """Item 7 da revisão — teste de REGRESSÃO: os valores principais já
-    aprovados (commit 319ad4c) precisam permanecer numericamente
-    idênticos após a correção da correlação de anomalia e do
-    diagnóstico Sxx (ambas são métricas novas/corrigidas, nunca tocam
-    em RMSE/skills/ICs). Valores congelados a partir da execução já
-    aprovada — nunca recalculados "de olho" no resultado atual."""
+    """Item 7 da revisão anterior + auditoria de disponibilidade
+    observacional (rodada atual) — teste de REGRESSÃO.
+
+    Os valores abaixo foram RECALCULADOS após a correção da regra
+    causal de treino do Método 3.4 (exigir SIMULTANEAMENTE
+    `init_date_treino < init_date_avaliada` E `target_month_treino <
+    init_date_avaliada` — a mesma lacuna já corrigida no protocolo
+    EMOS H2). Os valores anteriores (commit 319ad4c, regra antiga, com
+    leakage observacional para lead>=2) estão preservados —
+    NUNCA apagados — em `docs/nmme-fase2c3d-mos-linear-auditoria-
+    disponibilidade.md`, rotulados
+    `resultado_pre_correcao_disponibilidade_observacional`.
+
+    H1 é, por desenho, um CONTROLE NEGATIVO desta correção:
+    `target_month == init_date` para lead=1, então as duas condições
+    coincidem e a regra corrigida é algebricamente idêntica à antiga —
+    por isso H1 é o ÚNICO horizonte cujos valores abaixo são
+    EXATAMENTE os mesmos do commit 319ad4c (confirmado, não assumido:
+    ver `tests/test_cfsv2_mos_linear_auditoria_disponibilidade.py::
+    H1NaoAfetadoTestCase`). H2-H6 mudam (N cai em exatamente
+    `lead-1` avaliações cada, pela mesma aritmética de calendário)."""
 
     _VALORES_CONGELADOS = {
         1: {'n': 108, 'bias': 0.29861978219443414, 'mae': 33.640044431916536,
@@ -419,34 +434,34 @@ class ResultadosPrincipaisPermanecemIdenticosTestCase(unittest.TestCase):
             'RMSESS_climatologia': 0.15492906707741694,
             'skill_vs_anomalia_reconstruida': 0.010367619059827526,
             'skill_mos_vs_aditivo': -0.023312715191458278},
-        2: {'n': 108, 'bias': 0.1691699793659726, 'mae': 36.684840211292666,
-            'rmse': 55.347836733406865, 'skill_vs_raw': 0.2274167130978053,
-            'RMSESS_climatologia': 0.02158279287186038,
-            'skill_vs_anomalia_reconstruida': -0.00137816479369679,
-            'skill_mos_vs_aditivo': -0.03838756241123131},
-        3: {'n': 108, 'bias': -0.9326125840071453, 'mae': 36.753250978636984,
-            'rmse': 55.5940185588372, 'skill_vs_raw': 0.22947213784611775,
-            'RMSESS_climatologia': 0.028483118328209045,
-            'skill_vs_anomalia_reconstruida': -0.019069449645805703,
-            'skill_mos_vs_aditivo': -0.04899980136087323},
-        4: {'n': 108, 'bias': -1.0177726049878595, 'mae': 35.84617580232791,
-            'rmse': 54.84860323680825, 'skill_vs_raw': 0.2710542498285702,
-            'RMSESS_climatologia': 0.028774749101210695,
-            'skill_vs_anomalia_reconstruida': 0.0009156702570436437,
-            'skill_mos_vs_aditivo': -0.01949137065187001},
-        5: {'n': 108, 'bias': -1.4317112949109503, 'mae': 35.33119681976383,
-            'rmse': 54.87581660830699, 'skill_vs_raw': 0.2928582395903141,
-            'RMSESS_climatologia': 0.01973782752234965,
-            'skill_vs_anomalia_reconstruida': -0.008134980553572424,
-            'skill_mos_vs_aditivo': -0.03510916648631124},
-        6: {'n': 108, 'bias': -1.8218616434409294, 'mae': 36.01212831967383,
-            'rmse': 56.03660331757259, 'skill_vs_raw': 0.31116131960981963,
-            'RMSESS_climatologia': -0.0017516827606507412,
-            'skill_vs_anomalia_reconstruida': 0.02743702488892097,
-            'skill_mos_vs_aditivo': 0.0158222831390592},
+        2: {'n': 107, 'bias': 0.016492683095062258, 'mae': 36.90915101561759,
+            'rmse': 55.601335425838755, 'skill_vs_raw': 0.22739527390003644,
+            'RMSESS_climatologia': 0.02092648673380393,
+            'skill_vs_anomalia_reconstruida': -0.0022925330491643248,
+            'skill_mos_vs_aditivo': -0.04024370326222071},
+        3: {'n': 106, 'bias': -2.2819506127435254, 'mae': 36.06275516729715,
+            'rmse': 55.08576986835673, 'skill_vs_raw': 0.22991527118801391,
+            'RMSESS_climatologia': 0.023755286366294093,
+            'skill_vs_anomalia_reconstruida': -0.012457189708392491,
+            'skill_mos_vs_aditivo': -0.03965066310387111},
+        4: {'n': 105, 'bias': -1.3099500135223905, 'mae': 35.806125727671606,
+            'rmse': 55.04905349439583, 'skill_vs_raw': 0.2716106150495631,
+            'RMSESS_climatologia': 0.028926022716747934,
+            'skill_vs_anomalia_reconstruida': 0.0027447562698774686,
+            'skill_mos_vs_aditivo': -0.016650254326023628},
+        5: {'n': 104, 'bias': -1.09787203245857, 'mae': 36.24267050823232,
+            'rmse': 55.72711098439004, 'skill_vs_raw': 0.2916998869399624,
+            'RMSESS_climatologia': 0.021799952206598028,
+            'skill_vs_anomalia_reconstruida': -0.006099245918830931,
+            'skill_mos_vs_aditivo': -0.03159432032057463},
+        6: {'n': 103, 'bias': -2.251027643709462, 'mae': 37.154608287406354,
+            'rmse': 57.12064880678743, 'skill_vs_raw': 0.31065514940681027,
+            'RMSESS_climatologia': 0.00023444497607616466,
+            'skill_vs_anomalia_reconstruida': 0.02876345003752445,
+            'skill_mos_vs_aditivo': 0.019849447142272325},
     }
 
-    def test_metricas_principais_permanecem_identicas_ao_commit_319ad4c(self):
+    def test_metricas_principais_permanecem_identicas_pos_correcao_disponibilidade(self):
         if not a.CAMINHO_TABELA_EXPANDING.exists() or not v.CAMINHO_METRICAS_JSON.parent.exists():
             self.skipTest("dados reais não disponíveis nesta árvore de trabalho")
         resultado, tabela, _ = mos.executar_mos_linear(n_resamples_bootstrap=50)
@@ -457,7 +472,8 @@ class ResultadosPrincipaisPermanecemIdenticosTestCase(unittest.TestCase):
             for campo, valor_esperado in esperado.items():
                 self.assertAlmostEqual(atual[campo], valor_esperado, places=9,
                                         msg=f"H{lead}.{campo} mudou: {atual[campo]} != "
-                                        f"{valor_esperado} (valor congelado do commit 319ad4c)")
+                                        f"{valor_esperado} (valor congelado pós-correção de "
+                                        "disponibilidade observacional)")
 
 
 class ComDadosReaisTestCase(unittest.TestCase):
