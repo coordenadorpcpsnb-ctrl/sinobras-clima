@@ -78,8 +78,19 @@ jobs:
       # Barreira: mesmo sendo uma atualização leve (não mexe em
       # SARIMAX/cenários), o Monitor ENSO é HTML publicado — não
       # publicar se ficou inconsistente.
+      #
+      # --pular-continuidade-serie-subst: este workflow NUNCA chama
+      # fetch_monthly_data.py (só update.yml faz isso, dia 21) — então,
+      # estruturalmente, do dia 1 ao dia 20 de todo mês, a checagem de
+      # continuidade de serie_subst.csv (item 9 do verificador) reprova
+      # por um motivo que este workflow não pode corrigir, bloqueando o
+      # commit E o heartbeat seguintes (nenhum dos dois tem `if: always()`
+      # — ver Fase ENSO-DADOS, auditoria 15/10/2026, que encontrou 7
+      # falhas seguidas por este motivo, 01-12/out/2026). Todas as OUTRAS
+      # checagens (inclusive as de índices ENSO — item 6, plausibilidade
+      # física do nino34/oni/tsa) continuam bloqueando normalmente.
       - name: Verificar integridade do dashboard
-        run: python scripts/verificar_dashboard.py
+        run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
 
       - name: Verificar alterações
         id: diff

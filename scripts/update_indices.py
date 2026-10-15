@@ -180,6 +180,304 @@ def parse_wksst(text):
 
 RONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt'
 
+# ══════════════════════════════════════════════════════
+# CPC — probabilidades de fase ENSO por trimestre
+# ══════════════════════════════════════════════════════
+# Fase ENSO-DADOS (auditoria 15/10/2026): até aqui, CPC_IRI.cpc (as
+# probabilidades por trimestre que alimentam a aba Comparativo) era
+# 100% curado à mão — CLAUDE.md armadilha 4 documentava que "o CPC só
+# publica figura" para essa tabela. Investigação ao vivo (15/10/2026)
+# encontrou que esta página ESPECÍFICA publica a tabela em HTML real
+# (não figura, não precisa de OCR), com uma linha <tr> por trimestre e
+# 3 <td> em ordem fixa (La Niña, Neutro, El Niño) — confirmado
+# estruturalmente contra o HTML bruto antes de escrever este parser,
+# nunca assumido. Fonte DIFERENTE do ENSO Diagnostic Discussion (que
+# continua prosa/figura, sem parser — lembrete_cpc_thursday.yml
+# continua existindo pra essa parte). Mantido só pra esta tabela
+# específica; o resto do CPC_IRI (status textual, synopsis, narrativa)
+# continua manual.
+CPC_PROBABILIDADES_URL = 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities/'
+# Duas etapas deliberadas — NUNCA um regex só cruzando `<tr>`: um regex
+# único com `.*?` entre o fechamento de <abbr> e o primeiro <td> pode
+# "vazar" para a PRÓXIMA linha da tabela se a linha atual tiver um
+# valor que não bate no padrão esperado (ex.: um `<td>` com conteúdo
+# inesperado) — o `.*?` lazy só precisa achar ALGUM `</abbr></th>`
+# seguido de `<td>` mais adiante, e o mais próximo seguinte é o da
+# PRÓXIMA linha, gerando um trimestre com o rótulo de uma linha e os
+# valores de outra. Confirmado testando deliberadamente contra uma
+# linha corrompida antes de finalizar este parser (ver
+# tests/test_update_indices.py). Isolar cada `<tr>...</tr>` PRIMEiro
+# elimina essa classe de bug: nenhum regex de linha pode ver além da
+# sua própria `</tr>`.
+_CPC_PROB_LINHA_TR_RE = re.compile(r'<tr>.*?</tr>', re.DOTALL)
+_CPC_PROB_SEAS_RE = re.compile(r'<abbr>([A-Z]{3})\b')
+_CPC_PROB_TD_RE = re.compile(r'<td>([^<]*)</td>')
+# "Issued October 2026" — único lugar da página que identifica a ano/mês
+# da emissão; sem ele, nenhuma linha da tabela pode ser associada a um
+# ano com segurança (ver _alinhar_seasons_com_ano abaixo).
+_CPC_PROB_EMISSAO_RE = re.compile(
+    r'Issued\s+(January|February|March|April|May|June|July|August|September|'
+    r'October|November|December)\s+(\d{4})', re.IGNORECASE,
+)
+_MESES_EN = {'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+             'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12}
+# Trimestre (centrado no mês do meio) -> sigla de 3 letras, convenção
+# CPC já usada em todo o projeto (ver update_dashboard.py, _tri_nome).
+_MES_CENTRAL_PARA_SIGLA = {
+    1: 'DJF', 2: 'JFM', 3: 'FMA', 4: 'MAM', 5: 'AMJ', 6: 'MJJ',
+    7: 'JJA', 8: 'JAS', 9: 'ASO', 10: 'SON', 11: 'OND', 12: 'NDJ',
+}
+
+
+def _alinhar_seasons_com_ano(html, linhas_brutas):
+    """
+    Associa cada linha (sigla de 3 letras + probabilidades) a um ANO
+    específico — nunca pela sigla isolada (duas siglas iguais podem
+    cair em anos diferentes se o horizonte cruzar a virada do ano).
+
+    Âncora: o cabeçalho "Issued <Mês> <Ano>" da própria página — único
+    dado, nesta fonte, que identifica o ano sem ambiguidade. A partir
+    dele, deriva o mês central de CADA linha andando sequencialmente
+    (+1 mês por linha, carregando o ano na virada dez→jan) — a página
+    descreve explicitamente "9 upcoming, overlapping 3-month seasons"
+    em ORDEM cronológica, confirmado contra a página real: a primeira
+    linha (centrada no mês da própria emissão) sempre bate com a sigla
+    publicada. Cada mês central derivado é VALIDADO de volta contra a
+    sigla de 3 letras que a página realmente publicou nessa linha
+    (`_MES_CENTRAL_PARA_SIGLA`) — se não bater em NENHUMA linha, a
+    suposição de ordem sequencial está errada pra esta emissão e a
+    função recusa alinhar (retorna {}), nunca adivinha.
+
+    Retorna {'SEAS/YY': {...}, ...} (mesmo formato de `CPC_IRI.seasons`)
+    ou {} se a emissão não puder ser identificada com segurança — NUNCA
+    associa uma sigla a um ano por suposição.
+    """
+    m_emissao = _CPC_PROB_EMISSAO_RE.search(html)
+    if not m_emissao:
+        return {}
+    mes_emissao = _MESES_EN.get(m_emissao.group(1).lower())
+    ano_emissao = int(m_emissao.group(2))
+    if mes_emissao is None:
+        return {}
+
+    resultado = {}
+    mes_atual, ano_atual = mes_emissao, ano_emissao
+    for sigla, valores in linhas_brutas:
+        sigla_esperada = _MES_CENTRAL_PARA_SIGLA[mes_atual]
+        if sigla != sigla_esperada:
+            # ordem sequencial assumida não bate com o que a página
+            # publicou — não arrisca associar ano por adivinhação.
+            return {}
+        if valores is not None:
+            resultado[f'{sigla}/{str(ano_atual)[2:]}'] = valores
+        mes_atual += 1
+        if mes_atual > 12:
+            mes_atual, ano_atual = 1, ano_atual + 1
+    return resultado
+
+
+def parse_cpc_probabilidades(html):
+    """
+    Tabela HTML real (não figura) de probabilidade de fase ENSO por
+    trimestre, em <th><abbr>SEAS</abbr></th><td>ln</td><td>neu</td><td>en</td>
+    — ordem de colunas confirmada contra o HTML bruto (La Niña, Neutro,
+    El Niño), nunca assumida de memória. Barreira física: cada linha
+    tem que ter exatamente 3 <td>, somar ~100 (±1, tolerância de
+    arredondamento) e cada valor tem que estar em [0,100] — linha que
+    falha é DESCARTADA (não gera dado parcial/inventado), nunca
+    derruba as demais.
+
+    Cada trimestre só entra no resultado com o ANO alinhado contra o
+    cabeçalho "Issued <Mês> <Ano>" da página (ver
+    `_alinhar_seasons_com_ano`) — nunca pela sigla de 3 letras isolada,
+    que se repete todo ano e seria ambígua perto da virada do ano.
+
+    Retorna {'SEAS/YY': {'ln': float, 'neu': float, 'en': float}, ...}
+    — dict vazio se a página não tiver nenhuma linha válida OU se o
+    ano de emissão não puder ser identificado/validado com segurança
+    (ex.: CPC trocou a estrutura da página) — nunca lança exceção.
+    """
+    # IMPORTANTE: a posição de cada linha na tabela (não só as que
+    # passam no filtro de valores) é o que ancora o alinhamento de ano
+    # em _alinhar_seasons_com_ano — uma linha com valores inválidos
+    # ainda OCUPA sua posição sequencial (`valores=None`), senão
+    # descartá-la deslocaria o ano de todas as linhas seguintes (ex.:
+    # se a 8ª linha falhar na soma ~100, a 9ª não pode "herdar" a
+    # posição da 8ª).
+    linhas_brutas = []
+    for tr in _CPC_PROB_LINHA_TR_RE.finditer(html):
+        linha = tr.group(0)
+        m_seas = _CPC_PROB_SEAS_RE.search(linha)
+        if not m_seas:
+            continue
+        tds = _CPC_PROB_TD_RE.findall(linha)
+        valores = None
+        if len(tds) == 3:
+            try:
+                ln, neu, en = (float(v) for v in tds)
+                candidato = (ln, neu, en)
+                if all(0 <= v <= 100 for v in candidato) and abs(sum(candidato) - 100) <= 1:
+                    valores = {'ln': ln, 'neu': neu, 'en': en}
+            except ValueError:
+                pass
+        linhas_brutas.append((m_seas.group(1), valores))
+
+    if not linhas_brutas:
+        return {}
+    return _alinhar_seasons_com_ano(html, linhas_brutas)
+
+
+def _seasons_do_cpc_iri(html):
+    """Lê `CPC_IRI.seasons` do HTML (ex.: ['ASO/26','SON/26',...]) —
+    NUNCA escreve nessa lista, só lê a ordem/comprimento já curados à
+    mão, pra alinhar `cpc.en/neu/ln` a ela. Retorna lista de strings
+    'SEAS/YY', ou [] se o bloco não for encontrado."""
+    m = re.search(r'CPC_IRI\s*=\s*\{.*?seasons:\s*\[([^\]]+)\]', html, re.DOTALL)
+    if not m:
+        return []
+    return [s.strip().strip("'\"") for s in m.group(1).split(',') if s.strip()]
+
+
+def _upsert_campo_meta(bloco, nome_campo, valor):
+    """Insere ou substitui UM campo dentro de `_meta: {...}` — nunca
+    duplica: se o campo já existe (de uma execução anterior), substitui
+    o valor no lugar; se não existe, insere logo após a abertura de
+    `_meta: {`. Nunca toca em nenhum outro campo do bloco. Correção
+    (revisão externa, 2ª rodada, item "Correção 1"): a versão anterior
+    inseria `cpc_probabilidades_atualizado_em` incondicionalmente a
+    cada execução, duplicando a linha a cada rodada repetida."""
+    padrao_existente = re.compile(rf"\n(\s*){nome_campo}:\s*'[^']*',")
+    nova_linha = f"\n    {nome_campo}: '{valor}',"
+    if padrao_existente.search(bloco):
+        return padrao_existente.sub(nova_linha, bloco, count=1)
+    return re.sub(r'(_meta:\s*\{)', r'\1' + nova_linha, bloco, count=1)
+
+
+def atualizar_cpc_probabilidades_no_html(html, probabilidades, emissao=None):
+    """
+    Preenche `CPC_IRI.cpc.{en,neu,ln}` a partir de `probabilidades`
+    (saída de parse_cpc_probabilidades — chaves já no formato
+    'SEAS/YY', ano incluído, NUNCA casadas pela sigla de 3 letras
+    isolada), alinhado à ordem/comprimento já existente de
+    `CPC_IRI.seasons` — NUNCA muda a lista de seasons em si (é
+    compartilhada com CPC_IRI.iri, que continua manual; mudar o
+    comprimento de um sem o outro quebraria o gráfico).
+
+    `emissao` (opcional): string 'mmm/AAAA' do cabeçalho "Issued" da
+    página de origem (ver `extrair_emissao_cpc_probabilidades`) — vira
+    `_meta.cpc_probabilidades_emissao`, SEPARADO da data de coleta
+    (`cpc_probabilidades_atualizado_em`, sempre "hoje") e nunca
+    confundido com `_meta.cpc_emissao` (a data do Diagnostic
+    Discussion, que esta função nunca toca).
+
+    Trimestre de `seasons` sem equivalente em `probabilidades` (ex.:
+    ASO/26 já em curso, o CPC não publica mais previsão pra ele) vira
+    `null` — nunca estimado, nunca herdado do valor antigo (herdar
+    misturaria um valor de uma emissão antiga com os de uma nova, sem
+    como saber depois qual é qual).
+
+    Se `probabilidades` vier vazio (fetch falhou, parsing falhou, ou o
+    ano de cada trimestre não pôde ser identificado com segurança —
+    ver parse_cpc_probabilidades), não mexe em nada — devolve
+    (html, False) — mesma disciplina de persistência de
+    TSA/PDO/CHC-Preliminar: nunca sobrescrever um dado bom só porque a
+    fonte falhou desta vez.
+
+    IDEMPOTENTE e sem reescritas desnecessárias (revisão externa, 2ª
+    rodada, item "Correção 1"): se os valores de `cpc[]` calculados
+    agora forem byte-a-byte IGUAIS aos já gravados, e a emissão
+    reportada também não mudou, a função não reescreve nada — devolve
+    (html, False). `_meta.cpc_probabilidades_ultima_alteracao` só é
+    tocado quando os valores de fato mudam (nunca a cada execução).
+
+    Opera só dentro do bloco `const CPC_IRI = {...};` já localizado —
+    nunca um re.sub global (CLAUDE.md armadilha 2).
+    """
+    if not probabilidades:
+        return html, False
+
+    ini = html.find('const CPC_IRI = {')
+    if ini < 0:
+        print('  ⚠ const CPC_IRI não encontrado — probabilidades CPC não atualizadas')
+        return html, False
+    fim = html.find('\n};', ini)
+    if fim < 0:
+        print('  ⚠ fechamento de CPC_IRI não encontrado — probabilidades CPC não atualizadas')
+        return html, False
+    fim += 3
+    bloco = html[ini:fim]
+
+    seasons = _seasons_do_cpc_iri(bloco)
+    if not seasons:
+        print('  ⚠ CPC_IRI.seasons vazio/não encontrado — probabilidades CPC não atualizadas')
+        return html, False
+
+    en, neu, ln, n_preenchidos = [], [], [], 0
+    for s in seasons:
+        p = probabilidades.get(s)  # casamento pela chave COMPLETA 'SEAS/YY', nunca a sigla isolada
+        if p is None:
+            en.append('null'); neu.append('null'); ln.append('null')
+        else:
+            en.append(str(p['en'])); neu.append(str(p['neu'])); ln.append(str(p['ln']))
+            n_preenchidos += 1
+
+    if n_preenchidos == 0:
+        print('  ⚠ nenhum trimestre de CPC_IRI.seasons encontrado na tabela CPC — '
+              'probabilidades CPC não atualizadas (fonte pode ter mudado de estrutura, '
+              'ou o ano não pôde ser alinhado com segurança)')
+        return html, False
+
+    nova_cpc_linha = (
+        f"\n  cpc:{{ en:[{','.join(en)}], neu:[{','.join(neu)}], ln:[{','.join(ln)}] }},"
+    )
+    m_cpc_atual = re.search(r'\n  cpc:\{[^}]*\},', bloco)
+    cpc_mudou = (m_cpc_atual is None) or (m_cpc_atual.group(0) != nova_cpc_linha)
+
+    m_emissao_atual = re.search(r"cpc_probabilidades_emissao:\s*'([^']*)'", bloco)
+    emissao_atual = m_emissao_atual.group(1) if m_emissao_atual else None
+    emissao_mudou = emissao is not None and emissao != emissao_atual
+
+    if not cpc_mudou and not emissao_mudou:
+        # Nada mudou de fato — nunca reescrever só para bater uma nova
+        # data de coleta sem conteúdo novo nenhum (evita commit vazio).
+        return html, False
+
+    bloco_novo = bloco
+    if cpc_mudou:
+        if m_cpc_atual is not None:
+            bloco_novo = bloco_novo[:m_cpc_atual.start()] + nova_cpc_linha + bloco_novo[m_cpc_atual.end():]
+        else:
+            bloco_novo = re.sub(r'\n  cpc:\{[^}]*\},', nova_cpc_linha, bloco_novo, count=1)
+        bloco_novo = _upsert_campo_meta(
+            bloco_novo, 'cpc_probabilidades_ultima_alteracao', date.today().strftime('%d/%m/%Y'))
+
+    bloco_novo = _upsert_campo_meta(
+        bloco_novo, 'cpc_probabilidades_atualizado_em', date.today().strftime('%d/%m/%Y'))
+    if emissao is not None:
+        bloco_novo = _upsert_campo_meta(bloco_novo, 'cpc_probabilidades_emissao', emissao)
+
+    print(f'  ✅ CPC_IRI.cpc: {n_preenchidos}/{len(seasons)} trimestres '
+          f'{"atualizados" if cpc_mudou else "confirmados (sem mudança de valor)"} '
+          f'da tabela oficial ({CPC_PROBABILIDADES_URL})')
+    return html[:ini] + bloco_novo + html[fim:], True
+
+
+def extrair_emissao_cpc_probabilidades(html):
+    """Retorna 'mmm/AAAA' (ex.: 'out/2026') do cabeçalho "Issued <Mês>
+    <Ano>" da página de probabilidades CPC, ou None se não encontrado
+    — mesmo texto usado por `_alinhar_seasons_com_ano` para alinhar o
+    ano de cada trimestre, exposto aqui separadamente só para registrar
+    em `_meta.cpc_probabilidades_emissao` (nunca para decidir alinhamento
+    de novo — essa decisão já foi tomada dentro de parse_cpc_probabilidades)."""
+    m = _CPC_PROB_EMISSAO_RE.search(html)
+    if not m:
+        return None
+    mes_num = _MESES_EN.get(m.group(1).lower())
+    if mes_num is None:
+        return None
+    nomes_pt = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+    return f'{nomes_pt[mes_num - 1]}/{m.group(2)}'
+
 
 def parse_roni(text):
     """
@@ -235,7 +533,27 @@ def calc_oni(nino34):
 # ══════════════════════════════════════════════════════
 # MONTAR ARRAYS PARA O DASHBOARD
 # ══════════════════════════════════════════════════════
-def build_series(nino34, tsa, wk_lbl, wk_val):
+def build_series(nino34, tsa):
+    """
+    Série MENSAL — SOMENTE valores mensais reais de `nino34`/`tsa` (e
+    `oni`, derivado deles por `calc_oni`). Mês sem dado mensal real
+    ainda (tipicamente o mês corrente, que a CPC só publica depois) é
+    `null`, nunca preenchido com a leitura semanal.
+
+    Correção (revisão externa, 2ª rodada, item "Correção 2"): a versão
+    anterior preenchia o mês corrente com `wk_val` (a leitura semanal
+    mais recente) sempre que faltava dado mensal — sem checar de QUE
+    mês a própria leitura semanal era. Bug real confirmado nos dados:
+    em 15/10/2026, a semana mais recente válida de wksst9120.for
+    estava centrada em 23/09/2026 (set/2026, não out/2026) — a leitura
+    foi inserida no ponto de out/2026 do eixo mensal, rotulando um
+    valor de setembro como se fosse outubro (visível no gráfico do
+    Monitor ENSO: um "salto" fantasma em out/26 criado só pela
+    promoção indevida da leitura semanal). A leitura semanal continua
+    disponível — só não mistura mais nesta série; ver `wk_lbl`/`wk_val`
+    em `update_html()`, usados só no card D.now, com a DATA PRÓPRIA
+    da leitura semanal, nunca a de "hoje".
+    """
     TODAY = date.today()
     oni   = calc_oni(nino34)
 
@@ -245,10 +563,6 @@ def build_series(nino34, tsa, wk_lbl, wk_val):
     while (y, m) <= (TODAY.year, TODAY.month):
         lbl = f'"{m:02d}/{str(y)[2:]}"'
         n34 = nino34.get((y, m))
-        # mês atual sem dado mensal: usar semanal se disponível
-        if n34 is None and wk_val is not None:
-            if y == TODAY.year and m == TODAY.month:
-                n34 = wk_val
         o   = oni.get((y, m))
         t   = tsa.get((y, m))
 
@@ -280,6 +594,40 @@ def label_fmt(lbl):
         return f"{meses[int(mm)-1]}/20{yy}"
     except Exception:
         return lbl
+
+
+def _escolher_nino34_para_card_agora(wk_lbl, wk_val, lbl_mensal, val_mensal):
+    """
+    Decide o par (rótulo, valor) de Niño 3.4 pro card "agora" (D.now)
+    — função pura, testável sem tocar o HTML. Prefere a leitura
+    SEMANAL só quando ela for do mesmo mês do último valor MENSAL real
+    disponível, ou mais recente — nunca promove uma leitura semanal
+    desatualizada (de um mês anterior ao último mensal já publicado)
+    ao card "agora". O rótulo final sempre reflete a DATA PRÓPRIA do
+    valor escolhido (nunca "hoje", nunca o mês corrente do calendário).
+
+    Correção (revisão externa, 2ª rodada, item "Correção 2") — casos
+    cobertos explicitamente em teste: falha da fonte semanal (`wk_val`
+    None → usa mensal), ausência de valor mensal (`lbl_mensal` None →
+    usa semanal, não há com o que comparar), semana desatualizada
+    (semanal mais velha que o último mensal → mantém o mensal), virada
+    de mês (semanal do mês novo, mensal ainda do mês velho → usa
+    semanal, é mais recente).
+    """
+    if wk_val is None or wk_lbl is None:
+        return lbl_mensal, val_mensal
+    try:
+        dt_semanal = datetime.strptime(wk_lbl, '%d%b%Y')
+    except Exception:
+        return lbl_mensal, val_mensal
+
+    if lbl_mensal is not None:
+        mm_s, yy_s = dt_semanal.month, dt_semanal.year
+        mm_m, yy_m = int(lbl_mensal.split('/')[0]), int('20' + lbl_mensal.split('/')[1])
+        if (yy_s, mm_s) < (yy_m, mm_m):
+            return lbl_mensal, val_mensal
+
+    return dt_semanal.strftime('%m/%y'), wk_val
 
 
 # ══════════════════════════════════════════════════════
@@ -319,14 +667,7 @@ def update_html(series, wk_lbl, wk_val, roni=None):
     lbl_o, val_o = latest_non_null(series, 'oni')
     lbl_t, val_t = latest_non_null(series, 'tsa')
 
-    # Preferir semanal para Niño 3.4 se mais recente que o mensal
-    if wk_val is not None and wk_lbl is not None:
-        try:
-            dt = datetime.strptime(wk_lbl, '%d%b%Y')
-            val_n = wk_val
-            lbl_n = dt.strftime('%m/%y')
-        except Exception:
-            pass
+    lbl_n, val_n = _escolher_nino34_para_card_agora(wk_lbl, wk_val, lbl_n, val_n)
 
     TODAY = date.today()
     if val_n is not None and val_o is not None:
@@ -582,7 +923,7 @@ def main():
         print(f"  ⚠ Semanal indisponível: {e}")
 
     # 5. CPC RONI (trimestral, índice oficial — distinto do ONI-aprox)
-    print("\n[5/6] CPC RONI.ascii.txt…")
+    print("\n[5/7] CPC RONI.ascii.txt…")
     roni = None
     try:
         text = fetch(RONI_URL)
@@ -594,16 +935,45 @@ def main():
     except Exception as e:
         print(f"  ⚠ RONI indisponível: {e}")
 
-    # 6. Histórico — master_monthly.csv e serie_subst.csv
-    print("\n[6/6] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
+    # 6. CPC — tabela oficial de probabilidades de fase ENSO por trimestre
+    # (ver CPC_PROBABILIDADES_URL — única parte de CPC_IRI automatizada
+    # até aqui; status/synopsis/narrativa continuam manuais, ver
+    # lembrete_cpc_thursday.yml/lembrete_iri_thursday.yml).
+    print("\n[6/7] CPC — probabilidades de fase ENSO por trimestre…")
+    cpc_probabilidades = {}
+    cpc_prob_emissao = None
+    try:
+        text = fetch(CPC_PROBABILIDADES_URL)
+        cpc_probabilidades = parse_cpc_probabilidades(text)
+        cpc_prob_emissao = extrair_emissao_cpc_probabilidades(text)
+        if cpc_probabilidades:
+            print(f"  ✅ CPC probabilidades: {len(cpc_probabilidades)} trimestre(s) "
+                  f"válido(s) na tabela oficial (emissão: {cpc_prob_emissao or '—'})")
+        else:
+            print("  ⚠ CPC probabilidades: página buscada, mas nenhuma linha válida "
+                  "extraída, OU o ano de cada trimestre não pôde ser alinhado com "
+                  "segurança (estrutura pode ter mudado) — CPC_IRI.cpc preservado")
+    except Exception as e:
+        print(f"  ⚠ CPC probabilidades indisponível: {e} — CPC_IRI.cpc preservado")
+
+    # 7. Histórico — master_monthly.csv e serie_subst.csv
+    print("\n[7/7] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
     n_master = atualizar_master_monthly(nino34, tsa, pdo)
     n_serie  = corrigir_serie_subst(nino34, tsa, pdo)
     print(f"  master_monthly.csv: {n_master} mês(es) adicionados")
     print(f"  serie_subst.csv: {n_serie} linha(s) corrigidas")
 
     # Montar e atualizar
-    series  = build_series(nino34, tsa, wk_lbl, wk_val)
+    series  = build_series(nino34, tsa)
     changed = update_html(series, wk_lbl, wk_val, roni)
+
+    if cpc_probabilidades:
+        html = DASHBOARD.read_text(encoding='utf-8')
+        novo_html, mudou_cpc = atualizar_cpc_probabilidades_no_html(
+            html, cpc_probabilidades, emissao=cpc_prob_emissao)
+        if mudou_cpc:
+            DASHBOARD.write_text(novo_html, encoding='utf-8')
+            changed = True
 
     lbl_n, val_n = latest_non_null(series, 'nino34')
     lbl_o, val_o = latest_non_null(series, 'oni')

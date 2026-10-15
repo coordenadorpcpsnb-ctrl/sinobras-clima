@@ -60,6 +60,33 @@ def ok(msg):
     print(f'  ✅ {msg}')
 
 
+_MESES_PT = {'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
+             'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12}
+
+
+def _dias_desde_data_pt(texto):
+    """Extrai 'DD/mmm' (mês abreviado em pt-BR, 3 letras) de um texto
+    livre e um ano de 4 dígitos (em qualquer posição do mesmo texto —
+    cobre tanto 'DD/mmm/AAAA' quanto 'mmm/AAAA (DD/mmm)', os dois
+    formatos já usados em CPC_IRI._meta) e retorna quantos dias se
+    passaram até hoje, ou None se não conseguir extrair com confiança.
+    Nunca lança exceção — defasagem é só aviso, nunca motivo de STOP."""
+    m_dia_mes = re.search(r'(\d{1,2})/([a-zç]{3})\b', texto.lower())
+    m_ano = re.search(r'(20\d{2})', texto)
+    if not m_dia_mes or not m_ano:
+        return None
+    dia = int(m_dia_mes.group(1))
+    mes = _MESES_PT.get(m_dia_mes.group(2))
+    ano = int(m_ano.group(1))
+    if mes is None:
+        return None
+    try:
+        data = date(ano, mes, dia)
+    except ValueError:
+        return None
+    return (date.today() - data).days
+
+
 def checar_continuidade(serie, ate=None):
     """
     Retorna a lista de meses 'MM/AAAA' faltando entre o primeiro
@@ -108,7 +135,7 @@ def solve_bh(prec, etp, cad=CAD, tol=1e-3, it=200):
     return res
 
 
-def main():
+def main(pular_continuidade_serie_subst=False):
     print(f"\n{'='*58}")
     print('  VERIFICAÇÃO DE INTEGRIDADE DO DASHBOARD')
     print(f"{'='*58}\n")
@@ -294,6 +321,22 @@ def main():
     # ── 9. continuidade de data/serie_subst.csv ──────────────────────────
     # .shift() em pandas opera por POSIÇÃO da linha, não por data — um mês
     # faltando desloca os lags de todo mundo depois dele sem erro visível.
+    #
+    # `pular_continuidade_serie_subst`: EXISTE SÓ para indices_semanal.yml
+    # (Fase ENSO-DADOS, auditoria 15/10/2026) — esse workflow roda
+    # update_indices.py isolado, que NUNCA toca serie_subst.csv com um mês
+    # novo (só fetch_monthly_data.py faz isso, chamado só por update.yml no
+    # dia 21). Por desenho, do dia 1 ao dia 20 de todo mês o "mês anterior
+    # ao atual" fica estruturalmente ausente de serie_subst.csv até o
+    # ciclo mensal rodar — essa checagem reprovava TODA execução de
+    # indices_semanal.yml nessa janela (confirmado: 7 falhas seguidas,
+    # 01-12/out/2026, runs #7-#13), o que pulava os passos de commit E de
+    # heartbeat (ambos vêm depois no YAML, sem `if: always()`) — RONI,
+    # wksst semanal e D.now ficaram presos no último commit que passou
+    # (28/09/2026) até esta correção. Em update.yml a checagem continua
+    # SEMPRE ativa (default False) — lá ela é legítima, porque
+    # fetch_monthly_data.py já rodou antes e preencheu o mês antes desta
+    # verificação.
     if not SERIE_SUBST.exists():
         erro('data/serie_subst.csv não encontrado')
     else:
@@ -302,9 +345,15 @@ def main():
         m_ini, y_ini = int(serie['mes'].iloc[0]), int(serie['ano'].iloc[0])
         m_fim, y_fim = int(serie['mes'].iloc[-1]), int(serie['ano'].iloc[-1])
         if lacunas:
-            erro(f'serie_subst.csv com mês(es) faltando entre {m_ini:02d}/{y_ini} '
-                 f'e o mês anterior ao atual (último registro real: '
-                 f'{m_fim:02d}/{y_fim}): ' + ', '.join(lacunas))
+            msg = (f'serie_subst.csv com mês(es) faltando entre {m_ini:02d}/{y_ini} '
+                   f'e o mês anterior ao atual (último registro real: '
+                   f'{m_fim:02d}/{y_fim}): ' + ', '.join(lacunas))
+            if pular_continuidade_serie_subst:
+                print(f'  ⚠ {msg} — IGNORADO nesta execução '
+                      f'(--pular-continuidade-serie-subst, só indices_semanal.yml; '
+                      f'backfill real continua só no ciclo mensal do dia 21)')
+            else:
+                erro(msg)
         else:
             ok(f'serie_subst.csv contínua até o mês anterior ao atual '
                f'({len(serie)} meses, {m_ini:02d}/{y_ini} → {m_fim:02d}/{y_fim})')
@@ -326,6 +375,28 @@ def main():
         else:
             ok('RONI e ONI-aprox com rótulos distintos')
 
+    # ── 11. defasagem do CPC_IRI (curado manualmente — só aviso, nunca
+    #        bloqueia a publicação) ──────────────────────────────────────
+    # CPC_IRI é 100% manual (ver CLAUDE.md armadilhas 3/4) — não existe
+    # script que o atualize automaticamente (exceto, desde a Fase
+    # ENSO-DADOS 15/10/2026, CPC_IRI.cpc via update_indices.py — ver
+    # atualizar_cpc_probabilidades()). Bloquear a publicação por ele estar
+    # velho recriaria a mesma classe de bug corrigida no item 9 (um aviso
+    # legítimo de uma parte do dashboard travando a publicação inteira) —
+    # por isso isto é SÓ aviso no console, nunca `erro()`.
+    m_meta = re.search(r'_meta:\s*\{([^}]*)\}', h)
+    if m_meta:
+        bloco_meta = m_meta.group(1)
+        for campo, rotulo in (('cpc_emissao', 'CPC'), ('iri_emissao', 'IRI')):
+            m_campo = re.search(rf"{campo}:\s*'([^']*)'", bloco_meta)
+            if m_campo:
+                dias = _dias_desde_data_pt(m_campo.group(1))
+                if dias is not None and dias > 35:
+                    print(f'  ⚠ CPC_IRI._meta.{campo} ({rotulo}) tem {dias} dias '
+                          f'— acima do ciclo mensal esperado (~30 dias), fonte '
+                          f'possivelmente defasada')
+        ok('metadados de defasagem do CPC_IRI verificados (só aviso, nunca bloqueia)')
+
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")
     if falhas:
@@ -339,4 +410,5 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    _pular = '--pular-continuidade-serie-subst' in sys.argv
+    sys.exit(main(pular_continuidade_serie_subst=_pular))
