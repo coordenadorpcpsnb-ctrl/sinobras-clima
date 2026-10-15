@@ -18,6 +18,7 @@ Roda com:
     python -m unittest tests.test_verificar_dashboard -v
 """
 
+import subprocess
 import sys
 import unittest
 from datetime import date, timedelta
@@ -103,6 +104,58 @@ class PularContinuidadeSerieSubstTestCase(unittest.TestCase):
 
     def tearDown(self):
         vd.falhas.clear()
+
+
+class ComandoExatoDoWorkflowSemanalTestCase(unittest.TestCase):
+    """Revisão externa (2ª rodada, 'Correção 4') — testa o comando
+    exatamente como `.github/workflows/indices_semanal.yml` o executa
+    (subprocesso real, não chamada direta de `main()`), e confirma que
+    `update.yml` continua chamando o verificador sem a flag (bloqueante,
+    comportamento 100% preservado)."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not vd.SERIE_SUBST.exists() or not vd.DASHBOARD.exists():
+            raise unittest.SkipTest("dados reais não disponíveis nesta árvore de trabalho")
+
+    def test_a_comando_do_workflow_semanal_roda_e_so_a_checagem_9_e_suprimida(self):
+        resultado = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts' / 'verificar_dashboard.py'),
+             '--pular-continuidade-serie-subst'],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        saida = resultado.stdout
+        self.assertIn('IGNORADO nesta execução', saida)
+        self.assertIn('--pular-continuidade-serie-subst', saida)
+        # Nenhuma OUTRA linha de falha (❌) além, no máximo, da que o
+        # aviso de defasagem do CPC_IRI (item 11, sempre aviso — nunca
+        # ❌) já cobre; aqui confirmamos que não existe NENHUM ❌ no
+        # stdout quando a única causa conhecida de falha é suprimida
+        # pela flag nesta árvore de trabalho real.
+        linhas_falha = [linha for linha in saida.splitlines() if '❌' in linha]
+        self.assertEqual(linhas_falha, [], f'flag deveria suprimir só o item 9: {linhas_falha}')
+
+    def test_b_comando_do_workflow_mensal_update_yml_nao_leva_a_flag(self):
+        with open(ROOT / '.github' / 'workflows' / 'update.yml', encoding='utf-8') as f:
+            conteudo = f.read()
+        self.assertIn('run: python scripts/verificar_dashboard.py\n', conteudo)
+        self.assertNotIn('--pular-continuidade-serie-subst', conteudo)
+
+    def test_c_workflow_semanal_usa_a_flag_exatamente_como_testada_aqui(self):
+        with open(ROOT / '.github' / 'workflows' / 'indices_semanal.yml', encoding='utf-8') as f:
+            conteudo = f.read()
+        self.assertIn(
+            'run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst',
+            conteudo,
+        )
+
+    def test_d_sem_a_flag_o_mesmo_comando_continua_bloqueante(self):
+        resultado = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts' / 'verificar_dashboard.py')],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        self.assertIn('serie_subst.csv com mês(es) faltando', resultado.stdout)
+        self.assertNotIn('IGNORADO nesta execução', resultado.stdout)
 
 
 if __name__ == '__main__':
