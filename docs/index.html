@@ -1445,13 +1445,21 @@ function buildMonitor(){
     const meta = CPC_IRI._meta;
     const diasCpc = _diasDesde(meta.cpc_emissao);
     const diasIri = _diasDesde(meta.iri_emissao);
+    const diasIriTraj = _diasDesde(meta.iri_trajetoria_emissao);
     const LIMIAR_DEFASADO = 35; // ciclo mensal esperado ~30 dias
     const partes = [];
     partes.push(`CPC ${meta.cpc_emissao || '—'}${diasCpc!=null && diasCpc>LIMIAR_DEFASADO ? ' ⚠ defasado ('+diasCpc+'d)' : ''}`);
     partes.push(`IRI ${meta.iri_emissao || '—'}${diasIri!=null && diasIri>LIMIAR_DEFASADO ? ' ⚠ defasado ('+diasIri+'d)' : ''}`);
+    /* Trajetória mensal do Niño 3.4 do IRI pode ter emissão própria,
+       mais antiga que a das probabilidades de fase (iri_emissao) —
+       Fase ENSO-IRI (15/10/2026): nunca presumir que as duas datam da
+       mesma emissão, sinalizar separadamente quando divergirem. */
+    if(meta.iri_trajetoria_emissao && meta.iri_trajetoria_emissao !== meta.iri_emissao){
+      partes.push(`trajetória Niño3,4 IRI ${meta.iri_trajetoria_emissao}${diasIriTraj!=null && diasIriTraj>LIMIAR_DEFASADO ? ' ⚠ defasada ('+diasIriTraj+'d)' : ''}`);
+    }
     if(meta.roni_trimestral) partes.push(`RONI oficial ${meta.roni_trimestral}`);
     ruleNote.textContent = '| ' + partes.join(' · ') + (meta.cpc_status ? ' — ' + meta.cpc_status : '');
-    if((diasCpc!=null && diasCpc>LIMIAR_DEFASADO) || (diasIri!=null && diasIri>LIMIAR_DEFASADO)){
+    if((diasCpc!=null && diasCpc>LIMIAR_DEFASADO) || (diasIri!=null && diasIri>LIMIAR_DEFASADO) || (diasIriTraj!=null && diasIriTraj>LIMIAR_DEFASADO)){
       ruleNote.style.color = 'var(--dry)';
       ruleNote.style.fontWeight = '600';
     }
@@ -2269,23 +2277,45 @@ const CPC_IRI = {
   //      nesta emissão — só figura; ver cpc[] abaixo, fonte separada)
   // CPC — tabela de probabilidades por trimestre: fonte ESTRUTURADA
   // separada (cpc.ncep.noaa.gov/.../enso/roni/probabilities/, HTML real,
-  // não figura — descoberta nesta auditoria), "Issued October 2026" (CPC
-  // não publica dia exato nesta página). Única parte de CPC_IRI
-  // automatizada até aqui — ver scripts/update_indices.py,
+  // não figura — descoberta na auditoria de 15/10/2026), "Issued October
+  // 2026" (CPC não publica dia exato nesta página). Única parte de
+  // CPC_IRI automatizada até aqui — ver scripts/update_indices.py,
   // parse_cpc_probabilidades(). AMJ/27 e seguintes ainda sem valor
   // (fora do alcance desta emissão).
   // RONI oficial (ver const RONI acima, trimestral, ERSSTv6,
   // atualizado automaticamente): JAS/2026 = +1,69 °C.
-  // IRI: Quick Look ago/2026 (publicado 19/ago/2026) — NÃO reverificado
-  //      nesta auditoria (iri.columbia.edu inacessível deste ambiente,
-  //      inclusive para checagem manual via automação; ver relatório da
-  //      Fase ENSO-DADOS). Mantido como último conjunto oficial válido,
-  //      sinalizado como defasado (ver _meta.iri_emissao e o aviso de
-  //      defasagem em verificar_dashboard.py). NÃO estimado nem
-  //      recalculado — valores abaixo são os mesmos de 19/ago/2026.
-  //      Niño 3.4 MJJ/26 = +1,51 °C · jul/26 = +2,03 °C (OISSTv2)
-  //      Semanal centrado em 12/ago/2026 = +2,70 °C
-  //      Fonte: iri.columbia.edu/our-expertise/climate/forecasts/enso/current/
+  // ── IRI ATUALIZADO 15/10/2026 (Fase ENSO-IRI) ───────────────────────
+  // IRI: Quick Look de set/2026, publicado 21/09/2026 ("September 2026
+  //      Quick Look"). Probabilidades de fase (iri[] abaixo) atualizadas
+  //      nesta fase a partir de EXTRAÇÃO EXTERNA — a página foi acessada
+  //      por quem revisou esta fase, não pelo Claude: nesta sessão,
+  //      iri.columbia.edu está bloqueado pelo proxy de rede do ambiente
+  //      (HTTP 403 no CONNECT, confirmado via curl direto e via WebFetch
+  //      em 15/10/2026 — não é falha de DNS, é política de egress desta
+  //      sessão). Os valores abaixo NÃO foram reverificados de fonte
+  //      primária por Claude; são os números documentados pela extração
+  //      externa, citados tal como fornecidos (ver _meta.iri_extracao).
+  //      22 modelos participantes (13 dinâmicos + 9 estatísticos).
+  //      El Niño: 100% SON/26 a FMA/27 (inclusive) · MAM/27 99% ·
+  //      AMJ/27 90% · MJJ/27 61% (fora do horizonte de seasons[] abaixo
+  //      — ver _meta.iri_mjj27_fora_horizonte, não acrescentado nesta
+  //      fase). ASO/26 não consta como confirmado nesta emissão — null,
+  //      não reaproveitado do conjunto antigo (CLAUDE.md armadilha 4).
+  //      Neutro/La Niña: a extração não reporta probabilidade de
+  //      Neutro/La Niña para SON/26–FMA/27 (consistente com El Niño
+  //      100%, lido como 0%); para MAM/27 e AMJ/27 a divisão exata do
+  //      restante (1%/10%) entre Neutro e La Niña não está documentada
+  //      — null, não dividido por suposição.
+  //      A página declara que o IRI não fornece mais arquivos de dados
+  //      das previsões para download (ver _meta.iri_dados_download).
+  //      A trajetória mensal do Niño 3.4 (nino_seasons/iri_nino_mean/
+  //      iri_nino_p15/iri_nino_p85 abaixo) NÃO foi alterada nesta fase:
+  //      a extração de set/2026 não trouxe média/percentis mensais
+  //      verificáveis equivalentes, então os valores de 19/ago/2026
+  //      foram preservados tal como estavam (ver _meta.iri_trajetoria_*
+  //      e o rótulo dinâmico no gráfico Niño 3.4 da aba Comparativo, que
+  //      cita a emissão real dessa trajetória para não ser confundida
+  //      com a previsão de set/2026).
   // NOTA: CPC usa ERSSTv6 para RONI (desde fev/2026, PNS 26-05) e ainda
   //       ERSSTv5 para o ONI tradicional; IRI usa OISSTv2 — três bases
   //       distintas, divergência de SST entre elas reflete isso, não
@@ -2298,12 +2328,20 @@ const CPC_IRI = {
     cpc_emissao:   '8/out/2026',
     cpc_status:    'El Niño Advisory — forte-a-muito-forte provável até JFM/27 (>83%)',
     cpc_proxima:   '12/nov/2026',
-    iri_emissao:   'ago/2026 (19/ago)',
-    iri_status:    'DEFASADO — iri.columbia.edu inacessível nesta auditoria (15/10/2026); último conjunto oficial válido preservado, não reestimado',
-    oni_mensal:    '+1,51°C (MJJ/2026, fonte IRI defasada — ver iri_status)',
+    iri_emissao:   '21/09/2026',
+    iri_pagina:    'September 2026 Quick Look',
+    iri_fonte_url: 'https://iri.columbia.edu/our-expertise/climate/forecasts/enso/current/',
+    iri_metodologia: 'Previsão objetiva multimodelo (22 modelos: 13 dinâmicos + 9 estatísticos) — distinta do consenso de especialistas do CPC',
+    iri_extracao:  '15/10/2026 — extração EXTERNA (feita por quem revisou esta fase, não pelo Claude); iri.columbia.edu bloqueado nesta sessão (proxy de rede, HTTP 403 no CONNECT) — ver iri_status',
+    iri_status:    'Probabilidades de fase (iri{} abaixo) atualizadas com base em extração externa (ver iri_extracao); NÃO reverificado de fonte primária por Claude nesta sessão. IRI declara na página que não fornece mais arquivos de dados das previsões para download (ver iri_dados_download).',
+    iri_dados_download: 'Página declara (set/2026) que o IRI não fornece mais arquivos de dados das previsões para download — valores de iri{} vêm de extração externa do texto/tabela da página, não de arquivo',
+    iri_mjj27_fora_horizonte: 'El Niño 61% em MJJ/2027 — oficial na emissão de set/2026 (extração externa), mas FORA do horizonte atual de CPC_IRI.seasons (termina em AMJ/27); não acrescentado nesta fase (Fase ENSO-IRI, Seção 7)',
+    iri_trajetoria_emissao: 'ago/2026 (19/ago)',
+    iri_trajetoria_status: 'PRESERVADA, defasada em relação à emissão de probabilidades acima (set/2026) — nino_seasons/iri_nino_mean/iri_nino_p15/iri_nino_p85 são os mesmos valores de 19/ago/2026; a extração de set/2026 não trouxe média/percentis mensais do Niño 3.4 verificáveis equivalentes, então não foram estimados nem recalculados (CLAUDE.md armadilha 4)',
+    oni_mensal:    '+1,51°C (MJJ/2026, fonte IRI defasada — ver iri_trajetoria_status)',
     nino34_semana: '+3,10°C (semana 23/set/2026, CPC wksst9120.for)',
     roni_trimestral: '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)',
-    divergencia:   'cpc[] abaixo é da tabela estruturada de probabilidades (out/2026); iri[] é de 19/ago/2026 (defasado)',
+    divergencia:   'cpc[] é da tabela estruturada de probabilidades (out/2026); iri[] é da extração externa da emissão de set/2026 (ver iri_extracao) — ASO/26 null em ambos não é coincidência: CPC também não publicou ASO/26 na tabela estruturada (fora do alcance), IRI porque a extração de set/2026 não confirmou esse trimestre',
     dash_proxima:  '21/out/2026',
     atualizado_em: '15/10/2026',
   },
@@ -2312,9 +2350,12 @@ const CPC_IRI = {
   // 15/10/2026 (ver scripts/update_indices.py, parse_cpc_probabilidades);
   // ASO/26 e AMJ/27 sem valor (fora do alcance da tabela publicada)
   cpc:{ en:[null,100.0,100.0,100.0,100.0,100.0,98.0,85.0,45.0], neu:[null,0.0,0.0,0.0,0.0,0.0,2.0,15.0,54.0], ln:[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0] },
-  // IRI — Quick Look 19/ago/2026 (valores exatos publicados)
-  iri:{ en:[100,100,100,100,100,100,100,97,78], neu:[0,0,0,0,0,0,0,3,22], ln:[0,0,0,0,0,0,0,0,0] },
-  // Trajetória Niño 3.4 — plume IRI de jul/2026 (ago publicado apenas em figura)
+  // IRI — Quick Look de set/2026 (publicado 21/09/2026), extração externa
+  // (ver _meta.iri_extracao/iri_status) — ASO/26 null (não confirmado);
+  // MAM/27 e AMJ/27 com neu/ln null (divisão exata não documentada)
+  iri:{ en:[null,100,100,100,100,100,100,99,90], neu:[null,0,0,0,0,0,0,null,null], ln:[null,0,0,0,0,0,0,null,null] },
+  // Trajetória Niño 3.4 — plume IRI PRESERVADA de 19/ago/2026, não
+  // atualizada nesta fase (ver _meta.iri_trajetoria_status acima)
   nino_seasons:['set/26','out/26','nov/26','dez/26','jan/27','fev/27','mar/27','abr/27','mai/27','jun/27','jul/27','ago/27'],
   iri_nino_mean:[2.70,2.20,2.35,2.50,2.55,2.50,2.35,2.10,1.80,1.45,1.05,0.70],
   iri_nino_p15: [2.15,1.60,1.70,1.80,1.85,1.80,1.65,1.45,1.15,0.80,0.45,0.15],
@@ -2403,27 +2444,41 @@ function rebuildCmpNino(){
   destroyChart('cmp-nino');
   const ns = CPC_IRI.nino_seasons;
   const sc = activeCmpSc;
-  /* Niño 3.4 do cenário: usar primeiros 12 valores de jan/26, mas exibir jul/26-jun/27 = índices 6-17
-     Porém nino_seasons é abr/26–mar/27 (12 pts) — alinhar: abr=0, mai=1, ..., dez=6, jan=7, fev=8, mar=9 (fora)
-     Vamos usar os dados n34 do SARIMAX_DATA que cobrem jun/26–mai/27 diretamente */
-  const scN34   = SARIMAX_DATA.n34[CMP_SC_LONG[sc]||sc];        // jun/26–mai/27
+  const scN34   = SARIMAX_DATA.n34[CMP_SC_LONG[sc]||sc];
   const iriN34  = SARIMAX_DATA.n34['IRI_mean'];
-  const winLbls = SARIMAX_DATA.labels_win;     // "07/26"–"06/27"
+  const winLbls = SARIMAX_DATA.labels_win;     // rolagem mensal atual do horizonte
 
-  /* Banda IRI P15–P85: aproximar como offset da média IRI nos mesmos meses jul-jun */
-  /* Os dados do IRI nino_seasons cobrem abr/26–mar/27; jul/26=índice 3, jun/27 aproximar */
-  const iriIdx3_14 = Array.from({length:12},(_,i)=>Math.min(i+3, CPC_IRI.iri_nino_mean.length-1));
-  const iriMeanWin = iriIdx3_14.map(i=>CPC_IRI.iri_nino_mean[i]);
-  const iriP15Win  = iriIdx3_14.map(i=>CPC_IRI.iri_nino_p15[i]);
-  const iriP85Win  = iriIdx3_14.map(i=>CPC_IRI.iri_nino_p85[i]);
-  const bandData   = iriMeanWin.map((v,i)=>iriP85Win[i]-iriP15Win[i]);
+  /* Alinhamento por rótulo de mês, não por deslocamento fixo — Fase
+     ENSO-IRI (15/10/2026): nino_seasons é a trajetória do IRI PRESERVADA
+     de 19/ago/2026 (ver CPC_IRI._meta.iri_trajetoria_status), e pode não
+     cobrir o mesmo intervalo do horizonte corrente de winLbls — os dois
+     eixos rolam de forma independente com o calendário. Um deslocamento
+     fixo (ex. "índice do mês + 3") trava assim que um dos dois avança e
+     o outro não: é exatamente a classe de bug da armadilha 1 do
+     CLAUDE.md (arrays já alinhados por calendário, nunca por posição
+     fixa). Mês de winLbls sem correspondência em nino_seasons vira null
+     (Chart.js pula o ponto), nunca repete o último valor disponível. */
+  const _MES_NUM = {jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',
+                     jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12'};
+  const nsAsMmYy = ns.map(s=>{
+    const [abv,yy] = s.split('/');
+    return (_MES_NUM[abv.toLowerCase()]||'??')+'/'+yy;
+  });
+  const iriIdxPorMes = winLbls.map(lbl=>{
+    const i = nsAsMmYy.indexOf(lbl);
+    return i===-1 ? null : i;
+  });
+  const iriMeanWin = iriIdxPorMes.map(i=>i==null?null:CPC_IRI.iri_nino_mean[i]);
+  const iriP15Win  = iriIdxPorMes.map(i=>i==null?null:CPC_IRI.iri_nino_p15[i]);
+  const iriP85Win  = iriIdxPorMes.map(i=>i==null?null:CPC_IRI.iri_nino_p85[i]);
+  const bandData   = iriMeanWin.map((v,i)=>v==null?null:(iriP85Win[i]-iriP15Win[i]));
 
   destroyChart('cmp-nino');
   const ctx2 = document.getElementById('c-cmp-nino').getContext('2d');
   charts['cmp-nino'] = new Chart(ctx2,{type:'bar',data:{labels:winLbls,datasets:[
-    {label:'IRI P15–P85',data:bandData,base:iriP15Win,backgroundColor:'#d4994a28',
+    {label:'IRI P15–P85 ('+(CPC_IRI._meta.iri_trajetoria_emissao||'?')+')',data:bandData,base:iriP15Win,backgroundColor:'#d4994a28',
      barPercentage:1.0,categoryPercentage:1.0,order:4},
-    {label:'IRI média',data:iriMeanWin,type:'line',borderColor:'#d4994a',backgroundColor:'transparent',
+    {label:'IRI média ('+(CPC_IRI._meta.iri_trajetoria_emissao||'?')+')',data:iriMeanWin,type:'line',borderColor:'#d4994a',backgroundColor:'transparent',
      borderWidth:2.2,pointRadius:3,fill:false,tension:.3,order:1},
     {label:'SARIMAX: '+CMP_SCEN_LBL[sc],data:scN34,type:'line',
      borderColor:CMP_SCEN_COL[sc],backgroundColor:'transparent',
@@ -2511,6 +2566,11 @@ function buildCmpTable(){
   const tbody = document.getElementById('t-cmp-full');
   if(!tbody) return;
   tbody.innerHTML = '';
+  /* Fase ENSO-IRI (15/10/2026): null em CPC_IRI.cpc/iri significa "não
+     publicado nesta emissão" (ver CLAUDE.md armadilha 4) — nunca 0%.
+     Renderizar como "—" em vez do literal "null%" que o template
+     produzia antes para qualquer trimestre sem valor (ex. ASO/26). */
+  const fmtPct = v => v==null ? '—' : `${v}%`;
   CPC_IRI.seasons.forEach((s,i)=>{
     const cp=CPC_IRI.cpc, ir=CPC_IRI.iri;
     const enf  = Math.round(SARIMAX_DATA.trimestres['El Nino forte'][s].mean);
@@ -2521,15 +2581,12 @@ function buildCmpTable(){
     const deltaStr = delta >= 0
       ? `<span style="color:var(--euc)">+${delta}</span>`
       : `<span style="color:var(--alert)">${delta}</span>`;
-    const dom = (cp.en[i]+ir.en[i])/2 > 50
-      ? '<span style="color:#d47070;font-weight:600">El Niño</span>'
-      : '<span style="color:#90a8b0">Neutro</span>';
     tbody.innerHTML += `<tr>
       <td style="font-weight:500">${s}</td>
-      <td style="color:#d47070;text-align:center">${cp.en[i]}%</td>
-      <td style="color:#e09050;text-align:center">${ir.en[i]}%</td>
-      <td style="color:#90a090;text-align:center">${cp.neu[i]}%</td>
-      <td style="color:#a0b8a0;text-align:center">${ir.neu[i]}%</td>
+      <td style="color:#d47070;text-align:center">${fmtPct(cp.en[i])}</td>
+      <td style="color:#e09050;text-align:center">${fmtPct(ir.en[i])}</td>
+      <td style="color:#90a090;text-align:center">${fmtPct(cp.neu[i])}</td>
+      <td style="color:#a0b8a0;text-align:center">${fmtPct(ir.neu[i])}</td>
       <td style="color:#4a9fd4;text-align:center">${enf} mm</td>
       <td style="color:#4a9fd4;text-align:center">${enm} mm</td>
       <td style="color:#52a870;text-align:center;font-weight:500">${iri_v} mm</td>
