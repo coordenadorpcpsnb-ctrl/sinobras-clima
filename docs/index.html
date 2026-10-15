@@ -1174,7 +1174,7 @@
    baixo. Ver CLAUDE.md, armadilha 9. Os dois rótulos na UI (cards
    "RONI (oficial NOAA)" e "ONI aprox. (Niño 3,4, 3m)") existem
    justamente para não deixar ler um pelo outro. */
-const RONI = { seas: 'JJA', ano: 2026, valor: 1.36, atualizado: '28/09/2026' };
+const RONI = { seas: 'JAS', ano: 2026, valor: 1.69, atualizado: '15/10/2026' };
 const D = {
   annual:{years:[1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],vals:[1487.9, 1562.2, 1558.8, 1674.9, 2531.5, 1705.5, 1357.9, 1753.7, 2004.2, 1486.4, 1621.4, 1400.9, 1659.0, 1925.1, 1868.6, 2010.0, 1644.4, 1243.6, 1933.7, 1945.5, 1679.3, 1524.4, 1538.2, 1788.8, 1718.6, 1954.9, 1465.5, 2038.4, 1873.2, 1521.3, 1820.2, 1566.9, 1671.6, 1800.5, 1264.4, 1520.3, 1900.5, 1921.9, 1590.4, 2015.5, 2110.8, 1728.9, 1485.7, 1494.4, 1774.4],media:1714.3,dp:245.6,cv:14.3,minimo:[1998,1243.6],maximo:[1985,2531.5]},
   sen:{slope:2.24,p:0.4935,medY:2003,medP:1714.3},
@@ -1217,15 +1217,15 @@ const D = {
     "12":{trend:"no trend",p:0.1295,tau:-0.158,sen:-1.29}
   },
   now: {
-    nino34: ["set/2026", 3.1],  // Atualizado 28/09/2026 — PSL/NOAA
-    oni:    ["jul/2026", 2.03],  // ONI (média 3m)
+    nino34: ["set/2026", 3.1],  // Atualizado 15/10/2026 — PSL/NOAA
+    oni:    ["ago/2026", 2.46],  // ONI (média 3m)
     tsa:    ["jul/2026", 0.12]  // TSA mensal
   },
   indices: {
-    labels:["01/23","02/23","03/23","04/23","05/23","06/23","07/23","08/23","09/23","10/23","11/23","12/23","01/24","02/24","03/24","04/24","05/24","06/24","07/24","08/24","09/24","10/24","11/24","12/24","01/25","02/25","03/25","04/25","05/25","06/25","07/25","08/25","09/25","10/25","11/25","12/25","01/26","02/26","03/26","04/26","05/26","06/26","07/26","08/26","09/26"],
-    nino34:[-0.69,-0.44,-0.01,0.19,0.47,0.88,1.07,1.3,1.53,1.59,1.9,1.99,1.78,1.53,1.24,0.81,0.31,0.24,0.21,-0.07,-0.15,-0.28,-0.14,-0.62,-0.71,-0.35,0.1,-0.16,-0.04,0.04,-0.06,-0.33,-0.44,-0.48,-0.68,-0.61,-0.54,-0.2,0.03,0.47,0.94,1.55,2.03,2.52,3.1],
-    oni:   [-0.66,-0.38,-0.09,0.22,0.51,0.81,1.08,1.3,1.47,1.67,1.83,1.89,1.77,1.52,1.19,0.79,0.45,0.25,0.13,-0.0,-0.17,-0.19,-0.35,-0.49,-0.56,-0.32,-0.14,-0.03,-0.05,-0.02,-0.12,-0.28,-0.42,-0.53,-0.59,-0.61,-0.45,-0.24,0.1,0.48,0.99,1.51,2.03,null,null],
-    tsa:   [0.49,0.28,0.14,0.19,0.44,0.26,0.28,0.3,0.25,0.19,0.73,1.05,0.99,1.14,1.33,1.1,0.82,0.54,0.33,0.19,0.3,0.28,0.22,0.31,0.32,0.33,0.08,0.11,0.17,0.11,0.11,0.07,0.13,0.0,0.02,0.17,0.3,0.45,0.27,0.38,0.17,0.2,0.12,null,null]
+    labels:["01/23","02/23","03/23","04/23","05/23","06/23","07/23","08/23","09/23","10/23","11/23","12/23","01/24","02/24","03/24","04/24","05/24","06/24","07/24","08/24","09/24","10/24","11/24","12/24","01/25","02/25","03/25","04/25","05/25","06/25","07/25","08/25","09/25","10/25","11/25","12/25","01/26","02/26","03/26","04/26","05/26","06/26","07/26","08/26","09/26","10/26"],
+    nino34:[-0.69,-0.44,-0.01,0.19,0.47,0.88,1.07,1.3,1.53,1.59,1.9,1.99,1.78,1.53,1.24,0.81,0.31,0.24,0.21,-0.07,-0.15,-0.28,-0.14,-0.62,-0.71,-0.35,0.1,-0.16,-0.04,0.04,-0.06,-0.33,-0.44,-0.48,-0.68,-0.61,-0.54,-0.2,0.03,0.47,0.94,1.55,2.03,2.52,2.84,3.1],
+    oni:   [-0.66,-0.38,-0.09,0.22,0.51,0.81,1.08,1.3,1.47,1.67,1.83,1.89,1.77,1.52,1.19,0.79,0.45,0.25,0.13,-0.0,-0.17,-0.19,-0.35,-0.49,-0.56,-0.32,-0.14,-0.03,-0.05,-0.02,-0.12,-0.28,-0.42,-0.53,-0.59,-0.61,-0.45,-0.24,0.1,0.48,0.99,1.51,2.03,2.46,null,null],
+    tsa:   [0.49,0.28,0.14,0.19,0.44,0.26,0.28,0.3,0.25,0.19,0.73,1.05,0.99,1.14,1.33,1.1,0.82,0.54,0.33,0.19,0.3,0.28,0.22,0.31,0.32,0.33,0.08,0.11,0.17,0.11,0.11,0.07,0.13,0.0,0.02,0.17,0.3,0.45,0.27,0.38,0.17,0.2,0.12,null,null,null]
   },
   fc_labels:["09/26", "10/26", "11/26", "12/26", "01/27", "02/27", "03/27", "04/27", "05/27", "06/27", "07/27", "08/27"],
   fc_clim:[41.7, 119.7, 159.2, 199.9, 267.3, 282.3, 308.4, 220.4, 83.1, 15.6, 6.4, 10.4],
@@ -1417,9 +1417,47 @@ function buildMonitor(){
   else if(oni<=-0.5) fase='La Niña fraca';
   document.getElementById('fase-txt').textContent=fase;
 
-  /* Nota CPC/IRI no semáforo */
+  /* Nota CPC/IRI no semáforo — gerada de CPC_IRI._meta, nunca mais um
+     texto fixo (Fase ENSO-DADOS, auditoria 15/10/2026: a frase antiga
+     ficou hardcoded desde a emissão de MJJ/26 e nunca foi atualizada
+     junto com os dados). Separa explicitamente: última emissão CPC,
+     última emissão IRI, e sinaliza defasagem (>35 dias de uma emissão
+     mensal é sinal de ciclo perdido) sem bloquear a renderização. */
+  function _diasDesde(txt){
+    if(!txt) return null;
+    const meses = {jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11};
+    let dia, mesAbrev, ano;
+    const m1 = /(\d{1,2})\/([a-zç]{3})\/(20\d{2})/i.exec(txt);
+    if(m1){ dia=+m1[1]; mesAbrev=m1[2].toLowerCase(); ano=+m1[3]; }
+    else {
+      const anoM = /(20\d{2})/.exec(txt);
+      const diaM = /(\d{1,2})\/([a-zç]{3})/i.exec(txt);
+      if(!anoM || !diaM) return null;
+      dia=+diaM[1]; mesAbrev=diaM[2].toLowerCase(); ano=+anoM[1];
+    }
+    if(!(mesAbrev in meses)) return null;
+    const d = new Date(ano, meses[mesAbrev], dia);
+    if(isNaN(d.getTime())) return null;
+    return Math.round((Date.now() - d.getTime()) / 86400000);
+  }
   const ruleNote = document.getElementById('cpc-iri-rule-note');
-  if(ruleNote) ruleNote.textContent = '| CPC/IRI convergem para EN em MJJ/26 → Plano Seca em pré-alerta (convergência >20 p.p. mas <30 p.p. = postura conservadora aplicada automaticamente)';
+  if(ruleNote && typeof CPC_IRI !== 'undefined' && CPC_IRI._meta){
+    const meta = CPC_IRI._meta;
+    const diasCpc = _diasDesde(meta.cpc_emissao);
+    const diasIri = _diasDesde(meta.iri_emissao);
+    const LIMIAR_DEFASADO = 35; // ciclo mensal esperado ~30 dias
+    const partes = [];
+    partes.push(`CPC ${meta.cpc_emissao || '—'}${diasCpc!=null && diasCpc>LIMIAR_DEFASADO ? ' ⚠ defasado ('+diasCpc+'d)' : ''}`);
+    partes.push(`IRI ${meta.iri_emissao || '—'}${diasIri!=null && diasIri>LIMIAR_DEFASADO ? ' ⚠ defasado ('+diasIri+'d)' : ''}`);
+    if(meta.roni_trimestral) partes.push(`RONI oficial ${meta.roni_trimestral}`);
+    ruleNote.textContent = '| ' + partes.join(' · ') + (meta.cpc_status ? ' — ' + meta.cpc_status : '');
+    if((diasCpc!=null && diasCpc>LIMIAR_DEFASADO) || (diasIri!=null && diasIri>LIMIAR_DEFASADO)){
+      ruleNote.style.color = 'var(--dry)';
+      ruleNote.style.fontWeight = '600';
+    }
+  } else if(ruleNote) {
+    ruleNote.textContent = '';
+  }
 
   /* badge topbar */
   const tb=document.getElementById('topbar-badge');
@@ -2218,42 +2256,61 @@ function buildBhFc(sc){
            SARIMAX calibrado em 540 meses MERRA-2 + Niño3.4+TSA
 ══════════════════════════════════════════════════════ */
 const CPC_IRI = {
-  // ── ATUALIZADO 24/ago/2026 ──────────────────────────────────────────
-  // CPC: Diagnostic Discussion 13/ago/2026 — El Niño Advisory
-  //      Niño 3.4 jul/26 = +1,4 °C (ERSSTv5) · Niño-3 +1,7 · Niño-1+2 +2,9
-  //      Subsuperfície atingindo +10,0 °C em profundidade
-  //      >90% de evento MUITO FORTE no outono/inverno HN 2026-27
-  //      OND/26: 69% de chance de evento HISTÓRICO (>= +2,5 °C RONI,
-  //      superando todos os El Niños desde 1950)
-  //      Próxima emissão: 10/set/2026
-  //      Fonte: cpc.ncep.noaa.gov/products/analysis_monitoring/enso_disc_aug2026/
-  // IRI: Quick Look ago/2026 (publicado 19/ago/2026)
+  // ── CPC ATUALIZADO 15/out/2026 (auditoria Fase ENSO-DADOS) ──────────
+  // CPC: Diagnostic Discussion 8/out/2026 — El Niño Advisory
+  //      "El Niño continua se fortalecendo" — evento forte-a-muito-forte
+  //      provável até JFM/27 (>83% de chance)
+  //      Chance de evento HISTÓRICO (RONI trimestral >= +2,5 °C,
+  //      superando todos os El Niños desde 1950): SON/26 54% ·
+  //      OND/26 83% · NDJ/26 70%
+  //      Próxima emissão: 12/nov/2026
+  //      Fonte: cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml
+  //      (tabela de probabilidade por trimestre não publicada em texto
+  //      nesta emissão — só figura; ver cpc[] abaixo, fonte separada)
+  // CPC — tabela de probabilidades por trimestre: fonte ESTRUTURADA
+  // separada (cpc.ncep.noaa.gov/.../enso/roni/probabilities/, HTML real,
+  // não figura — descoberta nesta auditoria), "Issued October 2026" (CPC
+  // não publica dia exato nesta página). Única parte de CPC_IRI
+  // automatizada até aqui — ver scripts/update_indices.py,
+  // parse_cpc_probabilidades(). AMJ/27 e seguintes ainda sem valor
+  // (fora do alcance desta emissão).
+  // RONI oficial (ver const RONI acima, trimestral, ERSSTv6,
+  // atualizado automaticamente): JAS/2026 = +1,69 °C.
+  // IRI: Quick Look ago/2026 (publicado 19/ago/2026) — NÃO reverificado
+  //      nesta auditoria (iri.columbia.edu inacessível deste ambiente,
+  //      inclusive para checagem manual via automação; ver relatório da
+  //      Fase ENSO-DADOS). Mantido como último conjunto oficial válido,
+  //      sinalizado como defasado (ver _meta.iri_emissao e o aviso de
+  //      defasagem em verificar_dashboard.py). NÃO estimado nem
+  //      recalculado — valores abaixo são os mesmos de 19/ago/2026.
   //      Niño 3.4 MJJ/26 = +1,51 °C · jul/26 = +2,03 °C (OISSTv2)
   //      Semanal centrado em 12/ago/2026 = +2,70 °C
-  //      EN 100% de ASO/26 a FMA/27 · 97% MAM/27 · 78% AMJ/27
-  //      Zero probabilidade de Neutro/La Niña de ASO/26 a FMA/27
-  //      Pico OND/26: 25 de 26 modelos em "muito forte"; 15 modelos >= +3,0 °C
-  //      SOI jul/26 = -29,1 · IOD positivo de set a dez/26
   //      Fonte: iri.columbia.edu/our-expertise/climate/forecasts/enso/current/
-  // NOTA: CPC e IRI usam bases distintas (ERSSTv5 x OISSTv2); a diferença
-  //       no Niño 3.4 de julho (+1,4 x +2,03) reflete isso, não discordância.
-  // NOTA: a série cpc[] abaixo é da emissão de JUL/26 — o CPC de ago/26 não
-  //       publicou a tabela por trimestre em formato textual.
+  // NOTA: CPC usa ERSSTv6 para RONI (desde fev/2026, PNS 26-05) e ainda
+  //       ERSSTv5 para o ONI tradicional; IRI usa OISSTv2 — três bases
+  //       distintas, divergência de SST entre elas reflete isso, não
+  //       discordância (ver recomendação sobre RONI no relatório desta
+  //       auditoria — NÃO implementada nesta fase).
   // ────────────────────────────────────────────────────────────────────
   _meta: {
-    cpc_emissao:   '13/ago/2026',
-    cpc_status:    'El Niño Advisory — >90% de evento muito forte em 2026-27',
-    cpc_proxima:   '10/set/2026',
+    cpc_probabilidades_atualizado_em: '15/10/2026',
+    cpc_emissao:   '8/out/2026',
+    cpc_status:    'El Niño Advisory — forte-a-muito-forte provável até JFM/27 (>83%)',
+    cpc_proxima:   '12/nov/2026',
     iri_emissao:   'ago/2026 (19/ago)',
-    oni_mensal:    '+1,51°C (MJJ/2026)',
-    nino34_semana: '+2,70°C (semana 12/ago/2026)',
-    divergencia:   'série CPC da emissão de jul/26',
-    dash_proxima:  '21/set/2026',
-    atualizado_em: '24/ago/2026',
+    iri_status:    'DEFASADO — iri.columbia.edu inacessível nesta auditoria (15/10/2026); último conjunto oficial válido preservado, não reestimado',
+    oni_mensal:    '+1,51°C (MJJ/2026, fonte IRI defasada — ver iri_status)',
+    nino34_semana: '+3,10°C (semana 23/set/2026, CPC wksst9120.for)',
+    roni_trimestral: '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)',
+    divergencia:   'cpc[] abaixo é da tabela estruturada de probabilidades (out/2026); iri[] é de 19/ago/2026 (defasado)',
+    dash_proxima:  '21/out/2026',
+    atualizado_em: '15/10/2026',
   },
   seasons: ['ASO/26','SON/26','OND/26','NDJ/26','DJF/27','JFM/27','FMA/27','MAM/27','AMJ/27'],
-  // CPC — emissão 9/jul/2026 (ago/26 sem tabela textual); AMJ/27 sem valor
-  cpc:{ en:[100,97,97,97,97,97,97,94,null], neu:[0,3,3,3,3,3,3,6,null], ln:[0,0,0,0,0,0,0,0,null] },
+  // CPC — tabela oficial de probabilidades por trimestre, verificada
+  // 15/10/2026 (ver scripts/update_indices.py, parse_cpc_probabilidades);
+  // ASO/26 e AMJ/27 sem valor (fora do alcance da tabela publicada)
+  cpc:{ en:[null,100.0,100.0,100.0,100.0,100.0,98.0,85.0,45.0], neu:[null,0.0,0.0,0.0,0.0,0.0,2.0,15.0,54.0], ln:[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0] },
   // IRI — Quick Look 19/ago/2026 (valores exatos publicados)
   iri:{ en:[100,100,100,100,100,100,100,97,78], neu:[0,0,0,0,0,0,0,3,22], ln:[0,0,0,0,0,0,0,0,0] },
   // Trajetória Niño 3.4 — plume IRI de jul/2026 (ago publicado apenas em figura)

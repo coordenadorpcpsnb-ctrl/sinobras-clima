@@ -72,10 +72,17 @@ jobs:
 
           - [ ] Status ENSO atual (ex.: "El Niño Advisory", "La Niña Watch")
           - [ ] Synopsis (resumo da situação em 1-2 frases)
-          - [ ] Probabilidades de fase ENSO por trimestre (tabela oficial
-                CPC/IRI, **só se publicada em texto** — se o CPC só tiver
-                soltado a figura, registrar \`null\` e rotular como da
-                emissão anterior; nunca estimar — CLAUDE.md armadilha 4)
+          - [ ] Probabilidades de fase ENSO por trimestre: **desde a Fase
+                ENSO-DADOS (15/10/2026), \`CPC_IRI.cpc\` é preenchido
+                automaticamente** por \`scripts/update_indices.py\`
+                (\`parse_cpc_probabilidades\`), a partir da tabela HTML real
+                em cpc.ncep.noaa.gov/.../enso/roni/probabilities/ — não
+                precisa mais extrair essa tabela manualmente aqui. Só
+                confira manualmente se o card do dashboard bate com a
+                página oficial; se a fonte tiver mudado de estrutura (o
+                parser avisa no log do workflow \`indices_semanal.yml\` se
+                não encontrar nenhuma linha válida), aí sim extrair à mão
+                (nunca estimar — CLAUDE.md armadilha 4).
           - [ ] Data da próxima emissão prevista
 
           ## Depois de extrair

@@ -180,6 +180,167 @@ def parse_wksst(text):
 
 RONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt'
 
+# ══════════════════════════════════════════════════════
+# CPC — probabilidades de fase ENSO por trimestre
+# ══════════════════════════════════════════════════════
+# Fase ENSO-DADOS (auditoria 15/10/2026): até aqui, CPC_IRI.cpc (as
+# probabilidades por trimestre que alimentam a aba Comparativo) era
+# 100% curado à mão — CLAUDE.md armadilha 4 documentava que "o CPC só
+# publica figura" para essa tabela. Investigação ao vivo (15/10/2026)
+# encontrou que esta página ESPECÍFICA publica a tabela em HTML real
+# (não figura, não precisa de OCR), com uma linha <tr> por trimestre e
+# 3 <td> em ordem fixa (La Niña, Neutro, El Niño) — confirmado
+# estruturalmente contra o HTML bruto antes de escrever este parser,
+# nunca assumido. Fonte DIFERENTE do ENSO Diagnostic Discussion (que
+# continua prosa/figura, sem parser — lembrete_cpc_thursday.yml
+# continua existindo pra essa parte). Mantido só pra esta tabela
+# específica; o resto do CPC_IRI (status textual, synopsis, narrativa)
+# continua manual.
+CPC_PROBABILIDADES_URL = 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities/'
+# Duas etapas deliberadas — NUNCA um regex só cruzando `<tr>`: um regex
+# único com `.*?` entre o fechamento de <abbr> e o primeiro <td> pode
+# "vazar" para a PRÓXIMA linha da tabela se a linha atual tiver um
+# valor que não bate no padrão esperado (ex.: um `<td>` com conteúdo
+# inesperado) — o `.*?` lazy só precisa achar ALGUM `</abbr></th>`
+# seguido de `<td>` mais adiante, e o mais próximo seguinte é o da
+# PRÓXIMA linha, gerando um trimestre com o rótulo de uma linha e os
+# valores de outra. Confirmado testando deliberadamente contra uma
+# linha corrompida antes de finalizar este parser (ver
+# tests/test_update_indices.py). Isolar cada `<tr>...</tr>` PRIMEiro
+# elimina essa classe de bug: nenhum regex de linha pode ver além da
+# sua própria `</tr>`.
+_CPC_PROB_LINHA_TR_RE = re.compile(r'<tr>.*?</tr>', re.DOTALL)
+_CPC_PROB_SEAS_RE = re.compile(r'<abbr>([A-Z]{3})\b')
+_CPC_PROB_TD_RE = re.compile(r'<td>([^<]*)</td>')
+
+
+def parse_cpc_probabilidades(html):
+    """
+    Tabela HTML real (não figura) de probabilidade de fase ENSO por
+    trimestre, em <th><abbr>SEAS</abbr></th><td>ln</td><td>neu</td><td>en</td>
+    — ordem de colunas confirmada contra o HTML bruto (La Niña, Neutro,
+    El Niño), nunca assumida de memória. Barreira física: cada linha
+    tem que ter exatamente 3 <td>, somar ~100 (±1, tolerância de
+    arredondamento) e cada valor tem que estar em [0,100] — linha que
+    falha é DESCARTADA (não gera dado parcial/inventado), nunca
+    derruba as demais.
+
+    Retorna {seas: {'ln': float, 'neu': float, 'en': float}, ...} —
+    dict vazio se a página não tiver nenhuma linha válida (ex.: CPC
+    trocou a estrutura da página) — nunca lança exceção por si só.
+    """
+    resultado = {}
+    for tr in _CPC_PROB_LINHA_TR_RE.finditer(html):
+        linha = tr.group(0)
+        m_seas = _CPC_PROB_SEAS_RE.search(linha)
+        if not m_seas:
+            continue
+        tds = _CPC_PROB_TD_RE.findall(linha)
+        if len(tds) != 3:
+            continue
+        try:
+            ln, neu, en = (float(v) for v in tds)
+        except ValueError:
+            continue
+        valores = (ln, neu, en)
+        if not all(0 <= v <= 100 for v in valores):
+            continue
+        if abs(sum(valores) - 100) > 1:
+            continue
+        resultado[m_seas.group(1)] = {'ln': ln, 'neu': neu, 'en': en}
+    return resultado
+
+
+def _seasons_do_cpc_iri(html):
+    """Lê `CPC_IRI.seasons` do HTML (ex.: ['ASO/26','SON/26',...]) —
+    NUNCA escreve nessa lista, só lê a ordem/comprimento já curados à
+    mão, pra alinhar `cpc.en/neu/ln` a ela. Retorna lista de strings
+    'SEAS/YY', ou [] se o bloco não for encontrado."""
+    m = re.search(r'CPC_IRI\s*=\s*\{.*?seasons:\s*\[([^\]]+)\]', html, re.DOTALL)
+    if not m:
+        return []
+    return [s.strip().strip("'\"") for s in m.group(1).split(',') if s.strip()]
+
+
+def atualizar_cpc_probabilidades_no_html(html, probabilidades):
+    """
+    Preenche `CPC_IRI.cpc.{en,neu,ln}` a partir de `probabilidades`
+    (saída de parse_cpc_probabilidades), alinhado à ordem/comprimento
+    já existente de `CPC_IRI.seasons` — NUNCA muda a lista de seasons
+    em si (ela é compartilhada com CPC_IRI.iri, que continua manual;
+    mudar o comprimento de um sem o outro quebraria o gráfico).
+
+    Trimestre de `seasons` sem equivalente em `probabilidades` (ex.:
+    ASO/26 já em curso, o CPC não publica mais previsão pra ele) vira
+    `null` — nunca estimado, nunca herdado do valor antigo (herdar
+    misturaria um valor de uma emissão antiga com os de uma nova, sem
+    como saber depois qual é qual).
+
+    Se `probabilidades` vier vazio (fetch ou parsing falhou), não
+    mexe em nada — devolve (html, False) — mesma disciplina de
+    persistência de TSA/PDO/CHC-Preliminar: nunca sobrescrever um dado
+    bom com null só porque a fonte falhou desta vez.
+
+    Opera só dentro do bloco `const CPC_IRI = {...};` já localizado —
+    nunca um re.sub global (CLAUDE.md armadilha 2).
+    """
+    if not probabilidades:
+        return html, False
+
+    ini = html.find('const CPC_IRI = {')
+    if ini < 0:
+        print('  ⚠ const CPC_IRI não encontrado — probabilidades CPC não atualizadas')
+        return html, False
+    fim = html.find('\n};', ini)
+    if fim < 0:
+        print('  ⚠ fechamento de CPC_IRI não encontrado — probabilidades CPC não atualizadas')
+        return html, False
+    fim += 3
+    bloco = html[ini:fim]
+
+    seasons = _seasons_do_cpc_iri(bloco)
+    if not seasons:
+        print('  ⚠ CPC_IRI.seasons vazio/não encontrado — probabilidades CPC não atualizadas')
+        return html, False
+
+    en, neu, ln, n_preenchidos = [], [], [], 0
+    for s in seasons:
+        bare = s.split('/')[0]
+        p = probabilidades.get(bare)
+        if p is None:
+            en.append('null'); neu.append('null'); ln.append('null')
+        else:
+            en.append(str(p['en'])); neu.append(str(p['neu'])); ln.append(str(p['ln']))
+            n_preenchidos += 1
+
+    if n_preenchidos == 0:
+        print('  ⚠ nenhum trimestre de CPC_IRI.seasons encontrado na tabela CPC — '
+              'probabilidades CPC não atualizadas (fonte pode ter mudado de estrutura)')
+        return html, False
+
+    nova_linha = (
+        f"  cpc:{{ en:[{','.join(en)}], neu:[{','.join(neu)}], ln:[{','.join(ln)}] }},"
+    )
+    bloco_novo = re.sub(
+        r'\n  cpc:\{[^}]*\},',
+        '\n' + nova_linha,
+        bloco, count=1,
+    )
+
+    TODAY = date.today()
+    bloco_novo = re.sub(
+        r"(_meta:\s*\{)",
+        r"\1\n    cpc_probabilidades_atualizado_em: '" + TODAY.strftime('%d/%m/%Y') + "',",
+        bloco_novo, count=1,
+    )
+
+    if bloco_novo == bloco:
+        return html, False
+
+    print(f'  ✅ CPC_IRI.cpc: {n_preenchidos}/{len(seasons)} trimestres atualizados '
+          f'da tabela oficial ({CPC_PROBABILIDADES_URL})')
+    return html[:ini] + bloco_novo + html[fim:], True
+
 
 def parse_roni(text):
     """
@@ -582,7 +743,7 @@ def main():
         print(f"  ⚠ Semanal indisponível: {e}")
 
     # 5. CPC RONI (trimestral, índice oficial — distinto do ONI-aprox)
-    print("\n[5/6] CPC RONI.ascii.txt…")
+    print("\n[5/7] CPC RONI.ascii.txt…")
     roni = None
     try:
         text = fetch(RONI_URL)
@@ -594,8 +755,26 @@ def main():
     except Exception as e:
         print(f"  ⚠ RONI indisponível: {e}")
 
-    # 6. Histórico — master_monthly.csv e serie_subst.csv
-    print("\n[6/6] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
+    # 6. CPC — tabela oficial de probabilidades de fase ENSO por trimestre
+    # (ver CPC_PROBABILIDADES_URL — única parte de CPC_IRI automatizada
+    # até aqui; status/synopsis/narrativa continuam manuais, ver
+    # lembrete_cpc_thursday.yml/lembrete_iri_thursday.yml).
+    print("\n[6/7] CPC — probabilidades de fase ENSO por trimestre…")
+    cpc_probabilidades = {}
+    try:
+        text = fetch(CPC_PROBABILIDADES_URL)
+        cpc_probabilidades = parse_cpc_probabilidades(text)
+        if cpc_probabilidades:
+            print(f"  ✅ CPC probabilidades: {len(cpc_probabilidades)} trimestre(s) "
+                  f"válido(s) na tabela oficial")
+        else:
+            print("  ⚠ CPC probabilidades: página buscada, mas nenhuma linha válida "
+                  "extraída (estrutura pode ter mudado) — CPC_IRI.cpc preservado")
+    except Exception as e:
+        print(f"  ⚠ CPC probabilidades indisponível: {e} — CPC_IRI.cpc preservado")
+
+    # 7. Histórico — master_monthly.csv e serie_subst.csv
+    print("\n[7/7] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
     n_master = atualizar_master_monthly(nino34, tsa, pdo)
     n_serie  = corrigir_serie_subst(nino34, tsa, pdo)
     print(f"  master_monthly.csv: {n_master} mês(es) adicionados")
@@ -604,6 +783,13 @@ def main():
     # Montar e atualizar
     series  = build_series(nino34, tsa, wk_lbl, wk_val)
     changed = update_html(series, wk_lbl, wk_val, roni)
+
+    if cpc_probabilidades:
+        html = DASHBOARD.read_text(encoding='utf-8')
+        novo_html, mudou_cpc = atualizar_cpc_probabilidades_no_html(html, cpc_probabilidades)
+        if mudou_cpc:
+            DASHBOARD.write_text(novo_html, encoding='utf-8')
+            changed = True
 
     lbl_n, val_n = latest_non_null(series, 'nino34')
     lbl_o, val_o = latest_non_null(series, 'oni')

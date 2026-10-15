@@ -112,5 +112,95 @@ class ParseRoniTestCase(unittest.TestCase):
         self.assertNotEqual(val, oni_aprox_exemplo)
 
 
+# Trecho real da tabela HTML de
+# https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities/
+# (baixado ao vivo 15/10/2026, Fase ENSO-DADOS) — ordem de colunas
+# confirmada contra o HTML bruto: La Niña, Neutro, El Niño.
+CPC_PROBABILIDADES_AMOSTRA_REAL = (
+    '<tr><th scope="row"><abbr>SON <span class="tooltip tooltip-right" '
+    'role="tooltip">Sep Oct Nov</span></abbr></th><td>0</td><td>0</td><td>100</td></tr>'
+    '<tr><th scope="row"><abbr>FMA <span class="tooltip tooltip-right" '
+    'role="tooltip">Feb Mar Apr</span></abbr></th><td>0</td><td>2</td><td>98</td></tr>'
+    '<tr><th scope="row"><abbr>AMJ <span class="tooltip tooltip-right" '
+    'role="tooltip">Apr May Jun</span></abbr></th><td>1</td><td>54</td><td>45</td></tr>'
+)
+
+
+class ParseCpcProbabilidadesTestCase(unittest.TestCase):
+
+    def test_a_extrai_as_3_colunas_na_ordem_ln_neu_en(self):
+        r = ui.parse_cpc_probabilidades(CPC_PROBABILIDADES_AMOSTRA_REAL)
+        self.assertEqual(set(r.keys()), {'SON', 'FMA', 'AMJ'})
+        self.assertEqual(r['SON'], {'ln': 0.0, 'neu': 0.0, 'en': 100.0})
+        self.assertEqual(r['AMJ'], {'ln': 1.0, 'neu': 54.0, 'en': 45.0})
+
+    def test_b_linha_que_nao_soma_100_e_descartada_sem_derrubar_as_outras(self):
+        quebrada = CPC_PROBABILIDADES_AMOSTRA_REAL.replace(
+            '<td>1</td><td>54</td><td>45</td>', '<td>1</td><td>54</td><td>20</td>')
+        r = ui.parse_cpc_probabilidades(quebrada)
+        self.assertNotIn('AMJ', r)
+        self.assertIn('SON', r)
+        self.assertIn('FMA', r)
+
+    def test_c_valor_fora_de_0_100_e_descartado(self):
+        invalida = CPC_PROBABILIDADES_AMOSTRA_REAL.replace(
+            '<td>0</td><td>0</td><td>100</td>', '<td>-5</td><td>5</td><td>100</td>')
+        r = ui.parse_cpc_probabilidades(invalida)
+        self.assertNotIn('SON', r)
+
+    def test_d_html_sem_tabela_retorna_dict_vazio_nunca_lanca(self):
+        self.assertEqual(ui.parse_cpc_probabilidades('<html><body>nada aqui</body></html>'), {})
+        self.assertEqual(ui.parse_cpc_probabilidades(''), {})
+
+
+HTML_CPC_IRI_AMOSTRA = """
+const CPC_IRI = {
+  _meta: {
+    cpc_emissao:   '13/ago/2026',
+    atualizado_em: '24/ago/2026',
+  },
+  seasons: ['ASO/26','SON/26','FMA/27'],
+  cpc:{ en:[97,94,null], neu:[3,6,null], ln:[0,0,null] },
+  iri:{ en:[100,97,78], neu:[0,3,22], ln:[0,0,0] },
+};
+"""
+
+
+class AtualizarCpcProbabilidadesNoHtmlTestCase(unittest.TestCase):
+
+    def test_a_preenche_so_os_seasons_existentes_e_poe_null_no_resto(self):
+        probs = {'SON': {'ln': 0.0, 'neu': 0.0, 'en': 100.0},
+                 'FMA': {'ln': 0.0, 'neu': 2.0, 'en': 98.0}}
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        self.assertTrue(mudou)
+        self.assertIn("cpc:{ en:[null,100.0,98.0], neu:[null,0.0,2.0], ln:[null,0.0,0.0] },", novo_html)
+
+    def test_b_nunca_toca_o_bloco_iri(self):
+        probs = {'SON': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
+        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        self.assertIn("iri:{ en:[100,97,78], neu:[0,3,22], ln:[0,0,0] },", novo_html)
+
+    def test_c_nunca_toca_a_lista_de_seasons(self):
+        probs = {'SON': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
+        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        self.assertIn("seasons: ['ASO/26','SON/26','FMA/27'],", novo_html)
+
+    def test_d_probabilidades_vazio_nao_altera_nada(self):
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, {})
+        self.assertFalse(mudou)
+        self.assertEqual(novo_html, HTML_CPC_IRI_AMOSTRA)
+
+    def test_e_nenhum_season_bate_mantem_html_original(self):
+        probs = {'XYZ': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        self.assertFalse(mudou)
+        self.assertEqual(novo_html, HTML_CPC_IRI_AMOSTRA)
+
+    def test_f_adiciona_metadado_de_data_de_atualizacao(self):
+        probs = {'SON': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
+        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        self.assertIn('cpc_probabilidades_atualizado_em:', novo_html)
+
+
 if __name__ == '__main__':
     unittest.main()
