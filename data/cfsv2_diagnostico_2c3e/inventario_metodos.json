@@ -1,0 +1,921 @@
+{
+  "raw_cfsv2_2c3c": {
+    "nome": "CFSv2 RAW (validação 2C.3C)",
+    "objetivo_variavel": "Precipitação mensal bruta do ensemble CFSv2 (24 membros), sem calibração — serve de referência estrutural para todos os métodos de calibração (3.1–3.5).",
+    "horizontes_avaliados": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "amostra": {
+      "n_total_registros_membro": 34560,
+      "n_inicializacoes_distintas": 240,
+      "n_por_horizonte_sem_filtro_warmup": {
+        "1": 240,
+        "2": 240,
+        "3": 240,
+        "4": 240,
+        "5": 240,
+        "6": 240
+      }
+    },
+    "regra_causal": "Nenhum warm-up aplicável (RAW não é ajustado) — auditoria de leakage cobre só alinhamento de datas/membros (ver auditoria_aprovada).",
+    "referencias_usadas": [
+      "climatologia observada causal",
+      "climatologia probabilística causal (CRPS/BSS)"
+    ],
+    "metricas_principais_por_horizonte": {
+      "1": {
+        "rmsess_absoluto": {
+          "estimativa": -0.22467082681090722,
+          "ic95_lo": -0.3288537095535768,
+          "ic95_hi": -0.14316431413590716
+        },
+        "rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "rmsess_anomalia_corrigida": {
+          "estimativa": 0.044815248181959255,
+          "ic95_lo": -0.043262429791122034,
+          "ic95_hi": 0.13254545657862074
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "crpss": {
+          "estimativa": -0.5192694508419826,
+          "ic95_lo": -0.6524021266020944,
+          "ic95_hi": -0.4163300133792567
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "corr_absoluta": 0.8333162950399576,
+        "corr_anomalia_corrigida": 0.40321448224520146
+      },
+      "2": {
+        "rmsess_absoluto": {
+          "estimativa": -0.2777337158892277,
+          "ic95_lo": -0.38741471243070047,
+          "ic95_hi": -0.19359706324149323
+        },
+        "rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.0441728577038869,
+          "ic95_lo": -0.11058301058079446,
+          "ic95_hi": 0.008118683220779079
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "crpss": {
+          "estimativa": -0.49011317041705005,
+          "ic95_lo": -0.6163659078140391,
+          "ic95_hi": -0.3795565258124841
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "corr_absoluta": 0.8008073106791047,
+        "corr_anomalia_corrigida": 0.13557173971852698
+      },
+      "3": {
+        "rmsess_absoluto": {
+          "estimativa": -0.31563289007061224,
+          "ic95_lo": -0.47918119590263414,
+          "ic95_hi": -0.1588870128888983
+        },
+        "rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.01076964236269462,
+          "ic95_lo": -0.07560595342858133,
+          "ic95_hi": 0.056007365437825106
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "crpss": {
+          "estimativa": -0.4871431189639368,
+          "ic95_lo": -0.6723243505728678,
+          "ic95_hi": -0.3040324531377689
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "corr_absoluta": 0.8110125881846395,
+        "corr_anomalia_corrigida": 0.1650784907911645
+      },
+      "4": {
+        "rmsess_absoluto": {
+          "estimativa": -0.37893911502500477,
+          "ic95_lo": -0.5176432633307237,
+          "ic95_hi": -0.24392471315213243
+        },
+        "rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "rmsess_anomalia_corrigida": {
+          "estimativa": 0.008416556725930002,
+          "ic95_lo": -0.035156717016528186,
+          "ic95_hi": 0.049963224880323814
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "crpss": {
+          "estimativa": -0.5688410583772399,
+          "ic95_lo": -0.7387608268631481,
+          "ic95_hi": -0.3995624453337833
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "corr_absoluta": 0.8113816628303042,
+        "corr_anomalia_corrigida": 0.2135977375657486
+      },
+      "5": {
+        "rmsess_absoluto": {
+          "estimativa": -0.4471199300234603,
+          "ic95_lo": -0.5919077025865161,
+          "ic95_hi": -0.3071649570206794
+        },
+        "rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.019745022250230893,
+          "ic95_lo": -0.07602859280866471,
+          "ic95_hi": 0.027935983312524934
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "crpss": {
+          "estimativa": -0.656367914105298,
+          "ic95_lo": -0.830613280142152,
+          "ic95_hi": -0.4794106485938135
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "corr_absoluta": 0.808356142647537,
+        "corr_anomalia_corrigida": 0.15364617326506588
+      },
+      "6": {
+        "rmsess_absoluto": {
+          "estimativa": -0.49054855492951965,
+          "ic95_lo": -0.6264798421055934,
+          "ic95_hi": -0.3400549828178135
+        },
+        "rmsess_absoluto_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "rmsess_anomalia_corrigida": {
+          "estimativa": -0.018201409118048018,
+          "ic95_lo": -0.05974145954348204,
+          "ic95_hi": 0.03096682537143401
+        },
+        "rmsess_anomalia_corrigida_ic_classificacao": "ic_inclui_zero",
+        "crpss": {
+          "estimativa": -0.7070727509109425,
+          "ic95_lo": -0.8965565506424936,
+          "ic95_hi": -0.5082888957824103
+        },
+        "crpss_ic_classificacao": "ic_totalmente_abaixo_de_zero",
+        "corr_absoluta": 0.8067463971029689,
+        "corr_anomalia_corrigida": 0.15693514808929493
+      }
+    },
+    "decisao_cientifica_registrada": "Auditoria estrutural APROVADA (auditoria_aprovada=True); nenhuma skill é exibida no dashboard a partir deste artefato.",
+    "limitacoes_status_operacional": "RMSESS/CRPSS absolutos negativos com IC abaixo de zero em todos os horizontes (skill RAW ruim); RMSESS de anomalia corrigida indeterminado (IC inclui zero) — leitura DIFERENTE e independente, nunca combinada com a absoluta. Nenhuma correção aplicada em produção."
+  },
+  "metodo_3_1_aditivo": {
+    "nome": "Método 3.1 — correção aditiva",
+    "objetivo_variavel": "Precipitação mensal calibrada por bias aditivo (forecast_raw + bias médio causal por lead).",
+    "horizontes_avaliados": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "amostra": {
+      "n_treino_minimo": 10,
+      "n_elegivel_por_horizonte": {
+        "1": 120,
+        "2": 120,
+        "3": 120,
+        "4": 120,
+        "5": 120,
+        "6": 120
+      }
+    },
+    "regra_causal": "init_date_treino < init_date_avaliada; N_TREINO_MINIMO=10 pares válidos contados após filtro causal.",
+    "referencias_usadas": [
+      "RAW",
+      "climatologia observada causal",
+      "benchmark_anomalia_reconstruida"
+    ],
+    "metricas_principais_por_horizonte": {
+      "1": {
+        "skill_vs_raw": {
+          "estimativa": 0.2903994247106899,
+          "ic95_lo": 0.1856638798166649,
+          "ic95_hi": 0.3489700775944052
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.16150799319968867,
+          "ic95_lo": -0.019910840288901322,
+          "ic95_hi": 0.26080090249097315
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.040294096718318184,
+          "ic95_lo": 0.0024606180095468446,
+          "ic95_hi": 0.08819627993612777
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_totalmente_acima_de_zero"
+      },
+      "2": {
+        "skill_vs_raw": {
+          "estimativa": 0.2675528233409302,
+          "ic95_lo": 0.1989862926660531,
+          "ic95_hi": 0.3330882211819873
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.05084014961710537,
+          "ic95_lo": -0.046902048023462005,
+          "ic95_hi": 0.12028526796740342
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.03633969040165075,
+          "ic95_lo": -0.0011411551303811213,
+          "ic95_hi": 0.07504485090101203
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "3": {
+        "skill_vs_raw": {
+          "estimativa": 0.27756463628629546,
+          "ic95_lo": 0.21076491961548177,
+          "ic95_hi": 0.35163213218417294
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.06974635715389621,
+          "ic95_lo": 0.004589556237127491,
+          "ic95_hi": 0.1524483751783075
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02715970712687854,
+          "ic95_lo": -0.010179102016816493,
+          "ic95_hi": 0.06003140176259085
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "4": {
+        "skill_vs_raw": {
+          "estimativa": 0.29819713816470517,
+          "ic95_lo": 0.20166020115826122,
+          "ic95_hi": 0.39823546505637414
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.03838165793255155,
+          "ic95_lo": -0.03169685542040764,
+          "ic95_hi": 0.1295049735759905
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02180478348540482,
+          "ic95_lo": -0.01682487349142069,
+          "ic95_hi": 0.06366349578996497
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "5": {
+        "skill_vs_raw": {
+          "estimativa": 0.3399268702272126,
+          "ic95_lo": 0.22060488168838324,
+          "ic95_hi": 0.4553579002038754
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.05844282846936999,
+          "ic95_lo": 0.002763970636902455,
+          "ic95_hi": 0.11937184258536501
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.030182094449654362,
+          "ic95_lo": -0.0102083502904093,
+          "ic95_hi": 0.0723453177332607
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      },
+      "6": {
+        "skill_vs_raw": {
+          "estimativa": 0.32618878190483447,
+          "ic95_lo": 0.18207895882832345,
+          "ic95_hi": 0.45531249502602467
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.007807285155130184,
+          "ic95_lo": -0.07934762660380275,
+          "ic95_hi": 0.11884576977462952
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.01315280815723241,
+          "ic95_lo": -0.02532146316170436,
+          "ic95_hi": 0.0534017671138621
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero"
+      }
+    },
+    "decisao_cientifica_registrada": "Critério pré-registrado (IC95 de skill_vs_anomalia_reconstruida E RMSESS_climatologia simultaneamente acima de zero) não satisfeito em nenhum horizonte H1–H6.",
+    "limitacoes_status_operacional": "skill_vs_raw IC95% acima de zero em todos os horizontes, mas isto isoladamente não é o critério de aprovação. Nenhuma correção aplicada em produção.",
+    "ressalva_parcial_h1": {
+      "classificacao": "parcialmente_favoravel_isolado",
+      "descricao": "skill_vs_anomalia_reconstruida isolado em H1 tem IC95% totalmente acima de zero — resultado parcialmente favorável isolado, preservado explicitamente. Não satisfaz o critério conjunto de aprovação (que exige também RMSESS_climatologia simultaneamente acima de zero) — não é uma aprovação do Método 3.1 em H1, é um componente isolado do critério satisfeito.",
+      "skill_vs_anomalia_reconstruida_h1": {
+        "estimativa": 0.040294096718318184,
+        "ic95_lo": 0.0024606180095468446,
+        "ic95_hi": 0.08819627993612777
+      }
+    }
+  },
+  "metodo_3_2_multiplicativo": {
+    "nome": "Método 3.2 — correção multiplicativa",
+    "objetivo_variavel": "Precipitação mensal calibrada por razão multiplicativa causal (forecast_raw × razão média obs/modelo no treino), só em meses com denominador seguro.",
+    "horizontes_avaliados": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "amostra": {
+      "n_treino_minimo": 10,
+      "piso_denominador_mm": 10.0,
+      "n_elegivel_por_horizonte": {
+        "1": 80,
+        "2": 80,
+        "3": 80,
+        "4": 80,
+        "5": 80,
+        "6": 80
+      }
+    },
+    "regra_causal": "Igual ao 3.1 (init_date_treino < init_date_avaliada); exclui estruturalmente jun–set por denominador abaixo do piso (10.0 mm).",
+    "referencias_usadas": [
+      "RAW",
+      "climatologia observada causal",
+      "benchmark_anomalia_reconstruida",
+      "Método 3.1 (amostra pareada)"
+    ],
+    "metricas_principais_por_horizonte": {
+      "1": {
+        "skill_vs_raw": {
+          "estimativa": 0.18647682065810023,
+          "ic95_lo": 0.017245538174101096,
+          "ic95_hi": 0.3282172625546115
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.04513289718148317,
+          "ic95_lo": -0.257286570893273,
+          "ic95_hi": 0.2412190825629194
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": -0.09743860995173326,
+          "ic95_lo": -0.248047253216298,
+          "ic95_hi": 0.03965474716944114
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_multiplicativo_vs_aditivo": {
+          "estimativa": -0.14106694660940144,
+          "ic95_lo": -0.3261448895493016,
+          "ic95_hi": 0.015829209714406593
+        },
+        "skill_multiplicativo_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "2": {
+        "skill_vs_raw": {
+          "estimativa": 0.25651885752362136,
+          "ic95_lo": 0.1835332721670155,
+          "ic95_hi": 0.3161434770951445
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.03562237637794541,
+          "ic95_lo": -0.09932467021780186,
+          "ic95_hi": 0.12752389938948225
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.020971396553805977,
+          "ic95_lo": -0.03316004021435776,
+          "ic95_hi": 0.07263069932872168
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_multiplicativo_vs_aditivo": {
+          "estimativa": -0.013652784688670705,
+          "ic95_lo": -0.06559952410901859,
+          "ic95_hi": 0.021883943573620137
+        },
+        "skill_multiplicativo_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "3": {
+        "skill_vs_raw": {
+          "estimativa": 0.2650931681232763,
+          "ic95_lo": 0.17477336453671452,
+          "ic95_hi": 0.34000511512974324
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.0529595816319155,
+          "ic95_lo": -0.06375965455476322,
+          "ic95_hi": 0.13620652524615265
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.007357513136141969,
+          "ic95_lo": -0.09939892669903727,
+          "ic95_hi": 0.08491636863256384
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_multiplicativo_vs_aditivo": {
+          "estimativa": -0.01758324808523093,
+          "ic95_lo": -0.11471437486745634,
+          "ic95_hi": 0.04545061031336667
+        },
+        "skill_multiplicativo_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "4": {
+        "skill_vs_raw": {
+          "estimativa": 0.28736162041812585,
+          "ic95_lo": 0.18537554100961948,
+          "ic95_hi": 0.38517971293446535
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.021622707796447593,
+          "ic95_lo": -0.053412821212233785,
+          "ic95_hi": 0.09560008585251392
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.004057843758877189,
+          "ic95_lo": -0.04730784953644043,
+          "ic95_hi": 0.042309957311741066
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_multiplicativo_vs_aditivo": {
+          "estimativa": -0.015430123980575194,
+          "ic95_lo": -0.05319886142743829,
+          "ic95_hi": 0.006316153173891833
+        },
+        "skill_multiplicativo_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "5": {
+        "skill_vs_raw": {
+          "estimativa": 0.33244759001188595,
+          "ic95_lo": 0.22215494587109458,
+          "ic95_hi": 0.43338706887275186
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.04474341111863378,
+          "ic95_lo": 0.01157099438038793,
+          "ic95_hi": 0.0811312857318589
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.015179476856093332,
+          "ic95_lo": -0.04590495996215307,
+          "ic95_hi": 0.05604093768462768
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_multiplicativo_vs_aditivo": {
+          "estimativa": -0.013111846469767263,
+          "ic95_lo": -0.06875439765653431,
+          "ic95_hi": 0.018932895118956978
+        },
+        "skill_multiplicativo_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "6": {
+        "skill_vs_raw": {
+          "estimativa": 0.32367905349974224,
+          "ic95_lo": 0.1907042185042118,
+          "ic95_hi": 0.45344452268162355
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": -0.0003759217539245352,
+          "ic95_lo": -0.08396750866422574,
+          "ic95_hi": 0.10644207535744123
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.005745748043043286,
+          "ic95_lo": -0.09206812197562708,
+          "ic95_hi": 0.05502880660568818
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_multiplicativo_vs_aditivo": {
+          "estimativa": -0.0047709759295071485,
+          "ic95_lo": -0.0812629304204924,
+          "ic95_hi": 0.04274020037637102
+        },
+        "skill_multiplicativo_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      }
+    },
+    "decisao_cientifica_registrada": "Critério pré-registrado não satisfeito em nenhum horizonte; skill_multiplicativo_vs_aditivo com IC95% incluindo zero em todos os horizontes (sem diferença distinguível do aditivo).",
+    "limitacoes_status_operacional": "jun–set nunca reportados como desempenho anual (exclusão estrutural por piso de denominador). Nenhuma correção aplicada em produção."
+  },
+  "metodo_3_3_gate_qm": {
+    "nome": "Método 3.3 — gate de viabilidade do quantile mapping",
+    "objetivo_variavel": "Avaliar se o hindcast CFSv2 tem amostra suficiente por estrato (lead × mês) para quantile mapping — não é um método de correção.",
+    "horizontes_avaliados": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "amostra": {
+      "hindcast_fixo_anos": 20,
+      "limiar_minimo_quantile_mapping": 20,
+      "maximo_n_causal_observado_geral": 19
+    },
+    "regra_causal": "Hindcast FIXO em 1991–2010 (20 anos); N causal máximo por célula = 19, sempre abaixo do mínimo exigido.",
+    "referencias_usadas": [],
+    "metricas_principais_por_horizonte": {},
+    "decisao_cientifica_registrada": "nao_testavel_amostra_insuficiente",
+    "limitacoes_status_operacional": "NÃO TESTÁVEL por limitação estrutural do hindcast disponível (não é resultado negativo nem falha de pipeline). Próximo método elegível: metodo_3_4_regressao_linear_mos_simples."
+  },
+  "metodo_3_4_mos_linear": {
+    "nome": "Método 3.4 — MOS linear (pooled by lead, pós-correção causal)",
+    "objetivo_variavel": "anom_observada = alpha_lead + beta_lead * anom_modelo_raw, ajustado por OLS, pooling entre meses dentro de cada lead.",
+    "horizontes_avaliados": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "amostra": {
+      "n_treino_minimo_mos": 120,
+      "n_elegivel_por_horizonte_pos_correcao": {
+        "1": 108,
+        "2": 107,
+        "3": 106,
+        "4": 105,
+        "5": 104,
+        "6": 103
+      },
+      "n_elegivel_por_horizonte_pre_correcao": {
+        "1": 108,
+        "2": 108,
+        "3": 108,
+        "4": 108,
+        "5": 108,
+        "6": 108
+      }
+    },
+    "regra_causal": "init_date_treino < init_date_avaliada E target_month_treino < init_date_avaliada (corrigida — ver auditoria de disponibilidade); H1 é controle negativo bit-idêntico antes/depois.",
+    "referencias_usadas": [
+      "RAW",
+      "climatologia observada causal",
+      "benchmark_anomalia_reconstruida",
+      "Método 3.1 (amostra pareada)"
+    ],
+    "metricas_principais_por_horizonte": {
+      "1": {
+        "skill_vs_raw": {
+          "estimativa": 0.27358858812496545,
+          "ic95_lo": 0.2164907346426833,
+          "ic95_hi": 0.34990295283854994
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.15492906707741694,
+          "ic95_lo": 0.056468350486594175,
+          "ic95_hi": 0.21675539711574912
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.010367619059827526,
+          "ic95_lo": -0.07895679222498218,
+          "ic95_hi": 0.1291346347291663
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_mos_vs_aditivo": {
+          "estimativa": -0.023312715191458278,
+          "ic95_lo": -0.10334081121523334,
+          "ic95_hi": 0.08497455656518019
+        },
+        "skill_mos_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "2": {
+        "skill_vs_raw": {
+          "estimativa": 0.22739527390003644,
+          "ic95_lo": 0.1474742764741486,
+          "ic95_hi": 0.32752184383604604
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.02092648673380393,
+          "ic95_lo": -0.0037693815283576016,
+          "ic95_hi": 0.04988124970600615
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": -0.0022925330491643248,
+          "ic95_lo": -0.08433333823189279,
+          "ic95_hi": 0.0933726553506119
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_mos_vs_aditivo": {
+          "estimativa": -0.04024370326222071,
+          "ic95_lo": -0.11995718934947504,
+          "ic95_hi": 0.05583943169627181
+        },
+        "skill_mos_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "3": {
+        "skill_vs_raw": {
+          "estimativa": 0.22991527118801391,
+          "ic95_lo": 0.1385256508876308,
+          "ic95_hi": 0.3104107499343012
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.023755286366294093,
+          "ic95_lo": -0.006732291358452735,
+          "ic95_hi": 0.06741867455658718
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": -0.012457189708392491,
+          "ic95_lo": -0.08810164860175662,
+          "ic95_hi": 0.048667749620039766
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_mos_vs_aditivo": {
+          "estimativa": -0.03965066310387111,
+          "ic95_lo": -0.10996832646113612,
+          "ic95_hi": 0.016780045328262886
+        },
+        "skill_mos_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "4": {
+        "skill_vs_raw": {
+          "estimativa": 0.2716106150495631,
+          "ic95_lo": 0.15264751966118892,
+          "ic95_hi": 0.3685995513499393
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.028926022716747934,
+          "ic95_lo": -0.0047627171752688815,
+          "ic95_hi": 0.08499728766350557
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.0027447562698774686,
+          "ic95_lo": -0.028260978552862193,
+          "ic95_hi": 0.04576149708455541
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_mos_vs_aditivo": {
+          "estimativa": -0.016650254326023628,
+          "ic95_lo": -0.07780038138812945,
+          "ic95_hi": 0.041620631652765354
+        },
+        "skill_mos_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "5": {
+        "skill_vs_raw": {
+          "estimativa": 0.2916998869399624,
+          "ic95_lo": 0.19895538772583013,
+          "ic95_hi": 0.38816893779354456
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.021799952206598028,
+          "ic95_lo": -0.002429620306841851,
+          "ic95_hi": 0.07020921599302067
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": -0.006099245918830931,
+          "ic95_lo": -0.03210413835352164,
+          "ic95_hi": 0.020939872059025016
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_mos_vs_aditivo": {
+          "estimativa": -0.03159432032057463,
+          "ic95_lo": -0.08761985276966679,
+          "ic95_hi": 0.01655655384081444
+        },
+        "skill_mos_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      },
+      "6": {
+        "skill_vs_raw": {
+          "estimativa": 0.31065514940681027,
+          "ic95_lo": 0.22030503062517948,
+          "ic95_hi": 0.4225234818283045
+        },
+        "skill_vs_raw_ic_classificacao": "ic_totalmente_acima_de_zero",
+        "RMSESS_climatologia": {
+          "estimativa": 0.00023444497607616466,
+          "ic95_lo": -0.04026056778450389,
+          "ic95_hi": 0.05440127355044168
+        },
+        "RMSESS_climatologia_ic_classificacao": "ic_inclui_zero",
+        "skill_vs_anomalia_reconstruida": {
+          "estimativa": 0.02876345003752445,
+          "ic95_lo": -0.005246938060072937,
+          "ic95_hi": 0.05742985067932813
+        },
+        "skill_vs_anomalia_reconstruida_ic_classificacao": "ic_inclui_zero",
+        "skill_mos_vs_aditivo": {
+          "estimativa": 0.019849447142272325,
+          "ic95_lo": -0.036235098467870874,
+          "ic95_hi": 0.07061238457250911
+        },
+        "skill_mos_vs_aditivo_ic_classificacao": "ic_inclui_zero"
+      }
+    },
+    "decisao_cientifica_registrada": "Critério pré-registrado não satisfeito em nenhum horizonte, antes ou depois da correção causal; skill_mos_vs_aditivo IC95% inclui zero em todos os horizontes.",
+    "limitacoes_status_operacional": "Correção de disponibilidade observacional (auditoria dedicada) não mudou a conclusão de aprovação, mas corrigiu leakage real de 1 a 5 meses em H2–H6; H1 confirmado bit-idêntico (controle negativo). Nenhuma correção aplicada em produção."
+  },
+  "metodo_3_5_gate_probabilistico": {
+    "nome": "Método 3.5 — gate diagnóstico de calibração probabilística (dispersão do ensemble RAW)",
+    "objetivo_variavel": "Diagnosticar se a dispersão dos 24 membros do CFSv2 RAW contém informação útil sobre o erro — não é uma correção.",
+    "horizontes_avaliados": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "amostra": {
+      "n_por_horizonte": {
+        "1": 240,
+        "2": 240,
+        "3": 240,
+        "4": 240,
+        "5": 240,
+        "6": 240
+      }
+    },
+    "regra_causal": "Mesma base pareada causal da 2C.3C; nenhum ajuste de parâmetro.",
+    "referencias_usadas": [
+      "climatologia causal (CRPS/BSS)"
+    ],
+    "metricas_principais_por_horizonte": {
+      "1": {
+        "classificacao_gate_controlada_por_mes": "ensemble_mal_calibrado_spread_pouco_informativo",
+        "pearson_resid_ic95": {
+          "estimativa": -0.02341410958089636,
+          "ic95_lo": -0.20449522358715055,
+          "ic95_hi": 0.15178949380377255
+        },
+        "pearson_resid_ic_classificacao": "ic_inclui_zero"
+      },
+      "2": {
+        "classificacao_gate_controlada_por_mes": "ensemble_mal_calibrado_mas_potencialmente_calibravel",
+        "pearson_resid_ic95": {
+          "estimativa": 0.15496521045009673,
+          "ic95_lo": 0.04256379466446802,
+          "ic95_hi": 0.2561437041299657
+        },
+        "pearson_resid_ic_classificacao": "ic_totalmente_acima_de_zero"
+      },
+      "3": {
+        "classificacao_gate_controlada_por_mes": "ensemble_mal_calibrado_spread_pouco_informativo",
+        "pearson_resid_ic95": {
+          "estimativa": 0.11466890056193706,
+          "ic95_lo": -0.03692328637286055,
+          "ic95_hi": 0.26189459331557036
+        },
+        "pearson_resid_ic_classificacao": "ic_inclui_zero"
+      },
+      "4": {
+        "classificacao_gate_controlada_por_mes": "ensemble_mal_calibrado_spread_pouco_informativo",
+        "pearson_resid_ic95": {
+          "estimativa": 0.011455687460156318,
+          "ic95_lo": -0.12372397990401653,
+          "ic95_hi": 0.148942325834063
+        },
+        "pearson_resid_ic_classificacao": "ic_inclui_zero"
+      },
+      "5": {
+        "classificacao_gate_controlada_por_mes": "ensemble_mal_calibrado_spread_pouco_informativo",
+        "pearson_resid_ic95": {
+          "estimativa": -0.06895271928265966,
+          "ic95_lo": -0.24660391338388477,
+          "ic95_hi": 0.08748421553677377
+        },
+        "pearson_resid_ic_classificacao": "ic_inclui_zero"
+      },
+      "6": {
+        "classificacao_gate_controlada_por_mes": "ensemble_mal_calibrado_spread_pouco_informativo",
+        "pearson_resid_ic95": {
+          "estimativa": -0.04582801412494157,
+          "ic95_lo": -0.1880514680475467,
+          "ic95_hi": 0.10644628639809177
+        },
+        "pearson_resid_ic_classificacao": "ic_inclui_zero"
+      }
+    },
+    "decisao_cientifica_registrada": "resultado_misto_revisar_por_horizonte_antes_de_decidir (próximo passo recomendado: resultado_misto_revisar_por_horizonte_antes_de_decidir); nenhuma média/voto majoritário decide por si só; Método 3.5 NÃO declarado aprovado por este gate.",
+    "limitacoes_status_operacional": "H2 único horizonte com IC95% acima de zero na correlação spread×erro controlada por mês — demais horizontes classificados como spread pouco informativo (H1,H3-H6) ou potencialmente calibrável só H2."
+  },
+  "metodo_3_5_robustez_h2": {
+    "nome": "Método 3.5 — robustez do sinal spread×erro em H2",
+    "objetivo_variavel": "Testar se a associação residual spread×erro de H2 é robusta a leave-one-month-out/leave-one-season-out.",
+    "horizontes_avaliados": [
+      2
+    ],
+    "amostra": {
+      "n_h2": 240
+    },
+    "regra_causal": "Mesma base causal do gate; nenhum refit de EMOS.",
+    "referencias_usadas": [
+      "gate probabilístico (congelado)"
+    ],
+    "metricas_principais_por_horizonte": {
+      "2": {
+        "classificacao_robustez": {
+          "classificacao": "sinal_h2_robusto",
+          "justificativa": "Pearson e Spearman positivos em >= 10/12 exclusões, pelo menos uma métrica com IC 95% acima de zero na maioria (>= 7/12) das exclusões, e nenhuma exclusão produziu inversão forte (< -0.1).",
+          "sinais": {
+            "inversao_forte_em_alguma_exclusao": false,
+            "pelo_menos_uma_ic_maioria": true,
+            "ambas_positivas_limiar_robusto": true,
+            "ambas_positivas_maioria": true,
+            "sinal_mediano_positivo": true
+          },
+          "nota": "Classificação pré-registrada (limiares fixados antes de olhar o resultado real) — síntese descritiva de robustez, NUNCA um teste de hipótese formal."
+        },
+        "decisao_proximo_passo": "prosseguir_para_protocolo_emos_h2"
+      }
+    },
+    "decisao_cientifica_registrada": "sinal_h2_robusto — recomendado prosseguir para o protocolo EMOS H2, nunca tratado como \"modelo validado\".",
+    "limitacoes_status_operacional": "Achado exploratório entre 6 horizontes testados, sem correção formal de multiplicidade (Bonferroni/FDR); robustez interna exigida antes de justificar novo modelo, não substitui essa correção."
+  },
+  "metodo_3_5_emos_h2": {
+    "nome": "Método 3.5 — EMOS H2 (Normal censurada em zero, componente dinâmico de spread)",
+    "objetivo_variavel": "Calibração probabilística dinâmica (média e variância) de H2 via EMOS, Z~N(mu,sigma²), Y=max(0,Z).",
+    "horizontes_avaliados": [
+      2
+    ],
+    "amostra": {
+      "n_treino_minimo": 120,
+      "n_final_avaliavel": 95
+    },
+    "regra_causal": "init_date_treino < init_date_avaliada E target_month_treino < init_date_avaliada (mesma regra corrigida do 3.4, implementada independentemente).",
+    "referencias_usadas": [
+      "RAW (CRPS)",
+      "climatologia probabilística causal (CRPS)",
+      "EMOS d=0 (spread constante)"
+    ],
+    "metricas_principais_por_horizonte": {
+      "2": {
+        "crps_medio_emos_completo": 27.47707700461301,
+        "crps_medio_emos_d0": 27.477081044094717,
+        "crps_medio_raw": 39.77390199847445,
+        "crps_medio_climatologia": 26.71086587896073,
+        "CRPSS_vs_raw": {
+          "estimativa": 0.3091681825517921,
+          "ic95_lo": 0.2180789665707567,
+          "ic95_hi": 0.39833859960091933
+        },
+        "CRPSS_vs_climatologia": {
+          "estimativa": -0.028685372055115677,
+          "ic95_lo": -0.07274225942092366,
+          "ic95_hi": 0.014613149696274563
+        },
+        "CRPSS_spread_dinamico": {
+          "estimativa": 1.4701276673800834e-07,
+          "ic95_lo": -8.145095820033518e-10,
+          "ic95_hi": 3.6351254212585445e-07
+        }
+      }
+    },
+    "decisao_cientifica_registrada": {
+      "criterio_1_crpss_spread_dinamico_ic_acima_de_zero": false,
+      "criterio_2_crpss_vs_climatologia_ic_acima_de_zero": false,
+      "criterio_3_sem_degradacao_grave_brier_bss": true,
+      "criterio_3_bss_dentro_do_limiar_calculado": true,
+      "criterio_3_classificacao": "diagnostico_condicionado_a_limiar_nao_pre_registrado",
+      "criterio_3_limiar_nao_pre_registrado": true,
+      "criterio_4_cobertura_melhor_ou_igual_ao_raw_nos_3_niveis": true,
+      "criterio_4_cobertura_dentro_do_esperado_vs_raw": true,
+      "criterio_4_classificacao": "nao_integralmente_verificado",
+      "aprovado_componente_dinamico_de_spread": false,
+      "motivos_suficientes_para_nao_aprovacao": [
+        "IC95% do ganho em relação ao EMOS d=0 (CRPSS_spread_dinamico) inclui zero",
+        "EMOS não supera a climatologia probabilística causal (IC95% de CRPSS vs. climatologia inclui zero)"
+      ],
+      "limiar_bss_degradacao_grave": -0.1,
+      "bss_valor_mais_proximo_do_limiar": -0.08975179161961333,
+      "criterio_3_limitacao": "O limiar BSS > -0,10 não tem artefato de pré-registro datado independente dos resultados reais — foi introduzido no mesmo commit que produziu os primeiros resultados do EMOS H2. Reportado como diagnóstico condicionado, nunca como critério certificadamente pré-registrado.",
+      "criterio_4_limitacao": "O protocolo (seção 20, item 4) pede melhora de calibração/cobertura/PIT; esta implementação avalia formalmente só cobertura (3 níveis) — avaliação PARCIAL do critério, nunca reportada como aprovação integral. Não afeta a decisão final (critérios 1/2 já reprovam, isoladamente suficientes).",
+      "nota": "O protocolo (seção 20) exige os 4 critérios SIMULTANEAMENTE para aprovar. A NÃO aprovação do componente dinâmico de spread já está decidida pelos critérios 1 e 2 (ambos pré-registrados sem ressalva, ambos False) — ver motivos_suficientes_para_nao_aprovacao. Critérios 3/4 são diagnósticos complementares (classificação, não aprovação binária certificada) e nunca mudariam essa conclusão. Superar só o RAW sem superar a climatologia NÃO basta (seção 20, \"se o EMOS só superar o RAW mas não a climatologia: não aprovar\")."
+    },
+    "limitacoes_status_operacional": "Componente dinâmico de spread NÃO APROVADO: IC95% de CRPSS_spread_dinamico inclui zero E EMOS não supera a climatologia causal (IC95% de CRPSS_vs_climatologia inclui zero). EMOS supera o RAW (IC95% acima de zero), mas isso não é o critério de aprovação do protocolo. Método estritamente experimental — não promovido à operação."
+  },
+  "decisao_consolidada_fase_2c3e": "Nenhum dos métodos de calibração avaliados satisfez integralmente os respectivos critérios pré-registrados de aprovação operacional.",
+  "data_geracao_utc": "2026-10-15T12:18:21.825630+00:00"
+}
