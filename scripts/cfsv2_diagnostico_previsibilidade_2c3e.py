@@ -61,6 +61,15 @@ CAMINHO_EMOS_CSV = DIR_2C3D / 'emos_h2_expanding.csv'
 HORIZONTES = [1, 2, 3, 4, 5, 6]
 LEAD_H2 = 2
 
+# Formulação consolidada da decisão científica desta fase (2ª rodada de
+# auditoria, item 3) — usada literalmente no relatório, nunca reformulada
+# como ausência absoluta de informação preditiva. Mantida como constante
+# única para permitir teste de consistência relatório↔script.
+DECISAO_CONSOLIDADA_FASE_2C3E = (
+    'Nenhum dos métodos de calibração avaliados satisfez integralmente os '
+    'respectivos critérios pré-registrados de aprovação operacional.'
+)
+
 
 def _carregar_json(caminho):
     if not caminho.exists():
@@ -313,6 +322,25 @@ def construir_inventario_metodos():
         'limitacoes_status_operacional': 'Componente dinâmico de spread NÃO APROVADO: IC95% de CRPSS_spread_dinamico inclui zero E EMOS não supera a climatologia causal (IC95% de CRPSS_vs_climatologia inclui zero). EMOS supera o RAW (IC95% acima de zero), mas isso não é o critério de aprovação do protocolo. Método estritamente experimental — não promovido à operação.',
     }
 
+    # Ressalva explícita (2ª rodada de auditoria, item 3) — preservada com
+    # o valor exato lido da fonte, nunca reclassificada para esconder o
+    # resultado isolado favorável nem para inflá-lo além do que o critério
+    # conjunto já aprovado permite.
+    skill_h1 = inventario['metodo_3_1_aditivo']['metricas_principais_por_horizonte']['1']['skill_vs_anomalia_reconstruida']
+    inventario['metodo_3_1_aditivo']['ressalva_parcial_h1'] = {
+        'classificacao': 'parcialmente_favoravel_isolado',
+        'descricao': (
+            'skill_vs_anomalia_reconstruida isolado em H1 tem IC95% totalmente acima de zero — '
+            'resultado parcialmente favorável isolado, preservado explicitamente. Não satisfaz o '
+            'critério conjunto de aprovação (que exige também RMSESS_climatologia simultaneamente '
+            'acima de zero) — não é uma aprovação do Método 3.1 em H1, é um componente isolado do '
+            'critério satisfeito.'
+        ),
+        'skill_vs_anomalia_reconstruida_h1': skill_h1,
+    }
+
+    inventario['decisao_consolidada_fase_2c3e'] = DECISAO_CONSOLIDADA_FASE_2C3E
+
     return inventario
 
 
@@ -320,7 +348,26 @@ def construir_inventario_metodos():
 # Seção C — comparabilidade de amostras
 # ══════════════════════════════════════════════════════════════════════════
 
+CLASSE_JA_AVALIADO = 'comparavel_e_ja_avaliado'
+CLASSE_EM_PRINCIPIO_NAO_AVALIADO = 'comparavel_em_principio_mas_nao_avaliado'
+CLASSE_NAO_COMPARAVEL_METRICA = 'nao_comparavel_diretamente_por_metrica_ou_variavel'
+CLASSE_NAO_COMPARAVEL_DADOS = 'nao_comparavel_por_dados_ou_amostra'
+
+CLASSIFICACOES_COMPARABILIDADE_VALIDAS = {
+    CLASSE_JA_AVALIADO, CLASSE_EM_PRINCIPIO_NAO_AVALIADO,
+    CLASSE_NAO_COMPARAVEL_METRICA, CLASSE_NAO_COMPARAVEL_DADOS,
+}
+
+
 def construir_comparabilidade_amostras():
+    """Classifica cada par de métodos em uma de 4 categorias — nunca um
+    booleano único. A classificação NUNCA depende do valor da interseção
+    calculada (nenhum limiar escolhido a partir do resultado); depende só
+    de (a) se já existe uma métrica pareada aprovada sobre essa amostra
+    exata nos documentos 2C.3D, e (b) se os dois métodos produzem a MESMA
+    família de métrica (determinística vs. probabilística) sobre a MESMA
+    variável. Nenhum teste comparativo novo é calculado aqui — só a
+    contagem de interseção de chaves, preservada sem transformação."""
     adit = _carregar_csv(CAMINHO_ADITIVA_CSV)
     mult = _carregar_csv(CAMINHO_MULT_CSV)
     mos = _carregar_csv(CAMINHO_MOS_CSV)
@@ -335,21 +382,38 @@ def construir_comparabilidade_amostras():
 
     # Pares com comparação pareada JÁ APROVADA internamente (skill_X_vs_Y
     # calculado sobre a amostra pareada exata nos documentos 2C.3D).
-    PARES_JA_COMPARAVEIS = {
+    PARES_JA_AVALIADOS = {
         ('aditivo', 'multiplicativo'): 'skill_multiplicativo_vs_aditivo (Método 3.2, seções 6/7/11)',
         ('aditivo', 'mos_linear'): 'skill_mos_vs_aditivo (Método 3.4, seções 10/11)',
+    }
+    # Pares deterministicos/mesma variável SEM comparação pareada já
+    # aprovada — comparáveis EM PRINCÍPIO (mesma família de métrica,
+    # observações comuns, previsões determinísticas), mas a comparação
+    # pareada em si ainda não foi executada em nenhum documento aprovado.
+    PARES_EM_PRINCIPIO_NAO_AVALIADOS = {
+        ('mos_linear', 'multiplicativo'),
     }
 
     def _registrar(lead, nome_a, set_a, nome_b, set_b):
         inter = set_a & set_b
         chave = tuple(sorted((nome_a, nome_b)))
-        comparavel = chave in PARES_JA_COMPARAVEIS
-        motivo = (
-            f'comparação pareada já aprovada existe: {PARES_JA_COMPARAVEIS[chave]}'
-            if comparavel else
-            f'nenhuma comparação pareada já aprovada entre {nome_a} e {nome_b} nesta amostra; '
-            'calcular uma nova métrica pareada está fora do escopo desta fase (2C.3E não desenvolve/ajusta métodos).'
-        )
+        if chave in PARES_JA_AVALIADOS:
+            classificacao = CLASSE_JA_AVALIADO
+            motivo = f'comparação pareada já aprovada existe: {PARES_JA_AVALIADOS[chave]}'
+        elif chave in PARES_EM_PRINCIPIO_NAO_AVALIADOS:
+            classificacao = CLASSE_EM_PRINCIPIO_NAO_AVALIADO
+            motivo = (
+                f'{nome_a} e {nome_b} têm observações comuns e previsões determinísticas sobre a mesma '
+                'variável (mesma família de métrica, RMSE/skill) — a comparação pareada EM PRINCÍPIO é '
+                'válida, mas ainda não foi calculada em nenhum documento aprovado; calcular uma nova métrica '
+                'pareada está fora do escopo desta fase (2C.3E não desenvolve/ajusta/avalia novos contrastes).'
+            )
+        else:
+            classificacao = CLASSE_EM_PRINCIPIO_NAO_AVALIADO
+            motivo = (
+                f'nenhuma comparação pareada já aprovada entre {nome_a} e {nome_b} nesta amostra; '
+                'calcular uma nova métrica pareada está fora do escopo desta fase.'
+            )
         linhas.append({
             'lead': lead,
             'metodo_a': nome_a,
@@ -358,7 +422,7 @@ def construir_comparabilidade_amostras():
             'n_b': len(set_b),
             'n_intersecao': len(inter),
             'fracao_intersecao_sobre_menor': round(len(inter) / min(len(set_a), len(set_b)), 4) if min(len(set_a), len(set_b)) > 0 else None,
-            'comparavel_diretamente': comparavel,
+            'classificacao_comparabilidade': classificacao,
             'motivo': motivo,
         })
 
@@ -370,10 +434,15 @@ def construir_comparabilidade_amostras():
         _registrar(h, 'aditivo', a, 'mos_linear', mo)
         _registrar(h, 'multiplicativo', m, 'mos_linear', mo)
 
-    # H2: EMOS H2 (probabilístico) vs os três métodos determinísticos —
-    # nenhum deles tem comparação pareada já aprovada contra o EMOS
-    # (famílias de métrica diferentes: CRPS probabilístico vs RMSE
-    # determinístico), registrado explicitamente como não comparável.
+    # H2: EMOS H2 (probabilístico, CRPS) vs os três métodos determinísticos
+    # (RMSE) — famílias de métrica diferentes sobre a mesma variável.
+    # Classificado como NÃO COMPARÁVEL DIRETAMENTE POR MÉTRICA, nunca como
+    # "impossível de comparar em princípio": CRPS e RMSE não são
+    # diretamente intercambiáveis nos dados hoje calculados, mas isso não
+    # afirma que os dois sistemas preditivos sejam incomparáveis sob uma
+    # métrica comum adequadamente definida (ex.: CRPS determinístico
+    # equivalente, ou pinball loss comum) — tal métrica comum não foi
+    # calculada em nenhuma fase até aqui.
     e = set(emos_ok['init_date'])
     a2 = set(adit_ok[adit_ok['lead'] == LEAD_H2]['init_date'])
     m2 = set(mult_ok[mult_ok['lead'] == LEAD_H2]['init_date'])
@@ -388,11 +457,14 @@ def construir_comparabilidade_amostras():
             'n_b': len(set_det),
             'n_intersecao': len(inter),
             'fracao_intersecao_sobre_menor': round(len(inter) / min(len(e), len(set_det)), 4) if min(len(e), len(set_det)) > 0 else None,
-            'comparavel_diretamente': False,
+            'classificacao_comparabilidade': CLASSE_NAO_COMPARAVEL_METRICA,
             'motivo': (
-                f'EMOS H2 é probabilístico (CRPS) e {nome_det} é determinístico (RMSE) — famílias de métrica '
-                'diferentes, nunca comparáveis numericamente direto apesar de ambas serem "skill scores"; '
-                'nenhuma comparação pareada já aprovada existe, e calcular uma nova está fora do escopo desta fase.'
+                f'EMOS H2 reporta CRPS (probabilístico) e {nome_det} reporta RMSE (determinístico) sobre a '
+                'mesma variável — métricas não diretamente intercambiáveis nos dados hoje calculados; isso '
+                'NÃO afirma que os dois sistemas sejam incomparáveis em princípio sob uma métrica comum '
+                'adequadamente definida, só que tal métrica comum não foi calculada em nenhuma fase até '
+                'aqui; nenhuma comparação pareada já aprovada existe, e calcular uma nova está fora do '
+                'escopo desta fase.'
             ),
         })
 
@@ -471,6 +543,7 @@ def executar_diagnostico_2c3e():
         'raw_cfsv2_2c3c', 'metodo_3_1_aditivo', 'metodo_3_2_multiplicativo',
         'metodo_3_3_gate_qm', 'metodo_3_4_mos_linear',
         'metodo_3_5_gate_probabilistico', 'metodo_3_5_robustez_h2', 'metodo_3_5_emos_h2',
+        'decisao_consolidada_fase_2c3e',
     }
     if set(inventario.keys()) != metodos_esperados:
         resultado['STOP_ON_FAILURE'] = True

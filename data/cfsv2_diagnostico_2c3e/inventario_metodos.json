@@ -315,7 +315,16 @@
       }
     },
     "decisao_cientifica_registrada": "Critério pré-registrado (IC95 de skill_vs_anomalia_reconstruida E RMSESS_climatologia simultaneamente acima de zero) não satisfeito em nenhum horizonte H1–H6.",
-    "limitacoes_status_operacional": "skill_vs_raw IC95% acima de zero em todos os horizontes, mas isto isoladamente não é o critério de aprovação. Nenhuma correção aplicada em produção."
+    "limitacoes_status_operacional": "skill_vs_raw IC95% acima de zero em todos os horizontes, mas isto isoladamente não é o critério de aprovação. Nenhuma correção aplicada em produção.",
+    "ressalva_parcial_h1": {
+      "classificacao": "parcialmente_favoravel_isolado",
+      "descricao": "skill_vs_anomalia_reconstruida isolado em H1 tem IC95% totalmente acima de zero — resultado parcialmente favorável isolado, preservado explicitamente. Não satisfaz o critério conjunto de aprovação (que exige também RMSESS_climatologia simultaneamente acima de zero) — não é uma aprovação do Método 3.1 em H1, é um componente isolado do critério satisfeito.",
+      "skill_vs_anomalia_reconstruida_h1": {
+        "estimativa": 0.040294096718318184,
+        "ic95_lo": 0.0024606180095468446,
+        "ic95_hi": 0.08819627993612777
+      }
+    }
   },
   "metodo_3_2_multiplicativo": {
     "nome": "Método 3.2 — correção multiplicativa",
@@ -907,5 +916,6 @@
     },
     "limitacoes_status_operacional": "Componente dinâmico de spread NÃO APROVADO: IC95% de CRPSS_spread_dinamico inclui zero E EMOS não supera a climatologia causal (IC95% de CRPSS_vs_climatologia inclui zero). EMOS supera o RAW (IC95% acima de zero), mas isso não é o critério de aprovação do protocolo. Método estritamente experimental — não promovido à operação."
   },
-  "data_geracao_utc": "2026-10-14T19:26:19.723965+00:00"
+  "decisao_consolidada_fase_2c3e": "Nenhum dos métodos de calibração avaliados satisfez integralmente os respectivos critérios pré-registrados de aprovação operacional.",
+  "data_geracao_utc": "2026-10-15T12:18:21.825630+00:00"
 }
