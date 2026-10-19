@@ -1174,7 +1174,7 @@
    baixo. Ver CLAUDE.md, armadilha 9. Os dois rótulos na UI (cards
    "RONI (oficial NOAA)" e "ONI aprox. (Niño 3,4, 3m)") existem
    justamente para não deixar ler um pelo outro. */
-const RONI = { seas: 'JAS', ano: 2026, valor: 1.69, atualizado: '15/10/2026' };
+const RONI = { seas: 'JAS', ano: 2026, valor: 1.69, atualizado: '19/10/2026' };
 const D = {
   annual:{years:[1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],vals:[1487.9, 1562.2, 1558.8, 1674.9, 2531.5, 1705.5, 1357.9, 1753.7, 2004.2, 1486.4, 1621.4, 1400.9, 1659.0, 1925.1, 1868.6, 2010.0, 1644.4, 1243.6, 1933.7, 1945.5, 1679.3, 1524.4, 1538.2, 1788.8, 1718.6, 1954.9, 1465.5, 2038.4, 1873.2, 1521.3, 1820.2, 1566.9, 1671.6, 1800.5, 1264.4, 1520.3, 1900.5, 1921.9, 1590.4, 2015.5, 2110.8, 1728.9, 1485.7, 1494.4, 1774.4],media:1714.3,dp:245.6,cv:14.3,minimo:[1998,1243.6],maximo:[1985,2531.5]},
   sen:{slope:2.24,p:0.4935,medY:2003,medP:1714.3},
@@ -1217,7 +1217,7 @@ const D = {
     "12":{trend:"no trend",p:0.1295,tau:-0.158,sen:-1.29}
   },
   now: {
-    nino34: ["set/2026", 3.1],  // Atualizado 15/10/2026 — PSL/NOAA
+    nino34: ["set/2026", 3.1],  // Atualizado 19/10/2026 — PSL/NOAA
     oni:    ["ago/2026", 2.46],  // ONI (média 3m)
     tsa:    ["jul/2026", 0.12]  // TSA mensal
   },
@@ -2326,7 +2326,7 @@ const CPC_IRI = {
     cpc_discussion_coleta: '19/10/2026',
     cpc_alert_status: 'El Niño Advisory',
     cpc_probabilidades_emissao: 'out/2026',
-    cpc_probabilidades_atualizado_em: '15/10/2026',
+    cpc_probabilidades_atualizado_em: '19/10/2026',
     cpc_emissao: '8/out/2026',
     cpc_status:    'El Niño Advisory — forte-a-muito-forte provável até JFM/27 (>83%)',
     cpc_proxima: '12/nov/2026',
@@ -2345,7 +2345,7 @@ const CPC_IRI = {
     roni_trimestral: '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)',
     divergencia:   'cpc[] é da tabela estruturada de probabilidades (out/2026); iri[] é da extração externa da emissão de set/2026 (ver iri_extracao) — ASO/26 null em ambos não é coincidência: CPC também não publicou ASO/26 na tabela estruturada (fora do alcance), IRI porque a extração de set/2026 não confirmou esse trimestre',
     dash_proxima:  '21/out/2026',
-    atualizado_em: '15/10/2026',
+    atualizado_em: '19/10/2026',
   },
   seasons: ['ASO/26','SON/26','OND/26','NDJ/26','DJF/27','JFM/27','FMA/27','MAM/27','AMJ/27'],
   // CPC — tabela oficial de probabilidades por trimestre, verificada
