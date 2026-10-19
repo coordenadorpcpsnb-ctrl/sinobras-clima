@@ -142,12 +142,55 @@ class BackfillPrecedePipelineAtualTestCase(unittest.TestCase):
     """Item 1 (2ª rodada) — verifica via git, nunca por suposição, que o
     backfill 1996-2010 já estava completo no primeiro commit do
     repositório, antes de qualquer execução do procedimento atual de
-    scripts/update_dashboard.py."""
+    scripts/update_dashboard.py.
+
+    Fase ENSO-CI — achado real na investigação da falha histórica desta
+    suíte: este teste comparava o resultado contra um SHA de commit
+    fixo ('8a76a0fad...'), hardcoded no momento em que foi escrito.
+    Isso contradiz a própria premissa da função que testa ("nunca por
+    suposição") — um SHA literal só é válido no clone onde foi medido;
+    qualquer outro checkout do mesmo repositório (fork, espelho, ou o
+    clone fresco que cada sessão de nuvem recebe) tem sua própria
+    árvore de commits e pode legitimamente reportar outro commit como
+    o primeiro a introduzir data/serie_subst.csv, sem que isso seja
+    regressão. Confirmado neste clone: o SHA fixo ('8a76a0fad...',
+    commit "Create index.html") nem sequer toca data/serie_subst.csv —
+    não é uma simples divergência de fork, já era um valor errado para
+    este caminho. O commit real que introduziu o arquivo aqui é
+    'e00984eb...' ("sinobras-clima", o 2º commit do repositório, logo
+    após a raiz), com os 180 meses de 1996-2010 já completos nele.
+
+    Correção: em vez de comparar contra um literal, o teste calcula o
+    commit esperado de forma independente (consulta git própria, sem
+    usar a função testada) e compara contra o que a função retorna —
+    isso ainda pega uma regressão real (se a função passar a devolver
+    um commit diferente do que o git realmente aponta como o primeiro
+    a introduzir o arquivo), mas funciona em qualquer clone fiel do
+    repositório, não só neste."""
 
     def test_a_dados_reais_primeiro_commit_ja_completo(self):
+        import subprocess as sp
+        log = sp.run(
+            ['git', 'log', '--follow', '--diff-filter=A', '--format=%H',
+             '--', 'data/serie_subst.csv'],
+            cwd=aud.ROOT, capture_output=True, text=True, timeout=15, check=True)
+        commits = log.stdout.strip().splitlines()
+        self.assertTrue(
+            commits,
+            'nenhum commit de criação encontrado para data/serie_subst.csv '
+            'neste clone — não há como calcular o commit esperado')
+        primeiro_commit_esperado = commits[-1]
+
         resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
         self.assertTrue(resultado['verificavel'])
-        self.assertEqual(resultado['primeiro_commit'], '8a76a0fad509e14e00b25b635ba7261dc375996f')
+        self.assertRegex(
+            resultado['primeiro_commit'], r'^[0-9a-f]{40}$',
+            'primeiro_commit deve ser um SHA git de 40 caracteres hex')
+        self.assertEqual(
+            resultado['primeiro_commit'], primeiro_commit_esperado,
+            'a função deve reportar exatamente o commit que uma consulta '
+            'git independente aponta como o primeiro a introduzir o '
+            'arquivo neste clone — nunca um SHA fixo de outro histórico')
         self.assertEqual(resultado['n_meses_esperado'], 180)
         self.assertEqual(resultado['n_meses_1996_2010_no_primeiro_commit'], 180)
         self.assertTrue(resultado['ja_completo_no_primeiro_commit'])

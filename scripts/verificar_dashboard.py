@@ -225,8 +225,22 @@ def main(pular_continuidade_serie_subst=False):
             ok(f'{nome} alinhado ao eixo')
 
     # ── 4. coerência do balanço hídrico ─────────────────────────────────
+    # Fase ENSO-CI — achado real: o delimitador buscado abaixo usava
+    # '── BALANÇO HÍDRICO COMP' (traço simples), mas o cabeçalho real
+    # no HTML é '══ BALANÇO HÍDRICO COMPARATIVO' (traço duplo — padrão
+    # do projeto para headers de SEÇÃO principal: MONITOR/PREVISÃO/
+    # CLIMA/PLANO usam o mesmo traço duplo; só headers de bloco LOCAL,
+    # como "── CONSTANTES ──", usam traço simples). `.find()` com o
+    # delimitador errado sempre retornava -1, e `h[bh_s:-1]` acabava
+    # incluindo quase o arquivo inteiro (tudo menos o último caractere)
+    # em `bh` — "funcionava por acidente" só porque os padrões buscados
+    # depois (prec/arm por cenário, BH.clim) continuavam únicos dentro
+    # dessa fatia enorme. Corrigido para o traço real (══), confirmado
+    # contra o docs/index.html real: a fatia cai de ~127k para ~26k
+    # caracteres (o bloco BH de verdade) e os mesmos padrões continuam
+    # sendo encontrados — ver tests/test_regressao_cientifica_enso_ci.py.
     bh_s = h.find('const BH = {')
-    bh_e = h.find('\n\n/* ── BALANÇO HÍDRICO COMP', bh_s)
+    bh_e = h.find('\n\n/* ══ BALANÇO HÍDRICO COMP', bh_s)
     bh   = h[bh_s:bh_e] if bh_s > 0 else ''
     etp_h = esp_etp
 
