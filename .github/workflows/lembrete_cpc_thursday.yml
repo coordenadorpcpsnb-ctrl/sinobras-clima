@@ -70,8 +70,21 @@ jobs:
 
           ## Checklist de extração
 
-          - [ ] Status ENSO atual (ex.: "El Niño Advisory", "La Niña Watch")
-          - [ ] Synopsis (resumo da situação em 1-2 frases)
+          - [ ] Synopsis (resumo da situação, 1-2 frases) — **continua manual**:
+                é prosa, nunca interpretada automaticamente (CLAUDE.md
+                armadilha 9). Usar para atualizar a frase rica de
+                \`_meta.cpc_status\` (ex.: "El Niño Advisory — forte-a-muito-forte
+                provável até JFM/27 (>83%)").
+          - [ ] Data de emissão, status categórico do Alert System (ex.
+                "El Niño Advisory") e data da próxima emissão: **desde a
+                Fase ENSO-AUTO (19/10/2026), são preenchidos automaticamente**
+                por \`scripts/update_indices.py\`
+                (\`parse_cpc_diagnostic_discussion_metadata\`), em
+                \`_meta.cpc_emissao\`/\`cpc_alert_status\`/\`cpc_proxima\` — não
+                precisa mais extrair isso manualmente aqui. Só confira se
+                bate com a página oficial; se a função não encontrar
+                esses campos (log do workflow \`indices_semanal.yml\`), a
+                estrutura da página pode ter mudado — aí sim extrair à mão.
           - [ ] Probabilidades de fase ENSO por trimestre: **desde a Fase
                 ENSO-DADOS (15/10/2026), \`CPC_IRI.cpc\` é preenchido
                 automaticamente** por \`scripts/update_indices.py\`
@@ -83,7 +96,6 @@ jobs:
                 parser avisa no log do workflow \`indices_semanal.yml\` se
                 não encontrar nenhuma linha válida), aí sim extrair à mão
                 (nunca estimar — CLAUDE.md armadilha 4).
-          - [ ] Data da próxima emissão prevista
 
           ## Depois de extrair
 

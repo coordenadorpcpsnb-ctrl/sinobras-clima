@@ -20,6 +20,8 @@ como figura, sem ascii algum.
 """
 
 import re, sys, shutil
+import hashlib
+import html as html_mod
 from pathlib import Path
 from datetime import date, datetime
 import urllib.request
@@ -327,6 +329,267 @@ def parse_cpc_probabilidades(html):
     return _alinhar_seasons_com_ano(html, linhas_brutas)
 
 
+# ══════════════════════════════════════════════════════
+# CPC — metadados do ENSO Diagnostic Discussion (data de emissão,
+# próxima emissão, status categórico do Alert System)
+# ══════════════════════════════════════════════════════
+# Fase ENSO-AUTO (19/10/2026): a página do Diagnostic Discussion é
+# PROSA (Synopsis — nunca parseada nem interpretada, CLAUDE.md
+# armadilha 9), mas tem 3 metadados ESTRUTURAIS extraíveis sem
+# interpretar ciência nenhuma — confirmado contra a página real (HTTP
+# 200 deste ambiente; diferente do IRI, cpc.ncep.noaa.gov não está
+# bloqueado) em 19/10/2026, batendo exatamente com o que já estava
+# hand-curado para a emissão de 8/out/2026:
+#   1. Data de emissão — bloco <font size="4"> isolado logo depois de
+#      "issued by<br>CLIMATE PREDICTION CENTER/NCEP/NWS<br>".
+#   2. Status do ENSO Alert System — <span style="color:...">TEXTO</span>
+#      dentro do link para enso-alert-readme.shtml: rótulo CATEGÓRICO
+#      fixo que a própria CPC usa (Advisory/Watch/etc.), não uma
+#      interpretação nossa do texto.
+#   3. Próxima emissão — "scheduled for <data>", frase fixa que sempre
+#      acompanha o aviso de periodicidade mensal.
+# NUNCA toca `_meta.cpc_status` (a frase mais longa, com probabilidade
+# e janela temporal, curada manualmente a partir da Synopsis) — grava
+# só em `cpc_alert_status` (novo campo, categórico) e em
+# `cpc_emissao`/`cpc_proxima` (datas). Qualquer um dos 3 campos que não
+# for encontrado fica de fora do dict — nunca inventado.
+CPC_DIAGNOSTIC_DISCUSSION_URL = (
+    'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml'
+)
+_CPC_DD_DATA_EMISSAO_RE = re.compile(
+    r'CLIMATE PREDICTION CENTER/NCEP/NWS\s*<br>.*?size="4">\s*(\d{1,2}\s+'
+    r'(?:January|February|March|April|May|June|July|August|September|'
+    r'October|November|December)\s+\d{4})', re.DOTALL | re.IGNORECASE,
+)
+_CPC_DD_PROXIMA_RE = re.compile(
+    r'scheduled for\s+(\d{1,2}\s+(?:January|February|March|April|May|June|July|'
+    r'August|September|October|November|December)\s+\d{4})', re.IGNORECASE,
+)
+_CPC_DD_STATUS_RE = re.compile(
+    r'ENSO Alert System Status.*?<span[^>]*>([^<]+)</span>', re.DOTALL | re.IGNORECASE,
+)
+_NOMES_MESES_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun',
+                   'jul', 'ago', 'set', 'out', 'nov', 'dez']
+
+
+def _data_en_para_pt(texto):
+    """'8 October 2026' -> '8/out/2026'. None se o mês não for
+    reconhecido — nunca inventa uma data a partir de texto ambíguo."""
+    m = re.match(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})', texto.strip())
+    if not m:
+        return None
+    dia, mes_en, ano = m.groups()
+    mes_num = _MESES_EN.get(mes_en.lower())
+    if mes_num is None:
+        return None
+    return f'{int(dia)}/{_NOMES_MESES_PT[mes_num - 1]}/{ano}'
+
+
+def parse_cpc_diagnostic_discussion_metadata(html):
+    """
+    Extrai só os 3 metadados estruturais do Diagnostic Discussion (ver
+    comentário acima) — nunca a Synopsis. Cada campo é validado e falha
+    SEPARADAMENTE (data com mês não reconhecido, status vazio) sem
+    derrubar os outros dois. Decodifica entidades HTML (`&ntilde;` etc.)
+    do status com `html.unescape`, nunca deixando entidade crua no
+    dashboard.
+
+    Retorna {'emissao': 'D/mmm/AAAA', 'proxima': 'D/mmm/AAAA',
+    'alert_status': str} só com as chaves extraídas com segurança —
+    {} se a página não tiver NENHUMA reconhecível (estrutura mudou).
+    """
+    resultado = {}
+
+    m = _CPC_DD_DATA_EMISSAO_RE.search(html)
+    if m:
+        d = _data_en_para_pt(m.group(1))
+        if d:
+            resultado['emissao'] = d
+
+    m = _CPC_DD_PROXIMA_RE.search(html)
+    if m:
+        d = _data_en_para_pt(m.group(1))
+        if d:
+            resultado['proxima'] = d
+
+    m = _CPC_DD_STATUS_RE.search(html)
+    if m:
+        status = html_mod.unescape(m.group(1)).strip()
+        if status:
+            resultado['alert_status'] = status
+
+    return resultado
+
+
+def _data_pt_para_date(texto):
+    """'8/out/2026' -> date(2026,10,8). None se não reconhecer."""
+    if not texto:
+        return None
+    m = re.match(r'(\d{1,2})/([a-zç]{3})/(\d{4})', texto.strip().lower())
+    if not m:
+        return None
+    dia, mes_abv, ano = m.groups()
+    mes_num = _MESES_PT_PARA_NUM.get(mes_abv)
+    if mes_num is None:
+        return None
+    try:
+        return date(int(ano), mes_num, int(dia))
+    except ValueError:
+        return None
+
+
+_MESES_PT_PARA_NUM = {nome: i + 1 for i, nome in enumerate(_NOMES_MESES_PT)}
+
+
+def _mes_ano_pt_para_tupla(texto):
+    """'out/2026' -> (2026, 10). None se não reconhecer — usado só para
+    COMPARAR ordem cronológica entre emissões (Seção 6: nunca
+    sobrescrever uma emissão mais recente por outra antiga), nunca para
+    decidir alinhamento de trimestre (isso é _alinhar_seasons_com_ano)."""
+    if not texto:
+        return None
+    m = re.match(r'([a-zç]{3})/(\d{4})', texto.strip().lower())
+    if not m:
+        return None
+    mes_num = _MESES_PT_PARA_NUM.get(m.group(1))
+    if mes_num is None:
+        return None
+    return (int(m.group(2)), mes_num)
+
+
+def atualizar_cpc_diagnostic_discussion_metadata_no_html(html, metadados):
+    """
+    Grava `metadados` (saída de `parse_cpc_diagnostic_discussion_metadata`)
+    em `CPC_IRI._meta.cpc_emissao` / `cpc_proxima` / `cpc_alert_status` —
+    IDEMPOTENTE (via `_upsert_campo_meta`) e com uma barreira de
+    segurança explícita (Seção 6 da Fase ENSO-AUTO): nunca sobrescreve
+    `cpc_emissao` com uma data mais ANTIGA do que a já gravada — uma
+    emissão mais nova nunca é substituída por uma mais velha, mesmo que
+    o fetch desta execução tenha vindo de uma página em cache/atrasada.
+    `cpc_proxima`/`cpc_alert_status` seguem a mesma decisão de
+    `cpc_emissao` (só gravam quando ele avança ou quando ainda não
+    existe) — os 3 campos descrevem a MESMA emissão, nunca ficam de
+    emissões diferentes entre si.
+
+    Nunca toca `_meta.cpc_status` (frase manual, mais rica, derivada da
+    Synopsis) nem `CPC_IRI.cpc.{en,neu,ln}` (outra função, outra fonte).
+
+    Retorna (html, mudou: bool).
+    """
+    if not metadados or 'emissao' not in metadados:
+        return html, False
+
+    ini = html.find('const CPC_IRI = {')
+    if ini < 0:
+        return html, False
+    fim = html.find('\n};', ini)
+    if fim < 0:
+        return html, False
+    fim += 3
+    bloco = html[ini:fim]
+
+    m_atual = re.search(r"cpc_emissao:\s*'([^']*)'", bloco)
+    emissao_atual_str = m_atual.group(1) if m_atual else None
+    emissao_atual = _data_pt_para_date(emissao_atual_str)
+    emissao_nova = _data_pt_para_date(metadados['emissao'])
+    if emissao_nova is None:
+        return html, False
+    if emissao_atual is not None and emissao_nova < emissao_atual:
+        # emissão buscada é mais ANTIGA que a já gravada — nunca
+        # regride (Seção 6: "impedir sobrescrita de uma emissão mais
+        # recente por outra antiga").
+        return html, False
+
+    # Idempotente de verdade: só "nada a fazer" quando os 3 campos JÁ
+    # BATEM com o que seria gravado — não só quando a emissão é igual.
+    # Achado real (Fase ENSO-AUTO): uma checagem baseada só em
+    # `emissao_atual == emissao_nova` nunca grava `cpc_alert_status`/
+    # `cpc_proxima` na primeira execução em que a emissão já estava
+    # certa mas esses dois campos (novos nesta fase) ainda não
+    # existiam — ficariam ausentes indefinidamente até a PRÓXIMA
+    # emissão avançar.
+    m_status_atual = re.search(r"cpc_alert_status:\s*'([^']*)'", bloco)
+    status_atual = m_status_atual.group(1) if m_status_atual else None
+    m_proxima_atual = re.search(r"cpc_proxima:\s*'([^']*)'", bloco)
+    proxima_atual = m_proxima_atual.group(1) if m_proxima_atual else None
+
+    nada_mudou = (
+        emissao_atual == emissao_nova
+        and metadados.get('alert_status', status_atual) == status_atual
+        and metadados.get('proxima', proxima_atual) == proxima_atual
+    )
+    if nada_mudou:
+        return html, False
+
+    bloco_novo = _upsert_campo_meta(bloco, 'cpc_emissao', metadados['emissao'])
+    if 'proxima' in metadados:
+        bloco_novo = _upsert_campo_meta(bloco_novo, 'cpc_proxima', metadados['proxima'])
+    if 'alert_status' in metadados:
+        bloco_novo = _upsert_campo_meta(bloco_novo, 'cpc_alert_status', metadados['alert_status'])
+    bloco_novo = _upsert_campo_meta(
+        bloco_novo, 'cpc_discussion_coleta', date.today().strftime('%d/%m/%Y'))
+
+    return html[:ini] + bloco_novo + html[fim:], True
+
+
+# ══════════════════════════════════════════════════════
+# IRI — mecanismo semiautomático de detecção de mudança (Fase ENSO-AUTO)
+# ══════════════════════════════════════════════════════
+# iri.columbia.edu está bloqueado do ambiente Claude Code (403 no
+# proxy desta sessão, confirmado na Fase ENSO-IRI) — não confirmado
+# bloqueado do runner do GitHub Actions (ver
+# .github/workflows/diagnostico_acesso_iri.yml, testável só depois do
+# merge). Decisão desta fase: NÃO automatizar a LEITURA de
+# probabilidades do IRI (proibido inferir de imagem; proibido
+# converter El Niño em Neutro/La Niña por suposição; a página não
+# publica mais arquivo de dados — ver Fase ENSO-IRI). Em vez disso,
+# mecanismo semiautomático best-effort: a cada execução, SE a página
+# for alcançável, calcula um hash do TEXTO normalizado (sem tags, sem
+# espaço redundante) e compara com o último hash gravado — "mudou" é
+# só um sinal de que algo mudou (provavelmente nova emissão), nunca
+# uma extração de dado científico. Falha de rede é tratada como "sem
+# informação nova" — nunca sobrescreve o hash gravado, nunca gera
+# falso positivo (mesma disciplina de persistência de TSA/PDO/RONI).
+IRI_URL = 'https://iri.columbia.edu/our-expertise/climate/forecasts/enso/current/'
+IRI_HASH_PATH = ROOT / 'data' / '.iri_pagina_hash'
+_TAMANHO_MINIMO_PAGINA_IRI = 1000  # chars de texto normalizado — abaixo disso é página de erro/truncada
+
+
+def _normalizar_texto_html(html):
+    """Remove tags, scripts e espaço redundante — evita 'mudou' por
+    reformatação cosmética (indentação, espaçamento) que não altera o
+    conteúdo. Nunca usado para EXTRAIR dado, só para gerar a impressão
+    digital do hash."""
+    sem_script = re.sub(r'<script.*?</script>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
+    sem_tags = re.sub(r'<[^>]+>', ' ', sem_script)
+    return re.sub(r'\s+', ' ', sem_tags).strip()
+
+
+def verificar_mudanca_pagina_iri(html, hash_anterior):
+    """
+    Compara o hash SHA-256 do texto normalizado de `html` (buscado
+    agora) com `hash_anterior` (lido de IRI_HASH_PATH, ou None na
+    primeira execução). Retorna (hash_novo_ou_hash_anterior, mudou:
+    bool) — NUNCA extrai nem interpreta conteúdo, só detecta mudança.
+
+    `html` vazio/None (fetch falhou) -> (hash_anterior, False) — nunca
+    sobrescreve um hash bom por falha de fonte. Página menor que
+    `_TAMANHO_MINIMO_PAGINA_IRI` (texto normalizado) é tratada como
+    falha (provável página de erro/truncada), mesma barreira.
+    Primeira execução (hash_anterior is None) grava o hash inicial mas
+    NUNCA reporta como "mudança" — não há nada anterior para comparar.
+    """
+    if not html:
+        return hash_anterior, False
+    texto_norm = _normalizar_texto_html(html)
+    if len(texto_norm) < _TAMANHO_MINIMO_PAGINA_IRI:
+        return hash_anterior, False
+    hash_novo = hashlib.sha256(texto_norm.encode('utf-8')).hexdigest()
+    if hash_anterior is None:
+        return hash_novo, False
+    return hash_novo, hash_novo != hash_anterior
+
+
 def _seasons_do_cpc_iri(html):
     """Lê `CPC_IRI.seasons` do HTML (ex.: ['ASO/26','SON/26',...]) —
     NUNCA escreve nessa lista, só lê a ordem/comprimento já curados à
@@ -427,14 +690,27 @@ def atualizar_cpc_probabilidades_no_html(html, probabilidades, emissao=None):
               'ou o ano não pôde ser alinhado com segurança)')
         return html, False
 
+    m_emissao_atual = re.search(r"cpc_probabilidades_emissao:\s*'([^']*)'", bloco)
+    emissao_atual = m_emissao_atual.group(1) if m_emissao_atual else None
+
+    # Seção 6 da Fase ENSO-AUTO: nunca sobrescrever uma emissão mais
+    # recente já gravada por uma mais ANTIGA buscada agora (ex.: página
+    # servida de cache/CDN atrasado). Comparação por (ano, mês), não
+    # por igualdade de string — "out/2026" teria passado pela checagem
+    # antiga mesmo sendo mais nova que "nov/2026" se alguém rodasse o
+    # script fora de ordem.
+    tup_atual = _mes_ano_pt_para_tupla(emissao_atual)
+    tup_novo = _mes_ano_pt_para_tupla(emissao)
+    if tup_atual is not None and tup_novo is not None and tup_novo < tup_atual:
+        print(f'  ⚠ tabela de probabilidades CPC buscada ({emissao}) é mais antiga que '
+              f'a já gravada ({emissao_atual}) — ignorada, nunca regride uma emissão')
+        return html, False
+
     nova_cpc_linha = (
         f"\n  cpc:{{ en:[{','.join(en)}], neu:[{','.join(neu)}], ln:[{','.join(ln)}] }},"
     )
     m_cpc_atual = re.search(r'\n  cpc:\{[^}]*\},', bloco)
     cpc_mudou = (m_cpc_atual is None) or (m_cpc_atual.group(0) != nova_cpc_linha)
-
-    m_emissao_atual = re.search(r"cpc_probabilidades_emissao:\s*'([^']*)'", bloco)
-    emissao_atual = m_emissao_atual.group(1) if m_emissao_atual else None
     emissao_mudou = emissao is not None and emissao != emissao_atual
 
     if not cpc_mudou and not emissao_mudou:
@@ -936,10 +1212,10 @@ def main():
         print(f"  ⚠ RONI indisponível: {e}")
 
     # 6. CPC — tabela oficial de probabilidades de fase ENSO por trimestre
-    # (ver CPC_PROBABILIDADES_URL — única parte de CPC_IRI automatizada
-    # até aqui; status/synopsis/narrativa continuam manuais, ver
+    # (ver CPC_PROBABILIDADES_URL — já automatizada desde a Fase
+    # ENSO-DADOS; synopsis/narrativa continuam manuais, ver
     # lembrete_cpc_thursday.yml/lembrete_iri_thursday.yml).
-    print("\n[6/7] CPC — probabilidades de fase ENSO por trimestre…")
+    print("\n[6/9] CPC — probabilidades de fase ENSO por trimestre…")
     cpc_probabilidades = {}
     cpc_prob_emissao = None
     try:
@@ -956,8 +1232,57 @@ def main():
     except Exception as e:
         print(f"  ⚠ CPC probabilidades indisponível: {e} — CPC_IRI.cpc preservado")
 
-    # 7. Histórico — master_monthly.csv e serie_subst.csv
-    print("\n[7/7] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
+    # 7. CPC — metadados do Diagnostic Discussion (data de emissão, próxima
+    # emissão, status categórico do Alert System — NUNCA a Synopsis, ver
+    # comentário em parse_cpc_diagnostic_discussion_metadata). Nova nesta
+    # fase (ENSO-AUTO, 19/10/2026) — verificado contra a página real.
+    print("\n[7/9] CPC — metadados do Diagnostic Discussion (data/status)…")
+    cpc_dd_metadados = {}
+    try:
+        text = fetch(CPC_DIAGNOSTIC_DISCUSSION_URL)
+        cpc_dd_metadados = parse_cpc_diagnostic_discussion_metadata(text)
+        if cpc_dd_metadados.get('emissao'):
+            print(f"  ✅ Diagnostic Discussion: emissão {cpc_dd_metadados['emissao']} · "
+                  f"status {cpc_dd_metadados.get('alert_status', '—')} · "
+                  f"próxima {cpc_dd_metadados.get('proxima', '—')}")
+        else:
+            print("  ⚠ Diagnostic Discussion: data de emissão não encontrada "
+                  "(estrutura da página pode ter mudado) — metadados preservados")
+    except Exception as e:
+        print(f"  ⚠ Diagnostic Discussion indisponível: {e} — metadados preservados")
+
+    # 8. IRI — mecanismo semiautomático de detecção de mudança (best-effort,
+    # nunca bloqueia o job, nunca extrai probabilidade — ver comentário em
+    # verificar_mudanca_pagina_iri). Resultado é só um SINAL pro lembrete
+    # mensal (lembrete_iri_thursday.yml), nunca substitui a extração manual.
+    print("\n[8/9] IRI — verificação de mudança na página (best-effort)…")
+    hash_anterior = None
+    try:
+        if IRI_HASH_PATH.exists():
+            hash_anterior = IRI_HASH_PATH.read_text(encoding='utf-8').strip() or None
+    except Exception:
+        hash_anterior = None
+
+    iri_html = None
+    try:
+        iri_html = fetch(IRI_URL, timeout=20)
+    except Exception as e:
+        print(f"  ⚠ IRI não alcançável deste runner: {e} — hash preservado, sem sinalização")
+
+    hash_novo, iri_mudou = verificar_mudanca_pagina_iri(iri_html, hash_anterior)
+    if hash_novo and hash_novo != hash_anterior:
+        IRI_HASH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        IRI_HASH_PATH.write_text(hash_novo, encoding='utf-8')
+    if iri_mudou:
+        print("  🔔 Conteúdo da página do IRI mudou desde a última checagem — "
+              "possível nova emissão; extração continua manual (ver Issue mensal)")
+    elif iri_html and hash_anterior is None:
+        print("  ℹ primeira checagem — hash inicial gravado, nada a comparar ainda")
+    elif iri_html:
+        print("  ✅ sem mudança detectada na página do IRI desde a última checagem")
+
+    # 9. Histórico — master_monthly.csv e serie_subst.csv
+    print("\n[9/9] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
     n_master = atualizar_master_monthly(nino34, tsa, pdo)
     n_serie  = corrigir_serie_subst(nino34, tsa, pdo)
     print(f"  master_monthly.csv: {n_master} mês(es) adicionados")
@@ -972,6 +1297,14 @@ def main():
         novo_html, mudou_cpc = atualizar_cpc_probabilidades_no_html(
             html, cpc_probabilidades, emissao=cpc_prob_emissao)
         if mudou_cpc:
+            DASHBOARD.write_text(novo_html, encoding='utf-8')
+            changed = True
+
+    if cpc_dd_metadados.get('emissao'):
+        html = DASHBOARD.read_text(encoding='utf-8')
+        novo_html, mudou_dd = atualizar_cpc_diagnostic_discussion_metadata_no_html(
+            html, cpc_dd_metadados)
+        if mudou_dd:
             DASHBOARD.write_text(novo_html, encoding='utf-8')
             changed = True
 
