@@ -87,6 +87,29 @@ def _dias_desde_data_pt(texto):
     return (date.today() - data).days
 
 
+def _meses_atras_rotulo_mmm_aaaa(texto):
+    """Extrai 'mmm/AAAA' (ex.: 'set/2026', formato de D.now.*[0] gerado
+    por update_indices.py::label_fmt) e retorna quantos meses de
+    calendário atrás esse mês está do mês atual (0 = mês atual, 1 = mês
+    anterior, etc.) — nunca lança exceção. Medir em MESES DE CALENDÁRIO,
+    não em dias: os índices mensais do CPC/PSL publicam o valor do mês
+    M só no início do mês M+1 — "1 mês atrás" é o estado NORMAL durante
+    quase todo o mês corrente, não uma defasagem real; só >=2 meses
+    indica falha recorrente do workflow (ex.: o bug real de 01-12/
+    out/2026, achado na Fase ENSO-DADOS)."""
+    if not texto:
+        return None
+    m = re.match(r'([a-zç]{3})/(\d{4})$', texto.strip().lower())
+    if not m:
+        return None
+    mes = _MESES_PT.get(m.group(1))
+    if mes is None:
+        return None
+    ano = int(m.group(2))
+    hoje = date.today()
+    return (hoje.year - ano) * 12 + (hoje.month - mes)
+
+
 def checar_continuidade(serie, ate=None):
     """
     Retorna a lista de meses 'MM/AAAA' faltando entre o primeiro
@@ -375,19 +398,31 @@ def main(pular_continuidade_serie_subst=False):
         else:
             ok('RONI e ONI-aprox com rótulos distintos')
 
-    # ── 11. defasagem do CPC_IRI (curado manualmente — só aviso, nunca
-    #        bloqueia a publicação) ──────────────────────────────────────
-    # CPC_IRI é 100% manual (ver CLAUDE.md armadilhas 3/4) — não existe
-    # script que o atualize automaticamente (exceto, desde a Fase
-    # ENSO-DADOS 15/10/2026, CPC_IRI.cpc via update_indices.py — ver
-    # atualizar_cpc_probabilidades()). Bloquear a publicação por ele estar
-    # velho recriaria a mesma classe de bug corrigida no item 9 (um aviso
-    # legítimo de uma parte do dashboard travando a publicação inteira) —
-    # por isso isto é SÓ aviso no console, nunca `erro()`.
+    # ── 11. defasagem do CPC_IRI e dos índices oceânicos (curados/
+    #        coletados separadamente — só aviso, nunca bloqueia) ────────
+    # CPC_IRI é majoritariamente manual (ver CLAUDE.md armadilhas 3/4);
+    # partes automatizadas desde a Fase ENSO-DADOS/ENSO-AUTO continuam
+    # tendo sua PRÓPRIA data de emissão, nunca confundida com "quando o
+    # script rodou" — cada campo abaixo é a data que a FONTE publicou,
+    # não a data de coleta. Bloquear a publicação por qualquer um deles
+    # estar velho recriaria a mesma classe de bug corrigida no item 9
+    # (um aviso legítimo de uma parte do dashboard travando a
+    # publicação inteira) — por isso isto é SÓ aviso, nunca `erro()`.
+    #
+    # Fase ENSO-AUTO (19/10/2026): distingue as 5 categorias pedidas —
+    # antes só CPC Diagnostic Discussion e IRI (campo único,
+    # `iri_emissao`) eram checados; `cpc_probabilidades_emissao` e
+    # `iri_trajetoria_emissao` existem desde as Fases ENSO-DADOS/
+    # ENSO-IRI mas nunca tinham checagem de defasagem própria.
     m_meta = re.search(r'_meta:\s*\{([^}]*)\}', h)
     if m_meta:
         bloco_meta = m_meta.group(1)
-        for campo, rotulo in (('cpc_emissao', 'CPC'), ('iri_emissao', 'IRI')):
+        for campo, rotulo in (
+            ('cpc_emissao', 'CPC Diagnostic Discussion'),
+            ('cpc_probabilidades_emissao', 'Probabilidades CPC'),
+            ('iri_emissao', 'Probabilidades IRI'),
+            ('iri_trajetoria_emissao', 'Trajetória Niño 3.4 IRI'),
+        ):
             m_campo = re.search(rf"{campo}:\s*'([^']*)'", bloco_meta)
             if m_campo:
                 dias = _dias_desde_data_pt(m_campo.group(1))
@@ -396,6 +431,25 @@ def main(pular_continuidade_serie_subst=False):
                           f'— acima do ciclo mensal esperado (~30 dias), fonte '
                           f'possivelmente defasada')
         ok('metadados de defasagem do CPC_IRI verificados (só aviso, nunca bloqueia)')
+
+    # Índices oceânicos mensais/semanais: cadência própria (mensal
+    # publica com ~1 mês de defasagem por natureza; semanal é ~7 dias)
+    # — comparado contra o MÊS do próprio dado mais recente (D.now,
+    # rótulo real já atribuído pelo script, nunca "hoje"), não contra
+    # a data de execução deste verificador.
+    if mnow:
+        m_n34_lbl = re.search(r"nino34:\s*\[\s*\"([^\"]+)\"", mnow.group(1))
+        if m_n34_lbl:
+            meses_atras = _meses_atras_rotulo_mmm_aaaa(m_n34_lbl.group(1))
+            # >=2 meses: 1 mês atrás é o estado normal (o CPC só publica
+            # o valor do mês corrente no início do mês seguinte) — só a
+            # partir de 2 meses é sinal de falha recorrente do workflow.
+            if meses_atras is not None and meses_atras >= 2:
+                print(f'  ⚠ Índices oceânicos (D.now.nino34, {m_n34_lbl.group(1)}) '
+                      f'estão {meses_atras} meses de calendário atrás — possível '
+                      f'falha recorrente do workflow semanal/mensal')
+            else:
+                ok('defasagem dos índices oceânicos mensais dentro do esperado')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

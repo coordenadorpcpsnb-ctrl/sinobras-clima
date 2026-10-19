@@ -296,6 +296,84 @@ def celula(cell, texto, *, tam=8.5, bold=False, italic=False,
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Comparação CPC × IRI por trimestre (Fase ENSO-AUTO — correção do bug de
+# zip() posicional sobre listas filtradas separadamente)
+# ══════════════════════════════════════════════════════════════════════════
+def probabilidades_el_nino_por_trimestre(html, campo):
+    """
+    Extrai {('SEAS/YY'): valor_en_ou_None} de `CPC_IRI.<campo>.en`
+    (campo = 'cpc' ou 'iri'), associado por CHAVE a `CPC_IRI.seasons` —
+    nunca por posição numa lista já filtrada de `null`. `null` vira
+    `None` no dict (nunca 0) — significa "este centro não publicou
+    este trimestre nesta emissão", não "0% de probabilidade".
+
+    Se `CPC_IRI.seasons` e o array de `en` não tiverem o MESMO
+    comprimento (ex.: HTML corrompido, ou campo ausente), retorna {}
+    em vez de arriscar um alinhamento errado — mesma disciplina de
+    `scripts/update_indices.py::_alinhar_seasons_com_ano` (nunca
+    adivinhar associação trimestre↔valor).
+    """
+    m_seasons = re.search(r'seasons:\s*\[([^\]]+)\]', html)
+    m_campo = re.search(rf'{re.escape(campo)}:\s*\{{\s*en:\[([^\]]+)\]', html)
+    if not m_seasons or not m_campo:
+        return {}
+    seasons = [s.strip().strip("'\"") for s in m_seasons.group(1).split(',') if s.strip()]
+    brutos = [v.strip() for v in m_campo.group(1).split(',')]
+    if len(brutos) != len(seasons):
+        return {}
+    valores = []
+    for v in brutos:
+        if v == 'null' or v == '':
+            valores.append(None)
+        else:
+            try:
+                valores.append(int(float(v)))
+            except ValueError:
+                return {}  # valor não numérico e não 'null' — fonte corrompida, não arrisca
+    return dict(zip(seasons, valores))
+
+
+def resumo_divergencia_cpc_iri(cpc_por_tri, iri_por_tri):
+    """
+    Compara CPC × IRI trimestre a trimestre pela CHAVE 'SEAS/YY' (nunca
+    por posição pós-filtro). Retorna:
+      cpc_max / iri_max   — maior probabilidade de El Niño publicada por
+                             CADA centro, cada um sobre SEUS PRÓPRIOS
+                             trimestres (não cruzados) — None se o
+                             centro não publicou nenhum valor.
+      divergencia_max      — maior |CPC-IRI|, calculada SÓ sobre os
+                             trimestres em que AMBOS têm valor real —
+                             None se não houver nenhum trimestre comum
+                             (nunca calcula sobre série vazia, nunca
+                             trata null como 0).
+      trimestre_divergencia_max — o trimestre ('SEAS/YY') dessa maior
+                             divergência, ou None.
+    """
+    cpc_vals = [v for v in cpc_por_tri.values() if v is not None]
+    iri_vals = [v for v in iri_por_tri.values() if v is not None]
+    cpc_max = max(cpc_vals) if cpc_vals else None
+    iri_max = max(iri_vals) if iri_vals else None
+
+    comuns = {
+        s: (c, iri_por_tri[s])
+        for s, c in cpc_por_tri.items()
+        if c is not None and iri_por_tri.get(s) is not None
+    }
+    if comuns:
+        trimestre_div = max(comuns, key=lambda s: abs(comuns[s][0] - comuns[s][1]))
+        c, i = comuns[trimestre_div]
+        divergencia_max = abs(c - i)
+    else:
+        trimestre_div, divergencia_max = None, None
+
+    return {
+        'cpc_max': cpc_max, 'iri_max': iri_max,
+        'divergencia_max': divergencia_max,
+        'trimestre_divergencia_max': trimestre_div,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Carga dos dados da execução
 # ══════════════════════════════════════════════════════════════════════════
 def carregar():
@@ -321,25 +399,19 @@ def carregar():
     m_iri = re.search(r'iri_nino_mean:\s*\[([^\]]+)\]', html)
     iri_pico = max(float(v) for v in m_iri.group(1).split(',')) if m_iri else None
 
-    # probabilidades CPC/IRI
-    m_cpc = re.search(r'cpc:\s*\{\s*en:\[([^\]]+)\]', html)
-    m_iri_en = re.search(r'iri:\s*\{\s*en:\[([^\]]+)\]', html)
-    # 'null' aparece quando um centro não publicou o trimestre naquela emissão
-    def _ints(m):
-        if not m:
-            return []
-        out = []
-        for v in m.group(1).split(','):
-            v = v.strip()
-            if v and v != 'null':
-                out.append(int(v))
-        return out
-
-    cpc_en = _ints(m_cpc)
-    iri_en = _ints(m_iri_en)
+    # probabilidades CPC/IRI por trimestre — ver probabilidades_por_trimestre()
+    # e resumo_divergencia_cpc_iri() (Fase ENSO-AUTO): associadas por
+    # CHAVE 'SEAS/YY' (CPC_IRI.seasons), nunca por posição numa lista já
+    # filtrada de null — zip() sobre duas listas filtradas separadamente
+    # pode comparar trimestres diferentes se os null caírem em posições
+    # distintas em cada fonte.
+    cpc_por_tri = probabilidades_el_nino_por_trimestre(html, 'cpc')
+    iri_por_tri = probabilidades_el_nino_por_trimestre(html, 'iri')
+    divergencia = resumo_divergencia_cpc_iri(cpc_por_tri, iri_por_tri)
 
     return dict(scen=scen, bh=bh, fc=fc, anual=anual, meta=meta,
-                iri_pico=iri_pico, cpc_en=cpc_en, iri_en=iri_en)
+                iri_pico=iri_pico, cpc_por_tri=cpc_por_tri, iri_por_tri=iri_por_tri,
+                divergencia=divergencia)
 
 
 def cenario_central(iri_pico):
@@ -461,10 +533,19 @@ def montar(d):
         run(p, f'{tipo} de intensidade {intens}', bold=True)
         run(p, f', com pico projetado de {num(d["iri_pico"],2).replace(".",",")}\u00a0\u00b0C '
                f'no Niño 3.4. ')
-    if d['cpc_en'] and d['iri_en']:
-        run(p, f'CPC e IRI convergem em probabilidade de até {max(d["cpc_en"])}% e '
-               f'{max(d["iri_en"])}%, respectivamente, para a persistência do evento ao '
-               f'longo da estação chuvosa. ')
+    div = d['divergencia']
+    if div['cpc_max'] is not None and div['iri_max'] is not None:
+        # Cada máximo precisa citar a PRÓPRIA emissão — a tabela de
+        # probabilidades CPC (cpc_probabilidades_emissao) é uma fonte
+        # separada do Diagnostic Discussion (cpc_emissao); nunca
+        # apresentar os dois números sem identificar de qual emissão
+        # cada um vem (verificação explícita pedida na 3ª rodada de
+        # revisão externa).
+        run(p, f'CPC (tabela de probabilidades, emissão '
+               f'{meta.get("cpc_probabilidades_emissao","n/d")}) e IRI (Quick Look, '
+               f'emissão {meta.get("iri_emissao","n/d")}) convergem em probabilidade de '
+               f'até {div["cpc_max"]}% e {div["iri_max"]}%, respectivamente, para a '
+               f'persistência do evento ao longo da estação chuvosa. ')
     seco = linha_c['anom_pct'] < 0
     run(p, f'Para a safra isso se traduz em uma estação chuvosa '
            f'{"mais curta e menos volumosa" if seco else "de volume acima do normal"}, '
@@ -508,11 +589,23 @@ def montar(d):
     run(p, f'CPC (emissão {meta.get("cpc_emissao","n/d")}): ', bold=True)
     run(p, f'{meta.get("cpc_status","n/d")}. ')
     run(p, f'IRI (Quick Look {meta.get("iri_emissao","n/d")}): ', bold=True)
-    if d['iri_en'] and d['cpc_en']:
-        div = max(abs(a - b) for a, b in zip(d['iri_en'], d['cpc_en']))
-        run(p, f'probabilidade de até {max(d["iri_en"])}% nos trimestres da estação '
-               f'chuvosa. A maior divergência entre os dois centros no horizonte é de '
-               f'{div} {"ponto percentual" if div == 1 else "pontos percentuais"}. ')
+    if div['iri_max'] is not None:
+        run(p, f'probabilidade de até {div["iri_max"]}% nos trimestres da estação '
+               f'chuvosa. ')
+    if div['divergencia_max'] is not None:
+        run(p, f'A maior divergência entre os dois centros no horizonte é de '
+               f'{div["divergencia_max"]} '
+               f'{"ponto percentual" if div["divergencia_max"] == 1 else "pontos percentuais"}'
+               f', em {div["trimestre_divergencia_max"]}. ')
+    else:
+        run(p, 'Não há trimestre em que os dois centros tenham publicado valor '
+               'simultaneamente nesta emissão — divergência não calculada. ')
+    emissao_cpc_prob = meta.get('cpc_probabilidades_emissao')
+    emissao_iri = meta.get('iri_emissao')
+    if emissao_cpc_prob and emissao_iri and emissao_cpc_prob != emissao_iri:
+        run(p, f'Nota: a comparação usa fontes de emissões diferentes — CPC '
+               f'({emissao_cpc_prob}) e IRI ({emissao_iri}) — não são o mesmo ciclo '
+               f'de publicação. ', tam=8.5, cor=CINZA)
     run(p, 'Divergências acima de 10 pontos percentuais indicam incerteza elevada e '
            'recomendam postura mais conservadora na janela de transição.')
 

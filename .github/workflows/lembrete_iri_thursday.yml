@@ -75,6 +75,20 @@ jobs:
                 se ainda bate)
           - [ ] Data da próxima emissão prevista
 
+          ## Sinal automático (Fase ENSO-AUTO, 19/10/2026)
+
+          \`scripts/update_indices.py\` tenta, a cada execução do workflow
+          semanal, buscar esta página do runner do GitHub Actions e
+          comparar um HASH do conteúdo com a última checagem — **nunca
+          extrai nenhuma probabilidade**, só sinaliza se algo mudou (ver
+          \`verificar_mudanca_pagina_iri\`). Se o Sumário do run mais recente
+          de \`indices_semanal.yml\` mostrar "Página do IRI mudou desde a
+          última checagem: true", é sinal de que há conteúdo novo pra
+          revisar — mas o sinal pode não existir ainda (depende de o
+          runner conseguir alcançar iri.columbia.edu, não confirmado até
+          o momento desta auditoria) e, mesmo quando existe, NUNCA
+          substitui a extração manual desta checklist.
+
           ## Depois de extrair
 
           Atualizar \`CPC_IRI.seasons\` em \`docs/index.html\` manualmente

@@ -354,21 +354,43 @@ class ComparativoRenderizacaoTestCase(unittest.TestCase):
 
 
 class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
-    """Guarda de regressão: nada relacionado a SARIMAX/XGBoost/EMOS H2,
-    coeficientes, backtests ou balanço hídrico pode ter sido tocado
-    nesta fase — só docs/index.html (bloco CPC_IRI e JS do Comparativo/
-    semáforo) e tests/ deveriam mudar."""
+    """Guarda de regressão — REVISADA na Correção 3 (revisão externa,
+    3ª rodada, Fase ENSO-AUTO).
 
-    INTOCAVEIS = [
-        'scripts/update_dashboard.py',
-        'scripts/gerar_relatorio.py',
-        'scripts/fetch_monthly_data.py',
-        'scripts/update_indices.py',
-        'scripts/verificar_dashboard.py',
-        'data/scen12_best.csv',
-        'data/bh_final.json',
-        'data/fc_results_best.json',
-        'data/serie_subst.csv',
+    A versão original desta guarda (Fase ENSO-IRI) listava, junto dos
+    artefatos científicos de verdade, 4 SCRIPTS OPERACIONAIS de
+    ingestão/apresentação (`gerar_relatorio.py`, `fetch_monthly_data.py`,
+    `update_indices.py`, `verificar_dashboard.py`). Isso era correto
+    NAQUELA fase (nenhum deveria mudar ali), mas errado como guarda
+    PERMANENTE: cada um desses 4 scripts já foi alterado, com
+    autorização externa explícita, em fases posteriores (ENSO-DADOS,
+    ENSO-AUTO) — a guarda antiga comparava sempre contra
+    `merge-base(origin/main, HEAD)`, então qualquer branch futura que
+    tocasse esses scripts (mesmo autorizada) reprovava este teste para
+    sempre, até alguém apagar o teste ou a entrada da lista. Isso é
+    "congelamento permanente de scripts operacionais", exatamente o
+    que a revisão pediu para evitar — não "proteção de modelo".
+
+    Esta versão protege só o que é de fato científico: o script do
+    modelo (`update_dashboard.py` — SARIMAX/XGBoost/EMOS H2) e os
+    artefatos de dados que são SAÍDA ou REFERÊNCIA do modelo, nunca
+    produzidos por um script de ingestão/automação. Complementado por
+    testes de INVARIANTE DE CONTEÚDO (não só de arquivo): o bloco
+    `SARIMAX_DATA` e o bloco `BH` embutidos em `docs/index.html` têm
+    que continuar byte-a-byte idênticos entre o merge-base e HEAD,
+    mesmo quando `docs/index.html` como um todo muda legitimamente
+    (ex.: bloco `CPC_IRI`, JS do Comparativo/semáforo) — prova direta
+    de que "nenhum resultado de precipitação ou balanço hídrico foi
+    recalculado", em vez de inferir isso indiretamente do nome dos
+    arquivos tocados.
+    """
+
+    ARQUIVOS_CIENTIFICOS = [
+        'scripts/update_dashboard.py',    # SARIMAX/XGBoost/EMOS H2 — núcleo do modelo
+        'data/scen12_best.csv',           # saída do modelo: cenários/probabilidades
+        'data/bh_final.json',             # saída do modelo: balanço hídrico calculado
+        'data/fc_results_best.json',      # saída do modelo: projeção de precipitação
+        'data/serie_subst.csv',           # série de referência que treina o modelo
     ]
 
     @classmethod
@@ -381,13 +403,78 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         except Exception:
             raise unittest.SkipTest('não foi possível determinar o merge-base com origin/main')
 
-    def test_a_nenhum_arquivo_cientifico_ou_de_automacao_foi_alterado(self):
+    def test_a_nenhum_arquivo_cientifico_ou_de_dados_de_referencia_foi_alterado(self):
         resultado = subprocess.run(
-            ['git', 'diff', '--name-only', self.base, '--'] + self.INTOCAVEIS,
+            ['git', 'diff', '--name-only', self.base, '--'] + self.ARQUIVOS_CIENTIFICOS,
             cwd=ROOT, capture_output=True, text=True,
         )
         alterados = [l for l in resultado.stdout.splitlines() if l.strip()]
-        self.assertEqual(alterados, [], f'arquivo(s) fora do escopo desta fase foram alterados: {alterados}')
+        self.assertEqual(alterados, [], f'arquivo(s) científico(s)/de referência foram alterados: {alterados}')
+
+    def _ler_arquivo_na_revisao(self, ref, caminho):
+        resultado = subprocess.run(
+            ['git', 'show', f'{ref}:{caminho}'],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        return resultado.stdout if resultado.returncode == 0 else None
+
+    def test_b_bloco_sarimax_data_embutido_no_html_e_byte_identico(self):
+        """Invariante de CONTEÚDO, não só de arquivo inteiro:
+        `docs/index.html` muda legitimamente nesta fase (bloco
+        `CPC_IRI`, JS do Comparativo) — o que nunca pode mudar é o
+        bloco `SARIMAX_DATA` dentro dele, gerado só por
+        `update_dashboard.py` (nunca por scripts desta fase)."""
+        def bloco(ref):
+            conteudo = self._ler_arquivo_na_revisao(ref, 'docs/index.html')
+            if conteudo is None:
+                return None
+            m = re.search(r'const SARIMAX_DATA\s*=\s*\{.*?\};\n', conteudo, re.DOTALL)
+            return m.group(0) if m else None
+
+        bloco_base, bloco_head = bloco(self.base), bloco('HEAD')
+        if bloco_base is None or bloco_head is None:
+            self.skipTest('SARIMAX_DATA não encontrado em uma das revisões')
+        self.assertEqual(bloco_base, bloco_head,
+                          'SARIMAX_DATA mudou — nenhuma fase de ingestão/automação deveria '
+                          'alterar a saída do modelo SARIMAX/XGBoost')
+
+    def test_c_bloco_balanco_hidrico_bh_e_byte_identico(self):
+        """Mesmo princípio para `const BH = {...}` (balanço hídrico
+        calculado) — verificação direta pedida: 'nenhum resultado de
+        precipitação ou balanço hídrico foi recalculado'."""
+        def bloco(ref):
+            conteudo = self._ler_arquivo_na_revisao(ref, 'docs/index.html')
+            if conteudo is None:
+                return None
+            ini = conteudo.find('const BH = {')
+            fim = conteudo.find('\nconst SC_COL = {', ini)
+            if ini < 0 or fim < 0:
+                return None
+            return conteudo[ini:fim]
+
+        bloco_base, bloco_head = bloco(self.base), bloco('HEAD')
+        if bloco_base is None or bloco_head is None:
+            self.skipTest('bloco BH não encontrado em uma das revisões')
+        self.assertEqual(bloco_base, bloco_head,
+                          'bloco BH (balanço hídrico) mudou — nenhuma fase de ingestão '
+                          'deveria recalculá-lo')
+
+    def test_d_scripts_operacionais_podem_mudar_quando_autorizado(self):
+        """Contraste explícito com a guarda antiga: scripts de
+        ingestão/apresentação NÃO estão na lista de intocáveis — esta
+        fase (ENSO-AUTO) os altera com autorização explícita, e isso
+        é esperado, não uma regressão. Este teste documenta a decisão,
+        não afirma que eles mudaram (podem ou não, dependendo da
+        fase) — só confirma que a guarda não os bloqueia."""
+        scripts_operacionais = [
+            'scripts/gerar_relatorio.py',
+            'scripts/fetch_monthly_data.py',
+            'scripts/update_indices.py',
+            'scripts/verificar_dashboard.py',
+        ]
+        self.assertTrue(
+            set(scripts_operacionais).isdisjoint(self.ARQUIVOS_CIENTIFICOS),
+            'scripts operacionais nunca devem entrar na lista de arquivos científicos')
 
 
 if __name__ == '__main__':

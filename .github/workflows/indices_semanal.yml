@@ -70,7 +70,13 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # id necessário para que o passo "Sumário" leia
+      # steps.atualizar.outputs.iri_estado — o estado do mecanismo do
+      # IRI vem DIRETO da função Python (`verificar_mudanca_pagina_iri`,
+      # via `_emitir_output_github`), nunca inferido de `git diff` pelo
+      # workflow (Correção 2, revisão externa 3ª rodada).
       - name: Atualizar índices oceânicos (wksst 4 regiões + RONI)
+        id: atualizar
         run: python scripts/update_indices.py
         env:
           TZ: America/Araguaina
@@ -155,4 +161,22 @@ jobs:
           echo "| **Data** | $(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT') |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Alterações** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Estado do mecanismo do IRI** | ${{ steps.atualizar.outputs.iri_estado }} |" >> $GITHUB_STEP_SUMMARY
+          # Estado vem direto da função Python (verificar_mudanca_pagina_iri,
+          # ver Correção 2) — nunca inferido de git diff. 4 valores
+          # possíveis: initialized/changed/unchanged/unavailable.
+          case "${{ steps.atualizar.outputs.iri_estado }}" in
+            changed)
+              echo "🔔 Conteúdo da página do IRI mudou desde a última checagem — sinal de possível nova emissão, NUNCA uma confirmação oficial. Extração continua manual (ver Issue mensal de lembrete)." >> $GITHUB_STEP_SUMMARY
+              ;;
+            initialized)
+              echo "ℹ️ Primeira checagem do mecanismo do IRI — hash inicial gravado, sem comparação ainda (nunca soa como mudança na primeira coleta)." >> $GITHUB_STEP_SUMMARY
+              ;;
+            unavailable)
+              echo "⚠️ IRI não alcançável (ou conteúdo inválido/truncado) nesta execução — hash anterior preservado, índices CPC/oceânicos não são afetados." >> $GITHUB_STEP_SUMMARY
+              ;;
+            unchanged)
+              echo "✅ Sem mudança detectada na página do IRI desde a última checagem." >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
           echo "ℹ️ Não recalcula SARIMAX/XGBoost nem o relatório — isso continua só no ciclo mensal (dia 21)." >> $GITHUB_STEP_SUMMARY

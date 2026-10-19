@@ -1,0 +1,56 @@
+name: Diagnóstico — acesso à página do IRI (uso único, Fase ENSO-AUTO)
+
+# Investigação da Seção 2 da Fase ENSO-AUTO: existe acesso confiável ao
+# conteúdo textual da página do IRI a partir do runner do GitHub Actions,
+# independentemente do bloqueio de rede confirmado no ambiente Claude
+# Code (403 no proxy desta sessão, ver Fase ENSO-IRI)? Este workflow NÃO
+# extrai nenhuma probabilidade nem dado científico — só testa
+# alcançabilidade (HTTP status) e inspeciona a ESTRUTURA do HTML (tags,
+# presença de tabelas/listas), para informar a decisão de automatizar ou
+# não. Roda só via workflow_dispatch, nunca em cron — é diagnóstico, não
+# parte do pipeline operacional. Seguro remover depois de decidido.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testar_acesso:
+    name: Testar alcançabilidade e estrutura da página do IRI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Testar GET na página do IRI
+        run: |
+          URL='https://iri.columbia.edu/our-expertise/climate/forecasts/enso/current/'
+          echo "URL: $URL"
+          HTTP_CODE=$(curl -sS -o /tmp/iri_pagina.html -w '%{http_code}' \
+            --max-time 30 -A 'Mozilla/5.0 (compatible; sinobras-clima-diagnostico/1.0)' \
+            "$URL" || echo "FALHA_CURL")
+          echo "HTTP_CODE=$HTTP_CODE"
+          echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT" 2>/dev/null || true
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "--- tamanho do arquivo ---"
+            wc -c /tmp/iri_pagina.html
+            echo "--- primeiras tags <table>/<th>/<td>/<abbr> encontradas (contagem só) ---"
+            grep -o '<table' /tmp/iri_pagina.html | wc -l
+            grep -o '<th' /tmp/iri_pagina.html | wc -l
+            grep -o '<td' /tmp/iri_pagina.html | wc -l
+            grep -o '<abbr' /tmp/iri_pagina.html | wc -l
+            echo "--- indícios de JS/canvas renderizando conteúdo (SPA) ---"
+            grep -ic 'react\|__next\|ng-app\|<canvas' /tmp/iri_pagina.html || true
+            echo "--- trecho em torno de 'Quick Look' (sem extrair números) ---"
+            grep -o '.\{80\}Quick Look.\{80\}' /tmp/iri_pagina.html | head -3 || echo "(não encontrado)"
+          else
+            echo "Página não respondeu 200 — ver HTTP_CODE acima."
+          fi
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🔍 Diagnóstico de acesso — página do IRI" >> $GITHUB_STEP_SUMMARY
+          echo "Resultado no log do passo anterior (HTTP_CODE, estrutura HTML)." >> $GITHUB_STEP_SUMMARY
+          echo "Workflow de uso único — não faz parte do pipeline operacional." >> $GITHUB_STEP_SUMMARY
