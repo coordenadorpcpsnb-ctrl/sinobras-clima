@@ -182,6 +182,76 @@ class ComDadosReaisTestCase(unittest.TestCase):
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         self.assertIn('gerado', resultado.stdout)
 
+    def test_d_maximos_cpc_iri_sao_identificados_com_suas_emissoes(self):
+        """Verificação explícita pedida na 3ª rodada de revisão
+        externa: os máximos de probabilidade de CADA centro, no
+        Sumário Executivo, precisam citar a PRÓPRIA emissão — a
+        tabela de probabilidades CPC (`cpc_probabilidades_emissao`) é
+        uma fonte separada do Diagnostic Discussion (`cpc_emissao`);
+        nunca apresentar os dois números sem identificar de qual
+        emissão cada um vem."""
+        d = gr.carregar()
+        self.assertIsNotNone(d['divergencia']['cpc_max'],
+                              'pré-requisito do teste: cpc_max precisa existir nos dados reais')
+        doc = gr.montar(d)
+        texto_sumario = '\n'.join(p.text for p in doc.paragraphs[:8])
+        self.assertIn(str(d['divergencia']['cpc_max']), texto_sumario)
+        self.assertIn(d['meta'].get('cpc_probabilidades_emissao', ''), texto_sumario)
+        self.assertIn(d['meta'].get('iri_emissao', ''), texto_sumario)
+        # as duas emissões citadas no MESMO parágrafo que os máximos —
+        # não em parágrafos desconectados do resto do documento.
+        paragrafo_com_cpc_max = next(
+            p.text for p in doc.paragraphs if str(d['divergencia']['cpc_max']) + '%' in p.text)
+        self.assertIn(d['meta'].get('cpc_probabilidades_emissao', ''), paragrafo_com_cpc_max)
+        self.assertIn(d['meta'].get('iri_emissao', ''), paragrafo_com_cpc_max)
+
+    def test_e_trimestre_de_maior_divergencia_aparece_no_texto(self):
+        d = gr.carregar()
+        div = d['divergencia']
+        if div['trimestre_divergencia_max'] is None:
+            self.skipTest('nenhum trimestre comum nesta execução real — divergência não calculada')
+        doc = gr.montar(d)
+        texto_completo = '\n'.join(p.text for p in doc.paragraphs)
+        self.assertIn(div['trimestre_divergencia_max'], texto_completo)
+
+    def test_f_null_nunca_aparece_como_zero_no_texto_real(self):
+        """Os dois centros podem ter trimestres sem valor (null) —
+        confirma que a geração real não forjou um 0% em lugar nenhum
+        por causa disso (o texto só menciona percentuais que vieram de
+        d['divergencia'], nunca itera cpc[]/iri[] bruto)."""
+        d = gr.carregar()
+        doc = gr.montar(d)
+        texto_completo = '\n'.join(p.text for p in doc.paragraphs)
+        # '0%' isolado (não precedido por outro dígito, ex. não "100%")
+        # é o padrão que apareceria se null tivesse sido coagido a 0 em
+        # algum ponto da renderização.
+        self.assertNotRegex(texto_completo, r'(?<!\d)0%[,.]')
+
+    def test_g_trajetoria_iri_preservada_nao_e_chamada_de_nova_previsao(self):
+        """A trajetória Niño 3.4 do IRI pode estar preservada de uma
+        emissão anterior (ver Fase ENSO-IRI) — o relatório usa
+        `iri_pico` (do array preservado) só como 'pico projetado',
+        nunca rotulado como vindo da emissão atual do Quick Look."""
+        d = gr.carregar()
+        doc = gr.montar(d)
+        texto_completo = '\n'.join(p.text for p in doc.paragraphs)
+        self.assertNotIn('pico projetado de setembro', texto_completo.lower())
+        self.assertNotIn('nova previsão do iri', texto_completo.lower())
+
+    def test_h_nenhum_resultado_de_precipitacao_ou_bh_e_recalculado_por_este_script(self):
+        """gerar_relatorio.py só LÊ data/scen12_best.csv e
+        data/bh_final.json (saídas já calculadas por
+        update_dashboard.py) — nunca invoca nenhuma rotina de cálculo
+        de precipitação ou balanço hídrico. Confirmado estaticamente:
+        o módulo não importa nem referencia nenhuma função de cálculo
+        desse tipo."""
+        fonte = (ROOT / 'scripts' / 'gerar_relatorio.py').read_text(encoding='utf-8')
+        # chamadas de função reais (não menções a "SARIMAX"/"XGBoost"
+        # em texto descritivo do relatório, que são esperadas e corretas)
+        for termo_proibido in ('solve_bh(', '.fit(', '.predict('):
+            self.assertNotIn(termo_proibido, fonte,
+                              f'{termo_proibido!r} encontrado — gerar_relatorio.py não deveria calcular nada')
+
 
 if __name__ == '__main__':
     unittest.main()

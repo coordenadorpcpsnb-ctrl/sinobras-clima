@@ -252,43 +252,53 @@ class AtualizarCpcProbabilidadesNoHtmlTestCase(unittest.TestCase):
     def test_a_preenche_so_os_seasons_existentes_por_chave_completa_e_poe_null_no_resto(self):
         probs = {'SON/26': {'ln': 0.0, 'neu': 0.0, 'en': 100.0},
                  'FMA/27': {'ln': 0.0, 'neu': 2.0, 'en': 98.0}}
-        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, probs, emissao='out/2026')
         self.assertTrue(mudou)
         self.assertIn("cpc:{ en:[null,100.0,98.0], neu:[null,0.0,2.0], ln:[null,0.0,0.0] },", novo_html)
 
     def test_a2_sigla_igual_mas_ano_diferente_nunca_e_associada_errado(self):
         """Mesma sigla 'FMA', mas pra 2026 (não existe em seasons, que
         só tem FMA/27) — não pode preencher o slot de FMA/27 com o
-        valor de um FMA/26 só porque a sigla bate."""
+        valor de um FMA/26 só porque a sigla bate. Com `emissao`
+        consistente ('out/2026'), FMA/26 também é rejeitado pela
+        checagem de consistência emissão×trimestres (Correção 1, 2ª
+        rodada) — reforça, não substitui, a proteção original."""
         probs = {'FMA/26': {'ln': 9.0, 'neu': 9.0, 'en': 82.0}}
-        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, probs, emissao='out/2026')
         self.assertFalse(mudou)
         self.assertEqual(novo_html, HTML_CPC_IRI_AMOSTRA)
 
     def test_b_nunca_toca_o_bloco_iri(self):
         probs = {'SON/26': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
-        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, probs, emissao='out/2026')
         self.assertIn("iri:{ en:[100,97,78], neu:[0,3,22], ln:[0,0,0] },", novo_html)
 
     def test_c_nunca_toca_a_lista_de_seasons(self):
         probs = {'SON/26': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
-        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, probs, emissao='out/2026')
         self.assertIn("seasons: ['ASO/26','SON/26','FMA/27'],", novo_html)
 
     def test_d_probabilidades_vazio_nao_altera_nada(self):
-        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, {})
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, {}, emissao='out/2026')
         self.assertFalse(mudou)
         self.assertEqual(novo_html, HTML_CPC_IRI_AMOSTRA)
 
     def test_e_nenhum_season_bate_mantem_html_original(self):
         probs = {'XYZ/99': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
-        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        novo_html, mudou = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, probs, emissao='out/2026')
         self.assertFalse(mudou)
         self.assertEqual(novo_html, HTML_CPC_IRI_AMOSTRA)
 
     def test_f_adiciona_metadado_de_data_de_coleta(self):
         probs = {'SON/26': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
-        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(HTML_CPC_IRI_AMOSTRA, probs)
+        novo_html, _ = ui.atualizar_cpc_probabilidades_no_html(
+            HTML_CPC_IRI_AMOSTRA, probs, emissao='out/2026')
         self.assertIn('cpc_probabilidades_atualizado_em:', novo_html)
 
     def test_g_nunca_sobrescreve_cpc_emissao_a_data_do_diagnostic_discussion(self):
@@ -324,7 +334,13 @@ class AtualizarCpcProbabilidadesNoHtmlTestCase(unittest.TestCase):
             self.assertEqual(html_atual.count(campo + ':'), 1, f'{campo} duplicado')
 
     def test_k_ultima_alteracao_so_e_registrada_quando_o_valor_de_fato_muda(self):
-        probs_v1 = {'SON/26': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
+        # 'FMA/27' (não 'SON/26') porque precisa continuar alcançável
+        # tanto a partir de 'out/2026' quanto de 'nov/2026' andando
+        # sequencialmente (Correção 1, 2ª rodada: a emissão buscada
+        # precisa ser consistente com os trimestres do documento) —
+        # 'SON/26' só é alcançável a partir de out/2026, nunca de
+        # nov/2026 (seria retroceder no calendário).
+        probs_v1 = {'FMA/27': {'ln': 0.0, 'neu': 0.0, 'en': 100.0}}
         html1, _ = ui.atualizar_cpc_probabilidades_no_html(
             HTML_CPC_IRI_AMOSTRA, probs_v1, emissao='out/2026')
         self.assertIn('cpc_probabilidades_ultima_alteracao:', html1)
@@ -342,11 +358,11 @@ class AtualizarCpcProbabilidadesNoHtmlTestCase(unittest.TestCase):
                           'ultima_alteracao não deveria mudar só porque a emissão mudou')
 
         # Agora muda o VALOR de fato — ultima_alteracao tem que atualizar.
-        probs_v2 = {'SON/26': {'ln': 10.0, 'neu': 10.0, 'en': 80.0}}
+        probs_v2 = {'FMA/27': {'ln': 10.0, 'neu': 10.0, 'en': 80.0}}
         html3, mudou3 = ui.atualizar_cpc_probabilidades_no_html(
             html2, probs_v2, emissao='nov/2026')
         self.assertTrue(mudou3)
-        self.assertIn("cpc:{ en:[null,80.0,null]", html3)
+        self.assertIn("cpc:{ en:[null,null,80.0]", html3)
 
 
 class BuildSeriesTestCase(unittest.TestCase):

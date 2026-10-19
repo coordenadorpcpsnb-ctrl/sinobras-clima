@@ -535,9 +535,17 @@ def montar(d):
                f'no Niño 3.4. ')
     div = d['divergencia']
     if div['cpc_max'] is not None and div['iri_max'] is not None:
-        run(p, f'CPC e IRI convergem em probabilidade de até {div["cpc_max"]}% e '
-               f'{div["iri_max"]}%, respectivamente, para a persistência do evento ao '
-               f'longo da estação chuvosa. ')
+        # Cada máximo precisa citar a PRÓPRIA emissão — a tabela de
+        # probabilidades CPC (cpc_probabilidades_emissao) é uma fonte
+        # separada do Diagnostic Discussion (cpc_emissao); nunca
+        # apresentar os dois números sem identificar de qual emissão
+        # cada um vem (verificação explícita pedida na 3ª rodada de
+        # revisão externa).
+        run(p, f'CPC (tabela de probabilidades, emissão '
+               f'{meta.get("cpc_probabilidades_emissao","n/d")}) e IRI (Quick Look, '
+               f'emissão {meta.get("iri_emissao","n/d")}) convergem em probabilidade de '
+               f'até {div["cpc_max"]}% e {div["iri_max"]}%, respectivamente, para a '
+               f'persistência do evento ao longo da estação chuvosa. ')
     seco = linha_c['anom_pct'] < 0
     run(p, f'Para a safra isso se traduz em uma estação chuvosa '
            f'{"mais curta e menos volumosa" if seco else "de volume acima do normal"}, '

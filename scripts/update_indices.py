@@ -22,6 +22,7 @@ como figura, sem ascii algum.
 import re, sys, shutil
 import hashlib
 import html as html_mod
+import os
 from pathlib import Path
 from datetime import date, datetime
 import urllib.request
@@ -565,29 +566,89 @@ def _normalizar_texto_html(html):
     return re.sub(r'\s+', ' ', sem_tags).strip()
 
 
+def _emitir_output_github(nome, valor):
+    """Grava `nome=valor` em `$GITHUB_OUTPUT` (mecanismo nativo do
+    GitHub Actions para um step expor saída a steps seguintes) quando
+    a execução roda dentro de um workflow — fora do CI (execução
+    local, testes), a variável de ambiente não existe e esta função só
+    não faz nada. Nunca lança exceção: um output que não pôde ser
+    escrito não deve derrubar o restante do script."""
+    caminho = os.environ.get('GITHUB_OUTPUT')
+    if not caminho:
+        return
+    try:
+        with open(caminho, 'a', encoding='utf-8') as f:
+            f.write(f'{nome}={valor}\n')
+    except Exception:
+        pass
+
+
+ESTADOS_IRI = ('initialized', 'changed', 'unchanged', 'unavailable')
+
+
 def verificar_mudanca_pagina_iri(html, hash_anterior):
     """
     Compara o hash SHA-256 do texto normalizado de `html` (buscado
     agora) com `hash_anterior` (lido de IRI_HASH_PATH, ou None na
-    primeira execução). Retorna (hash_novo_ou_hash_anterior, mudou:
-    bool) — NUNCA extrai nem interpreta conteúdo, só detecta mudança.
+    primeira execução). Retorna (hash_novo_ou_hash_anterior, estado),
+    onde `estado` é um dos 4 valores de `ESTADOS_IRI` — resultado
+    EXPLÍCITO e testável desta função Python, nunca algo que o chamador
+    (workflow) precisa inferir de `git diff` (Correção 2, revisão
+    externa 3ª rodada). NUNCA extrai nem interpreta conteúdo científico
+    — só detecta mudança de TEXTO.
 
-    `html` vazio/None (fetch falhou) -> (hash_anterior, False) — nunca
-    sobrescreve um hash bom por falha de fonte. Página menor que
-    `_TAMANHO_MINIMO_PAGINA_IRI` (texto normalizado) é tratada como
-    falha (provável página de erro/truncada), mesma barreira.
-    Primeira execução (hash_anterior is None) grava o hash inicial mas
-    NUNCA reporta como "mudança" — não há nada anterior para comparar.
+      - 'unavailable': `html` vazio/None (fetch falhou) OU menor que
+        `_TAMANHO_MINIMO_PAGINA_IRI` (texto normalizado — provável
+        página de erro/truncada). `hash_anterior` é devolvido
+        INALTERADO — nunca sobrescreve um hash bom por falha de fonte,
+        mesma disciplina de persistência de TSA/PDO/RONI.
+      - 'initialized': primeira execução (`hash_anterior is None`) —
+        grava o hash inicial, mas NUNCA é reportado como mudança (não
+        há nada anterior para comparar; gerar alerta aqui seria um
+        falso positivo logo na primeira coleta).
+      - 'unchanged': hash novo é igual ao anterior.
+      - 'changed': hash novo é diferente do anterior — sinal de que o
+        CONTEÚDO da página mudou, nunca uma confirmação de nova
+        emissão oficial do IRI (essa confirmação continua exigindo
+        extração manual, ver lembrete_iri_thursday.yml).
     """
     if not html:
-        return hash_anterior, False
+        return hash_anterior, 'unavailable'
     texto_norm = _normalizar_texto_html(html)
     if len(texto_norm) < _TAMANHO_MINIMO_PAGINA_IRI:
-        return hash_anterior, False
+        return hash_anterior, 'unavailable'
     hash_novo = hashlib.sha256(texto_norm.encode('utf-8')).hexdigest()
     if hash_anterior is None:
-        return hash_novo, False
-    return hash_novo, hash_novo != hash_anterior
+        return hash_novo, 'initialized'
+    return hash_novo, ('changed' if hash_novo != hash_anterior else 'unchanged')
+
+
+def ler_hash_iri():
+    """Lê o hash persistido em `IRI_HASH_PATH`, ou `None` se o arquivo
+    não existir, estiver vazio ou não puder ser lido — nunca lança
+    exceção. Extraída como função própria (Correção 2, revisão externa
+    3ª rodada: 'presença de arquivo hash já existente' e 'persistência
+    do hash entre execuções' precisam ser testáveis sem depender do
+    `main()` inteiro)."""
+    try:
+        if IRI_HASH_PATH.exists():
+            texto = IRI_HASH_PATH.read_text(encoding='utf-8').strip()
+            return texto or None
+    except Exception:
+        pass
+    return None
+
+
+def gravar_hash_iri(hash_novo):
+    """Grava `hash_novo` em `IRI_HASH_PATH`, criando o diretório pai se
+    necessário. Retorna True/False (sucesso) — nunca lança exceção,
+    falha ao gravar não deve derrubar o restante do script."""
+    try:
+        IRI_HASH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        IRI_HASH_PATH.write_text(hash_novo, encoding='utf-8')
+        return True
+    except Exception:
+        return False
 
 
 def _seasons_do_cpc_iri(html):
@@ -616,6 +677,36 @@ def _upsert_campo_meta(bloco, nome_campo, valor):
     return re.sub(r'(_meta:\s*\{)', r'\1' + nova_linha, bloco, count=1)
 
 
+def _emissao_e_trimestres_consistentes(emissao, probabilidades):
+    """
+    Confere se CADA chave 'SEAS/YY' de `probabilidades` é alcançável a
+    partir do mês/ano de `emissao`, caminhando sequencialmente (+1 mês
+    por posição, mesma lógica de `_alinhar_seasons_com_ano`) numa
+    janela de 13 trimestres — cobre o maior horizonte que a página
+    chega a publicar. `probabilidades` e `emissao` chegam como
+    parâmetros SEPARADOS em `atualizar_cpc_probabilidades_no_html`;
+    esta função nunca assume que quem chamou gerou os dois juntos a
+    partir da mesma página — sempre revalida (Correção 1, revisão
+    externa 2ª rodada: "o documento apresenta inconsistências entre a
+    identificação de emissão e os períodos de previsão").
+
+    Retorna False também se `emissao` não puder ser interpretada —
+    chamador trata isso como caso fail-safe (preservar).
+    """
+    tup = _mes_ano_pt_para_tupla(emissao)
+    if tup is None:
+        return False
+    ano_emissao, mes_emissao = tup
+    mes_atual, ano_atual = mes_emissao, ano_emissao
+    esperado = set()
+    for _ in range(13):
+        esperado.add(f'{_MES_CENTRAL_PARA_SIGLA[mes_atual]}/{str(ano_atual)[2:]}')
+        mes_atual += 1
+        if mes_atual > 12:
+            mes_atual, ano_atual = 1, ano_atual + 1
+    return all(s in esperado for s in probabilidades)
+
+
 def atualizar_cpc_probabilidades_no_html(html, probabilidades, emissao=None):
     """
     Preenche `CPC_IRI.cpc.{en,neu,ln}` a partir de `probabilidades`
@@ -626,37 +717,68 @@ def atualizar_cpc_probabilidades_no_html(html, probabilidades, emissao=None):
     compartilhada com CPC_IRI.iri, que continua manual; mudar o
     comprimento de um sem o outro quebraria o gráfico).
 
-    `emissao` (opcional): string 'mmm/AAAA' do cabeçalho "Issued" da
-    página de origem (ver `extrair_emissao_cpc_probabilidades`) — vira
+    `emissao`: string 'mmm/AAAA' do cabeçalho "Issued" da página de
+    origem (ver `extrair_emissao_cpc_probabilidades`) — vira
     `_meta.cpc_probabilidades_emissao`, SEPARADO da data de coleta
     (`cpc_probabilidades_atualizado_em`, sempre "hoje") e nunca
     confundido com `_meta.cpc_emissao` (a data do Diagnostic
     Discussion, que esta função nunca toca).
 
+    FAIL-SAFE (Correção 1, revisão externa 2ª rodada) — a função só
+    atualiza quando TODAS as condições abaixo são verificadas; em
+    qualquer caso inconclusivo, preserva os valores anteriores e
+    devolve (html, False), nunca tenta "adivinhar":
+      1. `emissao` foi identificada (não é None) — nunca associa
+         probabilidades a uma emissão desconhecida.
+      2. `emissao` tem formato reconhecível ('mmm/AAAA' válido).
+      3. As chaves de `probabilidades` são consistentes com `emissao`
+         (ver `_emissao_e_trimestres_consistentes`) — nunca aceita um
+         documento cuja identificação de emissão não bate com os
+         períodos de previsão que ele próprio carrega.
+      4. Se já existe uma emissão gravada (`cpc_probabilidades_emissao`)
+         mas ela está num formato não reconhecível, a ordem cronológica
+         é INCONCLUSIVA — preserva, nunca assume que pode sobrescrever.
+      5. Se a ordem PUDER ser determinada e a emissão buscada for mais
+         ANTIGA que a já gravada, rejeita (nunca regride).
+
     Trimestre de `seasons` sem equivalente em `probabilidades` (ex.:
     ASO/26 já em curso, o CPC não publica mais previsão pra ele) vira
     `null` — nunca estimado, nunca herdado do valor antigo (herdar
     misturaria um valor de uma emissão antiga com os de uma nova, sem
-    como saber depois qual é qual).
+    como saber depois qual é qual). Dados PARCIAIS (alguns trimestres
+    `null`) associados a uma emissão válida e consistente são aceitos
+    normalmente — só o documento INTEIRO é rejeitado quando alguma das
+    5 condições acima falha, nunca um trimestre individual ausente.
 
-    Se `probabilidades` vier vazio (fetch falhou, parsing falhou, ou o
-    ano de cada trimestre não pôde ser identificado com segurança —
-    ver parse_cpc_probabilidades), não mexe em nada — devolve
-    (html, False) — mesma disciplina de persistência de
-    TSA/PDO/CHC-Preliminar: nunca sobrescrever um dado bom só porque a
-    fonte falhou desta vez.
-
-    IDEMPOTENTE e sem reescritas desnecessárias (revisão externa, 2ª
-    rodada, item "Correção 1"): se os valores de `cpc[]` calculados
-    agora forem byte-a-byte IGUAIS aos já gravados, e a emissão
-    reportada também não mudou, a função não reescreve nada — devolve
-    (html, False). `_meta.cpc_probabilidades_ultima_alteracao` só é
-    tocado quando os valores de fato mudam (nunca a cada execução).
+    IDEMPOTENTE e sem reescritas desnecessárias: se os valores de
+    `cpc[]` calculados agora forem byte-a-byte IGUAIS aos já gravados,
+    e a emissão reportada também não mudou, a função não reescreve
+    nada — devolve (html, False). `_meta.cpc_probabilidades_ultima_alteracao`
+    só é tocado quando os valores de fato mudam (nunca a cada execução).
 
     Opera só dentro do bloco `const CPC_IRI = {...};` já localizado —
     nunca um re.sub global (CLAUDE.md armadilha 2).
     """
     if not probabilidades:
+        return html, False
+
+    # 1) emissão precisa ter sido identificada.
+    if emissao is None:
+        print('  ⚠ probabilidades CPC recebidas sem emissão identificada — '
+              'ignoradas (nunca associa dado a emissão desconhecida)')
+        return html, False
+
+    # 2) formato da emissão buscada precisa ser reconhecível.
+    tup_novo = _mes_ano_pt_para_tupla(emissao)
+    if tup_novo is None:
+        print(f'  ⚠ emissão CPC buscada ({emissao!r}) não reconhecida — ignorada')
+        return html, False
+
+    # 3) emissão precisa ser consistente com os trimestres recebidos —
+    # nunca confia que os dois parâmetros vieram juntos da mesma fonte.
+    if not _emissao_e_trimestres_consistentes(emissao, probabilidades):
+        print(f'  ⚠ emissão CPC ({emissao}) inconsistente com os trimestres da tabela '
+              f'recebida — ignorada (possível mudança de estrutura da fonte)')
         return html, False
 
     ini = html.find('const CPC_IRI = {')
@@ -693,15 +815,23 @@ def atualizar_cpc_probabilidades_no_html(html, probabilidades, emissao=None):
     m_emissao_atual = re.search(r"cpc_probabilidades_emissao:\s*'([^']*)'", bloco)
     emissao_atual = m_emissao_atual.group(1) if m_emissao_atual else None
 
-    # Seção 6 da Fase ENSO-AUTO: nunca sobrescrever uma emissão mais
-    # recente já gravada por uma mais ANTIGA buscada agora (ex.: página
-    # servida de cache/CDN atrasado). Comparação por (ano, mês), não
-    # por igualdade de string — "out/2026" teria passado pela checagem
-    # antiga mesmo sendo mais nova que "nov/2026" se alguém rodasse o
-    # script fora de ordem.
-    tup_atual = _mes_ano_pt_para_tupla(emissao_atual)
-    tup_novo = _mes_ano_pt_para_tupla(emissao)
-    if tup_atual is not None and tup_novo is not None and tup_novo < tup_atual:
+    # 4) se já existe uma emissão gravada mas não conseguimos
+    # interpretá-la, a ordem cronológica é INCONCLUSIVA — preserva por
+    # segurança, nunca assume que pode sobrescrever (Correção 1: "não é
+    # possível determinar se a emissão é mais antiga que a armazenada").
+    # Ausência completa do campo (`emissao_atual is None`) é diferente:
+    # é a primeira gravação, legitimamente aceita.
+    tup_atual = _mes_ano_pt_para_tupla(emissao_atual) if emissao_atual is not None else None
+    if emissao_atual is not None and tup_atual is None:
+        print(f'  ⚠ emissão CPC já gravada ({emissao_atual!r}) em formato não reconhecido '
+              f'— não é possível confirmar que a nova emissão é mais recente; preservada '
+              f'por segurança')
+        return html, False
+
+    # 5) nunca sobrescrever uma emissão mais recente já gravada por uma
+    # mais ANTIGA buscada agora (ex.: página servida de cache/CDN
+    # atrasado). Comparação por (ano, mês), não por igualdade de string.
+    if tup_atual is not None and tup_novo < tup_atual:
         print(f'  ⚠ tabela de probabilidades CPC buscada ({emissao}) é mais antiga que '
               f'a já gravada ({emissao_atual}) — ignorada, nunca regride uma emissão')
         return html, False
@@ -1254,32 +1384,51 @@ def main():
     # 8. IRI — mecanismo semiautomático de detecção de mudança (best-effort,
     # nunca bloqueia o job, nunca extrai probabilidade — ver comentário em
     # verificar_mudanca_pagina_iri). Resultado é só um SINAL pro lembrete
-    # mensal (lembrete_iri_thursday.yml), nunca substitui a extração manual.
+    # mensal (lembrete_iri_thursday.yml), nunca substitui a extração manual
+    # nem é apresentado como confirmação de nova emissão oficial.
+    #
+    # Todo o bloco é propositalmente defensivo (try/except amplo) —
+    # Correção 2 (revisão externa 3ª rodada): "não permitir que falhas
+    # do IRI interrompam a atualização dos índices CPC". Os índices
+    # CPC/oceânicos já foram processados nos passos 1-7 acima, mas o
+    # passo 9 (histórico) ainda vem depois — uma exceção não tratada
+    # aqui derrubaria main() antes de chegar lá.
     print("\n[8/9] IRI — verificação de mudança na página (best-effort)…")
-    hash_anterior = None
+    estado_iri = 'unavailable'
     try:
-        if IRI_HASH_PATH.exists():
-            hash_anterior = IRI_HASH_PATH.read_text(encoding='utf-8').strip() or None
-    except Exception:
-        hash_anterior = None
+        hash_anterior = ler_hash_iri()
 
-    iri_html = None
-    try:
-        iri_html = fetch(IRI_URL, timeout=20)
+        iri_html = None
+        try:
+            iri_html = fetch(IRI_URL, timeout=20)
+        except Exception as e:
+            print(f"  ⚠ IRI não alcançável deste runner: {e} — hash preservado, sem sinalização")
+
+        hash_novo, estado_iri = verificar_mudanca_pagina_iri(iri_html, hash_anterior)
+        if hash_novo and hash_novo != hash_anterior:
+            gravar_hash_iri(hash_novo)
+
+        if estado_iri == 'changed':
+            print("  🔔 Conteúdo da página do IRI mudou desde a última checagem — "
+                  "sinal de possível nova emissão, NUNCA uma confirmação; extração "
+                  "oficial continua manual (ver Issue mensal)")
+        elif estado_iri == 'initialized':
+            print("  ℹ primeira checagem — hash inicial gravado, nada a comparar ainda "
+                  "(nunca soa como mudança na primeira coleta)")
+        elif estado_iri == 'unchanged':
+            print("  ✅ sem mudança detectada na página do IRI desde a última checagem")
+        else:
+            print("  ⚠ IRI indisponível nesta execução — hash anterior preservado")
     except Exception as e:
-        print(f"  ⚠ IRI não alcançável deste runner: {e} — hash preservado, sem sinalização")
+        # Nunca deixa uma falha inesperada aqui interromper o passo 9.
+        estado_iri = 'unavailable'
+        print(f"  ⚠ verificação do IRI falhou de forma inesperada: {e} — ignorada, "
+              f"índices CPC/oceânicos já processados não são afetados")
 
-    hash_novo, iri_mudou = verificar_mudanca_pagina_iri(iri_html, hash_anterior)
-    if hash_novo and hash_novo != hash_anterior:
-        IRI_HASH_PATH.parent.mkdir(parents=True, exist_ok=True)
-        IRI_HASH_PATH.write_text(hash_novo, encoding='utf-8')
-    if iri_mudou:
-        print("  🔔 Conteúdo da página do IRI mudou desde a última checagem — "
-              "possível nova emissão; extração continua manual (ver Issue mensal)")
-    elif iri_html and hash_anterior is None:
-        print("  ℹ primeira checagem — hash inicial gravado, nada a comparar ainda")
-    elif iri_html:
-        print("  ✅ sem mudança detectada na página do IRI desde a última checagem")
+    # Resultado vem DIRETO da função Python (não inferido de `git diff`
+    # pelo workflow — Correção 2) — exposto como output do step do
+    # GitHub Actions quando a execução roda lá.
+    _emitir_output_github('iri_estado', estado_iri)
 
     # 9. Histórico — master_monthly.csv e serie_subst.csv
     print("\n[9/9] Atualizando histórico (master_monthly.csv / serie_subst.csv)…")
