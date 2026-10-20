@@ -210,6 +210,66 @@ class BackfillPrecedePipelineAtualTestCase(unittest.TestCase):
         self.assertFalse(resultado['verificavel'])
         self.assertIn('motivo', resultado)
 
+    def test_c_repositorio_raso_reporta_nao_verificavel_sem_consultar_historico(self):
+        """Fase ENSO-CI (2ª rodada de sincronização) — réplica do achado
+        real: em clone raso, `git log --follow --diff-filter=A` erra
+        silenciosamente (aponta o commit de ponta como se tivesse
+        criado o arquivo do zero). A função agora checa
+        `git rev-parse --is-shallow-repository` ANTES de qualquer
+        consulta ao histórico, e se recusa a operar quando o
+        repositório é raso — nunca tenta "adivinhar" com histórico
+        insuficiente. Simula a resposta do `--is-shallow-repository`
+        sem precisar de um clone raso de verdade (já reproduzido uma
+        vez, de forma lenta, ao investigar o achado original)."""
+        import subprocess as sp
+        original_run = sp.run
+
+        def _run_simulando_raso(args, **kwargs):
+            if args[:2] == ['git', 'rev-parse']:
+                return sp.CompletedProcess(args, 0, stdout='true\n', stderr='')
+            raise AssertionError(
+                f'não deveria consultar o histórico (git log/show) quando o '
+                f'repositório é raso — chamada inesperada: {args}')
+
+        aud.subprocess.run = _run_simulando_raso
+        try:
+            resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
+        finally:
+            aud.subprocess.run = original_run
+
+        self.assertFalse(
+            resultado['verificavel'],
+            'repositório raso deve ser reportado como não verificável, '
+            'nunca como um resultado (certo ou errado) do histórico')
+        self.assertIn('raso', resultado['motivo'].lower())
+
+    def test_d_repositorio_completo_consulta_o_historico_normalmente(self):
+        """Sanity complementar ao teste c: quando `--is-shallow-
+        repository` responde 'false', a função deve seguir para a
+        consulta normal do histórico (não travar sempre em
+        verificavel=False por engano)."""
+        import subprocess as sp
+        original_run = sp.run
+        chamadas = []
+
+        def _run_simulando_completo(args, **kwargs):
+            chamadas.append(args)
+            if args[:2] == ['git', 'rev-parse']:
+                return sp.CompletedProcess(args, 0, stdout='false\n', stderr='')
+            return original_run(args, **kwargs)
+
+        aud.subprocess.run = _run_simulando_completo
+        try:
+            resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
+        finally:
+            aud.subprocess.run = original_run
+
+        self.assertTrue(
+            any(c[:2] == ['git', 'log'] for c in chamadas),
+            'com repositório não-raso, a função deveria ter consultado o '
+            'histórico via git log --follow --diff-filter=A')
+        self.assertTrue(resultado['verificavel'])
+
 
 class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):
     """Item 6/7 (3ª rodada) — a nova evidência SINOBRAS.csv é citada

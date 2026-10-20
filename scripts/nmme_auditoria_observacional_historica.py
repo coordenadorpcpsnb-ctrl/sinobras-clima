@@ -430,8 +430,34 @@ def verificar_dados_1996_2010_precedem_pipeline_atual():
     repositório que introduziu data/serie_subst.csv — se sim, esse
     backfill preexiste a qualquer execução do código atual, e o método
     que de fato o produziu é DESCONHECIDO (fora deste repositório, ou
-    nunca registrado)."""
+    nunca registrado).
+
+    Fase ENSO-CI (2ª rodada de sincronização, 20/10/2026) — achado real
+    confirmado por simulação: num clone RASO (shallow, ex.: checkout
+    padrão do GitHub Actions sem fetch-depth:0), git trata o único
+    commit "enxertado" (sem pai pra comparar) como se tivesse
+    "adicionado" TODOS os arquivos do zero. `git log --follow
+    --diff-filter=A` então aponta o PRÓPRIO commit de ponta como "o
+    primeiro a introduzir o arquivo" — não é um erro visível, é um
+    valor sem sentido que passa por verdadeiro. Por isso, antes de
+    qualquer consulta ao histórico, esta função recusa operar (nunca
+    por suposição) se o repositório estiver raso — `verificavel=False`
+    é sempre preferível a um resultado silenciosamente errado."""
     try:
+        raso = subprocess.run(
+            ['git', 'rev-parse', '--is-shallow-repository'],
+            cwd=ROOT, capture_output=True, text=True, timeout=15, check=True)
+        if raso.stdout.strip() == 'true':
+            return {
+                'verificavel': False,
+                'motivo': (
+                    'repositório git superficial (shallow clone) — histórico '
+                    'insuficiente para identificar com confiança o commit que '
+                    'introduziu data/serie_subst.csv; num clone raso, git '
+                    'trataria o commit de ponta como se tivesse criado o '
+                    'arquivo do zero, dando um resultado errado sem avisar. '
+                    'Precisa de fetch-depth:0 (ou git fetch --unshallow).'),
+            }
         log = subprocess.run(
             ['git', 'log', '--follow', '--diff-filter=A', '--format=%H', '--', 'data/serie_subst.csv'],
             cwd=ROOT, capture_output=True, text=True, timeout=15, check=True)
