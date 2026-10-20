@@ -218,10 +218,21 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      # requirements-c3s.txt (não requirements.txt) é o arquivo correto
+      # aqui — achado real da PR #57: tests.test_c3s*/test_nmme_* (12
+      # módulos) importam xarray/PyYAML no nível do módulo, mas nenhum
+      # dos dois pacotes nunca esteve em requirements.txt (lacuna
+      # pré-existente, nunca exposta porque nenhum workflow antes deste
+      # rodava a suíte completa num ambiente limpo). requirements-c3s.txt
+      # já declara os dois (já usado por c3s_poc.yml/nmme_poc.yml) —
+      # reaproveitar em vez de duplicar em requirements.txt preserva os
+      # 5 workflows operacionais intocados: nenhum deles chama scripts/
+      # c3s_poc.py ou scripts/nmme_poc.py (os únicos 2 scripts de
+      # produção que usam xarray), só os testes deste job precisam.
       - name: Instalar dependências
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-c3s.txt
 
       - name: Testes científicos — C3S, CFSv2/EMOS H2, CHIRPS v3, NMME
         run: |
