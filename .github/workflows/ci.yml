@@ -170,10 +170,47 @@ jobs:
   regressao_cientifica:
     name: "Job C — Regressão científica (SARIMAX/XGBoost/EMOS H2/2C.3)"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 min, não 30 — reavaliado na revisão externa (20/10/2026) com
+    # dados reais, não arbitrariamente: medindo a MESMA lista de testes
+    # duas vezes seguidas, no mesmo sandbox, sem nenhuma mudança de
+    # código entre as execuções, o tempo real variou de 21m15s para
+    # 30m29s (1273s → 1815s, +43%) — só variância de carga, 0 falhas
+    # nas duas. A segunda medição por si só já consome o orçamento
+    # antigo de 30 min SÓ na execução dos testes, antes de somar
+    # checkout (agora fetch-depth:0), setup-python e pip install. 45
+    # min dá ~15 min de margem sobre a pior medição local observada —
+    # ainda pode não bastar no runner real do GitHub Actions (mais
+    # lento/com menos núcleos que este sandbox); o primeiro run real
+    # é o dado que decide se isso precisa subir de novo.
+    timeout-minutes: 45
     steps:
+      # fetch-depth: 0 é OBRIGATÓRIO aqui — achado da revisão externa
+      # (20/10/2026), confirmado por simulação real: tests.test_nmme_
+      # auditoria_observacional_historica (parte desta lista) chama
+      # scripts/nmme_auditoria_observacional_historica.verificar_dados_
+      # 1996_2010_precedem_pipeline_atual(), que usa `git log --follow
+      # --diff-filter=A` para achar o commit que introduziu
+      # data/serie_subst.csv — isso precisa do histórico completo.
+      #
+      # Com checkout padrão (depth=1, só o commit do PR), o resultado
+      # não é um erro visível: é PIOR — num clone raso, git trata o
+      # único commit "enxertado" (sem pai pra comparar) como se tivesse
+      # "adicionado" TODOS os arquivos do zero. `git log --follow
+      # --diff-filter=A` então aponta o PRÓPRIO commit do PR como "o
+      # primeiro a introduzir o arquivo" — um valor completamente sem
+      # sentido, mas que o teste aceita silenciosamente, porque ele
+      # mesmo recalcula o valor esperado com a MESMA chamada git rasa
+      # (ambos os lados erram do mesmo jeito e "concordam"). Confirmado
+      # empiricamente: clone raso (depth=1) retornou o SHA do próprio
+      # commit de ponta; o mesmo clone com `git fetch --unshallow`
+      # (equivalente a fetch-depth:0) voltou a retornar o commit real
+      # de 2026-07 que introduziu o arquivo. Sem fetch-depth:0 aqui, o
+      # CI nunca pegaria uma regressão real nesta checagem — passaria
+      # sempre, estivesse certo ou não.
       - name: Checkout
         uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v5.6.0
