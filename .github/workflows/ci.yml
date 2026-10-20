@@ -287,3 +287,131 @@ jobs:
           echo "## 🔬 Job C — Regressão científica" >> $GITHUB_STEP_SUMMARY
           echo "SARIMAX/XGBoost/EMOS H2/Métodos 2C.3 (C3S, CFSv2, CHIRPS v3, NMME) " >> $GITHUB_STEP_SUMMARY
           echo "+ guarda de preservação de artefatos científicos. Nunca recalibra nada." >> $GITHUB_STEP_SUMMARY
+
+  # ── Job D — Diagnóstico instrumentado EMOS H2, rápido (TEMPORÁRIO) ──
+  # Investigação das 2 falhas de convergência reproduzidas 2/2 vezes no
+  # Job C real (ver PR #57) mas nunca localmente, mesmo casando versões
+  # exatas de NumPy/SciPy e variando kernel/threads de BLAS. NÃO é
+  # required check, não bloqueia merge (sem branch protection
+  # configurada ainda — armadilha deliberadamente não tocada aqui) e
+  # roda em paralelo aos Jobs A/B/C, sem depender deles.
+  #
+  # Instrumentação puramente observacional (ver
+  # tests/test_diagnostico_emos_h2_ci.py): monkeypatch temporário de
+  # cfsv2_emos_h2_implementacao.minimize que encaminha ao
+  # scipy.optimize.minimize real sem alterar nada e devolve exatamente
+  # o OptimizeResult produzido — prova de equivalência incluída no
+  # próprio arquivo de teste (EquivalenciaDoWrapperTestCase). Nenhum
+  # arquivo científico é tocado. Nenhum assert dos testes originais é
+  # removido ou abrandado.
+  #
+  # Nenhum passo usa continue-on-error nem || true: cada cenário é um
+  # método de teste que RODA o teste original via unittest.TestResult
+  # (nunca deixa a AssertionError dele se propagar como exceção
+  # Python — por isso os demais cenários sempre continuam) e faz
+  # self.assertTrue(passou, ...) ao final — se o teste original
+  # falhar, o próprio método de diagnóstico também é marcado FAIL pelo
+  # unittest, nunca reportado como OK. O arquivo de teste é o
+  # "executor diagnóstico" pedido na revisão externa, não um truque de
+  # YAML — ver MecanismoDeteccaoFalhaTestCase, que prova essa
+  # propagação com uma falha sintética.
+  #
+  # Dividido em "rápido" (este job) e "amplo" (job seguinte) por
+  # medição real, não arbitrariamente: localmente, equivalência +
+  # mecanismo de detecção + cenários 1-4 (que já inclui rodar o módulo
+  # real completo do EMOS H2 uma vez) levou 6m35s; o cenário 5 (que
+  # roda a MESMA lista de ~1659 testes do Job C antes de medir de
+  # novo) tem o mesmo custo que o próprio Job C (21-30min medidos em 2
+  # runs reais). Separar evita um timeout artificialmente alto no job
+  # rápido só para acomodar o lento.
+  #
+  # TEMPORÁRIO (Fase ENSO-CI, revisão externa 20/10/2026) — considerar
+  # remoção deste job, do Job E e de tests/test_diagnostico_emos_h2_ci.py
+  # depois de concluída a investigação, preservando as conclusões em
+  # documentação (não só no log de um run que expira).
+  diagnostico_emos_h2_rapido:
+    name: "Job D — Diagnóstico EMOS H2, rápido (temporário)"
+    runs-on: ubuntu-latest
+    # 15 min — medição local de 6m35s (equivalência + mecanismo de
+    # detecção + cenários 1-4) com margem de ~2,3x, mesmo padrão de
+    # folga usado nos Jobs A/B.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ambiente — versões e backend numérico do runner real
+        run: |
+          python -c "
+          import sys, numpy, scipy, platform
+          print('python:', sys.version)
+          print('platform:', platform.platform())
+          print('processor:', platform.processor())
+          print('numpy:', numpy.__version__)
+          print('scipy:', scipy.__version__)
+          numpy.show_config()
+          "
+          echo "--- CPU do runner ---"
+          cat /proc/cpuinfo | grep "model name" | head -1
+
+      - name: "Prova de equivalência do wrapper (não altera nenhum resultado)"
+        run: python -m unittest tests.test_diagnostico_emos_h2_ci.EquivalenciaDoWrapperTestCase -v
+
+      - name: "Mecanismo de detecção de falha (prova com falha sintética)"
+        run: python -m unittest tests.test_diagnostico_emos_h2_ci.MecanismoDeteccaoFalhaTestCase -v
+
+      - name: "Cenários 1-4 (isolado, em sequência, depois do módulo real)"
+        run: python -m unittest tests.test_diagnostico_emos_h2_ci.DiagnosticoCenariosTestCase -v
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🩺 Job D — Diagnóstico EMOS H2, rápido (temporário)" >> $GITHUB_STEP_SUMMARY
+          echo "Ver o log de cada passo acima para o resumo final (PASS/FAIL por cenário," >> $GITHUB_STEP_SUMMARY
+          echo "versões, CPU, campos do OptimizeResult). Não é required check." >> $GITHUB_STEP_SUMMARY
+
+  # ── Job E — Diagnóstico instrumentado EMOS H2, amplo (TEMPORÁRIO) ───
+  # Cenário 5: roda a MESMA lista de testes do Job C antes de medir de
+  # novo os 2 testes-alvo — por isso tem o mesmo orçamento de tempo do
+  # Job C (justificado lá: 21m15s e 30m29s medidos em 2 runs reais).
+  # Mesmas garantias do Job D (sem continue-on-error, sem || true,
+  # assert explícito sobre o resultado real, TEMPORÁRIO).
+  diagnostico_emos_h2_amplo:
+    name: "Job E — Diagnóstico EMOS H2, amplo (temporário)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Cenário 5 (depois da suíte científica ampla — mesma lista do Job C)"
+        run: python -m unittest tests.test_diagnostico_emos_h2_ci.DiagnosticoCenario5TestCase -v
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🩺 Job E — Diagnóstico EMOS H2, amplo (temporário)" >> $GITHUB_STEP_SUMMARY
+          echo "Ver o log do passo acima para o resumo final. Não é required check." >> $GITHUB_STEP_SUMMARY
+          echo "Instrumentação puramente observacional — nenhum resultado científico alterado." >> $GITHUB_STEP_SUMMARY
