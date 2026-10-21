@@ -378,8 +378,22 @@ jobs:
     # folga usado nos Jobs A/B.
     timeout-minutes: 15
     steps:
+      # fetch-depth: 0 (revisão externa, 21/10/2026 — run 39605920724):
+      # este job roda a suíte ampla do Cenário 5 (Job E) ou módulos que
+      # incluem tests.test_nmme_auditoria_observacional_historica, cujo
+      # test_a_dados_reais_primeiro_commit_ja_completo exige histórico
+      # completo (armadilha 9 do CLAUDE.md / achado da sincronização
+      # com main) — sem isso, a guarda contra repositório raso em
+      # verificar_dados_1996_2010_precedem_pipeline_atual() reporta
+      # verificavel=False corretamente, e o teste falha com
+      # "AssertionError: False is not true", sem relação com EMOS H2.
+      # Já era exigido nos Jobs B/C (mesmo motivo); só nunca tinha sido
+      # replicado aqui porque D/E foram adicionados depois dessa
+      # correção. Não altera o teste nem a função de auditoria.
       - name: Checkout
         uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v5.6.0
@@ -455,8 +469,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # fetch-depth: 0 — ver comentário equivalente no Job D (mesmo
+      # achado real, run 39605920724: Cenário 5 roda
+      # tests.test_nmme_auditoria_observacional_historica, que falhou
+      # aqui por checkout raso, não por EMOS H2). Não altera o teste
+      # nem a função de auditoria.
       - name: Checkout
         uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v5.6.0
@@ -484,3 +505,50 @@ jobs:
           echo "## 🩺 Job E — Diagnóstico EMOS H2, amplo (temporário)" >> $GITHUB_STEP_SUMMARY
           echo "Ver o log do passo acima para o resumo final. Não é required check." >> $GITHUB_STEP_SUMMARY
           echo "Instrumentação puramente observacional — nenhum resultado científico alterado." >> $GITHUB_STEP_SUMMARY
+
+  # ── Job F — Experimento controlado: kernel OpenBLAS (TEMPORÁRIO) ───
+  # Revisão externa, 21/10/2026 (run 39605920724): Haswell x SkylakeX
+  # observados em CPUs diferentes na mesma run, sem isolar o kernel
+  # como variável. Este job roda os dois kernels SEQUENCIALMENTE no
+  # MESMO runner (mesma CPU, mesmo Python/numpy/scipy, mesmas
+  # fixtures/opções do otimizador — só OPENBLAS_CORETYPE muda,
+  # confirmado via threadpoolctl, nunca presumido). Não é required
+  # check, não roda a suíte científica inteira — só os 2 testes-alvo,
+  # via tests.test_diagnostico_emos_h2_ci._rodar_metodo_original
+  # (mesma função já usada em Job D/E — nenhuma fixture duplicada).
+  # Script próprio decide internamente se cada kernel é seguro de
+  # tentar (flags de CPU) e nunca falha o job pelo RESULTADO
+  # científico — só por um erro real do mecanismo do experimento.
+  experimento_kernel_openblas:
+    name: "Job F — Experimento kernel OpenBLAS Haswell×SkylakeX (temporário)"
+    runs-on: ubuntu-latest
+    # 10 min — medição local: 22,7s para os dois kernels completos
+    # (checagem de segurança + 2 processos novos + 2 testes cada).
+    # Margem generosa (~7x) sobre checkout+setup+install (não medidos
+    # neste job ainda) + variação esperada do runner real.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Experimento — kernel OpenBLAS Haswell vs. SkylakeX (EMOS H2)"
+        run: python scripts/experimento_kernel_openblas_emos_h2.py
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🔬 Job F — Experimento kernel OpenBLAS (temporário)" >> $GITHUB_STEP_SUMMARY
+          echo "Ver o log do passo acima para a comparação completa (PASS/FAIL/INCONCLUSIVO por kernel). Não é required check." >> $GITHUB_STEP_SUMMARY
+          echo "Nenhum algoritmo/tolerância/critério científico alterado; nenhuma suíte reexecutada por completo." >> $GITHUB_STEP_SUMMARY
+          echo "FAIL aqui sinaliza reprovação real dos testes EMOS H2 (propagada via exit code, sem continue-on-error); INCONCLUSIVO nunca é aprovação." >> $GITHUB_STEP_SUMMARY
