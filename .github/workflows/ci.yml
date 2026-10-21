@@ -240,6 +240,19 @@ jobs:
       # CPU/versões/BLAS do runner que de fato executa os testes
       # científicos — associa resultado PASS/FAIL ao hardware real,
       # sem impor hipótese: só dado, mesma coleta já usada no Job D.
+      #
+      # Investigação "ENSO-CI — Investigação final direcionada" (item
+      # 2, 21/10/2026): numpy.show_config() acima só mostra o BUILD do
+      # OpenBLAS (baseline estático do wheel, sempre "Haswell" aqui,
+      # igual em qualquer CPU) — threadpoolctl.threadpool_info(),
+      # chamado DEPOIS de uma operação BLAS trivial (só para forçar o
+      # carregamento preguiçoso da biblioteca), mostra a arquitetura
+      # REALMENTE selecionada em tempo de execução pelo DYNAMIC_ARCH
+      # do OpenBLAS para a CPU real do processo — confirmado
+      # localmente nesta investigação que os dois valores podem
+      # divergir. threadpoolctl já é dependência transitiva instalada
+      # (scikit-learn/xgboost, requirements.txt) — nenhuma dependência
+      # nova. Array próprio, descartado — não altera nenhum cálculo.
       - name: Ambiente — versões e backend numérico do runner real
         run: |
           python -c "
@@ -250,6 +263,14 @@ jobs:
           print('numpy:', numpy.__version__)
           print('scipy:', scipy.__version__)
           numpy.show_config()
+          print('--- backend BLAS efetivo (threadpoolctl, após aquecimento) ---')
+          import threadpoolctl
+          _ = numpy.dot(numpy.ones(8), numpy.ones(8))
+          for d in threadpoolctl.threadpool_info():
+              if d.get('user_api') in ('blas', 'lapack'):
+                  print({k: d.get(k) for k in (
+                      'user_api', 'internal_api', 'prefix', 'version',
+                      'threading_layer', 'architecture', 'num_threads')})
           "
           echo "--- CPU do runner ---"
           cat /proc/cpuinfo | grep "model name" | head -1
@@ -371,6 +392,9 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Ver comentário equivalente no Job C — mesmo acréscimo
+      # (threadpoolctl após aquecimento, distingue build de backend
+      # efetivo), mesma justificativa, não duplicada aqui por extenso.
       - name: Ambiente — versões e backend numérico do runner real
         run: |
           python -c "
@@ -381,6 +405,14 @@ jobs:
           print('numpy:', numpy.__version__)
           print('scipy:', scipy.__version__)
           numpy.show_config()
+          print('--- backend BLAS efetivo (threadpoolctl, após aquecimento) ---')
+          import threadpoolctl
+          _ = numpy.dot(numpy.ones(8), numpy.ones(8))
+          for d in threadpoolctl.threadpool_info():
+              if d.get('user_api') in ('blas', 'lapack'):
+                  print({k: d.get(k) for k in (
+                      'user_api', 'internal_api', 'prefix', 'version',
+                      'threading_layer', 'architecture', 'num_threads')})
           "
           echo "--- CPU do runner ---"
           cat /proc/cpuinfo | grep "model name" | head -1
@@ -390,6 +422,17 @@ jobs:
 
       - name: "Mecanismo de detecção de falha (prova com falha sintética)"
         run: python -m unittest tests.test_diagnostico_emos_h2_ci.MecanismoDeteccaoFalhaTestCase -v
+
+      # Investigação "ENSO-CI — Investigação final direcionada" (itens
+      # 1 e 2, 21/10/2026): mesmo princípio das provas acima — com
+      # falhas SINTÉTICAS, nunca o EMOS H2 — confirma que a captura
+      # detalhada de falha (_TestResultDetalhado) preserva a mesma
+      # contagem/semântica do TestResult padrão e que a coleta do
+      # backend BLAS efetivo não lança exceção neste runner real.
+      - name: "Captura detalhada de falhas e backend BLAS efetivo (provas sintéticas)"
+        run: |
+          python -m unittest tests.test_diagnostico_emos_h2_ci.CapturaDetalhadaDeFalhaTestCase -v
+          python -m unittest tests.test_diagnostico_emos_h2_ci.BackendBlasEfetivoTestCase -v
 
       - name: "Cenários 1-4 (isolado, em sequência, depois do módulo real)"
         run: python -m unittest tests.test_diagnostico_emos_h2_ci.DiagnosticoCenariosTestCase -v
