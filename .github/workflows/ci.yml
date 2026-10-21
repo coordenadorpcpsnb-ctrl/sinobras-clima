@@ -234,6 +234,26 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt -r requirements-c3s.txt
 
+      # Meio NÃO invasivo (revisão externa, 21/10/2026): só um passo de
+      # workflow, nenhuma linha de scripts/cfsv2_emos_h2_implementacao.py
+      # nem de tests/test_cfsv2_emos_h2_implementacao.py tocada. Registra
+      # CPU/versões/BLAS do runner que de fato executa os testes
+      # científicos — associa resultado PASS/FAIL ao hardware real,
+      # sem impor hipótese: só dado, mesma coleta já usada no Job D.
+      - name: Ambiente — versões e backend numérico do runner real
+        run: |
+          python -c "
+          import sys, numpy, scipy, platform
+          print('python:', sys.version)
+          print('platform:', platform.platform())
+          print('processor:', platform.processor())
+          print('numpy:', numpy.__version__)
+          print('scipy:', scipy.__version__)
+          numpy.show_config()
+          "
+          echo "--- CPU do runner ---"
+          cat /proc/cpuinfo | grep "model name" | head -1
+
       - name: Testes científicos — C3S, CFSv2/EMOS H2, CHIRPS v3, NMME
         run: |
           python -m unittest -v \
@@ -401,10 +421,16 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      # Bug real da própria PR #57 (achado no run 39486432148): faltava
+      # este segundo install aqui — o cenário 5 roda a mesma lista
+      # ampla do Job C, que inclui módulos (test_c3s*) que importam
+      # xarray/PyYAML no nível do módulo. requirements-c3s.txt já
+      # resolve isso no Job C (ver commit 41ad8a7) — equivalente aqui.
       - name: Instalar dependências
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements-c3s.txt
 
       - name: "Cenário 5 (depois da suíte científica ampla — mesma lista do Job C)"
         run: python -m unittest tests.test_diagnostico_emos_h2_ci.DiagnosticoCenario5TestCase -v
