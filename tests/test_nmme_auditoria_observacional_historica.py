@@ -142,12 +142,55 @@ class BackfillPrecedePipelineAtualTestCase(unittest.TestCase):
     """Item 1 (2ª rodada) — verifica via git, nunca por suposição, que o
     backfill 1996-2010 já estava completo no primeiro commit do
     repositório, antes de qualquer execução do procedimento atual de
-    scripts/update_dashboard.py."""
+    scripts/update_dashboard.py.
+
+    Fase ENSO-CI — achado real na investigação da falha histórica desta
+    suíte: este teste comparava o resultado contra um SHA de commit
+    fixo ('8a76a0fad...'), hardcoded no momento em que foi escrito.
+    Isso contradiz a própria premissa da função que testa ("nunca por
+    suposição") — um SHA literal só é válido no clone onde foi medido;
+    qualquer outro checkout do mesmo repositório (fork, espelho, ou o
+    clone fresco que cada sessão de nuvem recebe) tem sua própria
+    árvore de commits e pode legitimamente reportar outro commit como
+    o primeiro a introduzir data/serie_subst.csv, sem que isso seja
+    regressão. Confirmado neste clone: o SHA fixo ('8a76a0fad...',
+    commit "Create index.html") nem sequer toca data/serie_subst.csv —
+    não é uma simples divergência de fork, já era um valor errado para
+    este caminho. O commit real que introduziu o arquivo aqui é
+    'e00984eb...' ("sinobras-clima", o 2º commit do repositório, logo
+    após a raiz), com os 180 meses de 1996-2010 já completos nele.
+
+    Correção: em vez de comparar contra um literal, o teste calcula o
+    commit esperado de forma independente (consulta git própria, sem
+    usar a função testada) e compara contra o que a função retorna —
+    isso ainda pega uma regressão real (se a função passar a devolver
+    um commit diferente do que o git realmente aponta como o primeiro
+    a introduzir o arquivo), mas funciona em qualquer clone fiel do
+    repositório, não só neste."""
 
     def test_a_dados_reais_primeiro_commit_ja_completo(self):
+        import subprocess as sp
+        log = sp.run(
+            ['git', 'log', '--follow', '--diff-filter=A', '--format=%H',
+             '--', 'data/serie_subst.csv'],
+            cwd=aud.ROOT, capture_output=True, text=True, timeout=15, check=True)
+        commits = log.stdout.strip().splitlines()
+        self.assertTrue(
+            commits,
+            'nenhum commit de criação encontrado para data/serie_subst.csv '
+            'neste clone — não há como calcular o commit esperado')
+        primeiro_commit_esperado = commits[-1]
+
         resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
         self.assertTrue(resultado['verificavel'])
-        self.assertEqual(resultado['primeiro_commit'], '8a76a0fad509e14e00b25b635ba7261dc375996f')
+        self.assertRegex(
+            resultado['primeiro_commit'], r'^[0-9a-f]{40}$',
+            'primeiro_commit deve ser um SHA git de 40 caracteres hex')
+        self.assertEqual(
+            resultado['primeiro_commit'], primeiro_commit_esperado,
+            'a função deve reportar exatamente o commit que uma consulta '
+            'git independente aponta como o primeiro a introduzir o '
+            'arquivo neste clone — nunca um SHA fixo de outro histórico')
         self.assertEqual(resultado['n_meses_esperado'], 180)
         self.assertEqual(resultado['n_meses_1996_2010_no_primeiro_commit'], 180)
         self.assertTrue(resultado['ja_completo_no_primeiro_commit'])
@@ -166,6 +209,66 @@ class BackfillPrecedePipelineAtualTestCase(unittest.TestCase):
             aud.subprocess.run = original_run
         self.assertFalse(resultado['verificavel'])
         self.assertIn('motivo', resultado)
+
+    def test_c_repositorio_raso_reporta_nao_verificavel_sem_consultar_historico(self):
+        """Fase ENSO-CI (2ª rodada de sincronização) — réplica do achado
+        real: em clone raso, `git log --follow --diff-filter=A` erra
+        silenciosamente (aponta o commit de ponta como se tivesse
+        criado o arquivo do zero). A função agora checa
+        `git rev-parse --is-shallow-repository` ANTES de qualquer
+        consulta ao histórico, e se recusa a operar quando o
+        repositório é raso — nunca tenta "adivinhar" com histórico
+        insuficiente. Simula a resposta do `--is-shallow-repository`
+        sem precisar de um clone raso de verdade (já reproduzido uma
+        vez, de forma lenta, ao investigar o achado original)."""
+        import subprocess as sp
+        original_run = sp.run
+
+        def _run_simulando_raso(args, **kwargs):
+            if args[:2] == ['git', 'rev-parse']:
+                return sp.CompletedProcess(args, 0, stdout='true\n', stderr='')
+            raise AssertionError(
+                f'não deveria consultar o histórico (git log/show) quando o '
+                f'repositório é raso — chamada inesperada: {args}')
+
+        aud.subprocess.run = _run_simulando_raso
+        try:
+            resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
+        finally:
+            aud.subprocess.run = original_run
+
+        self.assertFalse(
+            resultado['verificavel'],
+            'repositório raso deve ser reportado como não verificável, '
+            'nunca como um resultado (certo ou errado) do histórico')
+        self.assertIn('raso', resultado['motivo'].lower())
+
+    def test_d_repositorio_completo_consulta_o_historico_normalmente(self):
+        """Sanity complementar ao teste c: quando `--is-shallow-
+        repository` responde 'false', a função deve seguir para a
+        consulta normal do histórico (não travar sempre em
+        verificavel=False por engano)."""
+        import subprocess as sp
+        original_run = sp.run
+        chamadas = []
+
+        def _run_simulando_completo(args, **kwargs):
+            chamadas.append(args)
+            if args[:2] == ['git', 'rev-parse']:
+                return sp.CompletedProcess(args, 0, stdout='false\n', stderr='')
+            return original_run(args, **kwargs)
+
+        aud.subprocess.run = _run_simulando_completo
+        try:
+            resultado = aud.verificar_dados_1996_2010_precedem_pipeline_atual()
+        finally:
+            aud.subprocess.run = original_run
+
+        self.assertTrue(
+            any(c[:2] == ['git', 'log'] for c in chamadas),
+            'com repositório não-raso, a função deveria ter consultado o '
+            'histórico via git log --follow --diff-filter=A')
+        self.assertTrue(resultado['verificavel'])
 
 
 class NovaEvidenciaSinobrasPorFazendaTestCase(unittest.TestCase):

@@ -1,0 +1,331 @@
+name: CI — testes e integridade em Pull Requests
+
+# Fase ENSO-CI (19/10/2026): primeiro gatilho `pull_request` do
+# projeto. Até aqui, update.yml/indices_semanal.yml só corriam
+# agendados ou por workflow_dispatch — nenhuma alteração proposta em
+# PR era validada automaticamente antes do merge.
+#
+# Este workflow só LÊ o repositório: nunca busca dados climáticos
+# reais (fetch_monthly_data.py), nunca atualiza índices oceânicos
+# reais (update_indices.py), nunca recalibra SARIMAX/XGBoost
+# (update_dashboard.py), nunca gera o relatório executivo de
+# verdade com dados novos, nunca publica no GitHub Pages, nunca
+# commita nem faz push. `permissions: contents: read` em todos os
+# jobs — nenhum deles pode escrever no repositório.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Grupo PRÓPRIO, distinto de "pages" (usado por update.yml/
+# publicar.yml/indices_semanal.yml, ver CLAUDE.md armadilha 5) — CI e
+# publicação são atividades independentes e nunca devem disputar a
+# mesma fila. Cancela execuções antigas do MESMO PR (um push novo
+# torna o resultado anterior obsoleto); um workflow_dispatch isolado
+# usa o run_id, então nunca cancela outra execução.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Job A — Testes unitários ───────────────────────────────────────
+  # Parsers CPC/IRI, probabilidades ENSO, metadados, detecção de
+  # mudança do IRI, atualização de índices, tratamento de dados
+  # ausentes, validação de datas/trimestres. Tudo com fixtures locais
+  # — nenhuma dependência de CPC/IRI/serviço meteorológico real (ver
+  # CLAUDE.md: "sem rede real" já é a convenção destes arquivos).
+  testes_unitarios:
+    name: "Job A — Testes unitários"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Testes unitários — parsers, índices, dados ausentes, datas/trimestres
+        run: |
+          python -m unittest -v \
+            tests.test_update_indices \
+            tests.test_update_indices_enso_auto \
+            tests.test_fetch_fallback
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🧪 Job A — Testes unitários" >> $GITHUB_STEP_SUMMARY
+          echo "Parsers CPC/IRI, índices oceânicos, fallback CHIRPS→Open-Meteo, "  >> $GITHUB_STEP_SUMMARY
+          echo "validação de emissão/datas/trimestres. Sem rede real." >> $GITHUB_STEP_SUMMARY
+
+  # ── Job B — Integridade dos dados e dashboard ──────────────────────
+  # Estrutura do HTML/objetos JS, eixo temporal, trimestres x
+  # probabilidades, null nunca virando zero, CPC_IRI x SARIMAX_DATA,
+  # integridade dos resultados publicados, coerência física do BH,
+  # ausência de imputação indevida — e os 2 cenários de regressão sem
+  # cobertura fixture-based até esta fase (deslocamento de meses e
+  # re.sub destrutivo).
+  integridade_dashboard:
+    name: "Job B — Integridade dos dados e dashboard"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0   # precisa do histórico p/ decidir a checagem de continuidade abaixo
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Testes de integridade do dashboard e comparação CPC×IRI
+        run: |
+          python -m unittest -v \
+            tests.test_verificar_dashboard \
+            tests.test_verificar_dashboard_enso_auto \
+            tests.test_enso_iri_set2026 \
+            tests.test_gerar_relatorio \
+            tests.test_regressao_cientifica_enso_ci
+
+      # ── Continuidade de serie_subst.csv: NUNCA pular a flag
+      # indiscriminadamente (pedido explícito da Fase ENSO-CI).
+      #
+      # Esta checagem (item 9 de verificar_dashboard.py) espera
+      # data/serie_subst.csv completo até o mês anterior ao atual.
+      # Isso só é verdade depois que fetch_monthly_data.py roda (só em
+      # update.yml, dia 21) — CI nunca executa esse script. Então,
+      # para QUALQUER PR que não toque data/serie_subst.csv, a lacuna
+      # do mês corrente é uma defasagem de calendário PRÉ-EXISTENTE,
+      # sem relação com a mudança proposta — reprovar a PR por isso
+      # seria o mesmo falso-positivo já corrigido em indices_semanal.yml
+      # (Fase ENSO-DADOS, 7 falhas seguidas, 01-12/out/2026).
+      #
+      # Mas se a PR justamente MODIFICA data/serie_subst.csv (ex.: um
+      # backfill, uma correção de série), a checagem deve rodar CHEIA,
+      # sem pular — é exatamente o caso em que uma lacuna nova seria
+      # uma regressão real introduzida por esta própria PR.
+      - name: Decidir se a checagem de continuidade pode ser pulada
+        id: continuidade
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if git diff --quiet ${{ github.event.pull_request.base.sha }} HEAD -- data/serie_subst.csv; then
+              echo "pular=true" >> $GITHUB_OUTPUT
+              echo "data/serie_subst.csv não foi tocado por esta PR — lacuna do mês corrente (se houver) é defasagem de calendário pré-existente, não desta mudança."
+            else
+              echo "pular=false" >> $GITHUB_OUTPUT
+              echo "data/serie_subst.csv FOI alterado por esta PR — checagem de continuidade roda sem pular; uma lacuna nova aqui seria regressão real desta mudança."
+            fi
+          else
+            # workflow_dispatch manual, sem PR/base de comparação: mesma
+            # situação estrutural do indices_semanal.yml (nunca roda
+            # fetch_monthly_data.py) — pular evita o mesmo falso-positivo
+            # de calendário já corrigido naquele workflow.
+            echo "pular=true" >> $GITHUB_OUTPUT
+            echo "workflow_dispatch manual, sem PR — tratado como indices_semanal.yml (pula por padrão)."
+          fi
+
+      - name: Verificar integridade do dashboard (docs/index.html real, commitado)
+        run: |
+          if [ "${{ steps.continuidade.outputs.pular }}" = "true" ]; then
+            python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
+          else
+            python scripts/verificar_dashboard.py
+          fi
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 📊 Job B — Integridade dos dados e dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Continuidade de serie_subst.csv pulada?** | ${{ steps.continuidade.outputs.pular }} |" >> $GITHUB_STEP_SUMMARY
+          echo "ℹ️ verificar_dashboard.py roda contra o docs/index.html JÁ COMMITADO (não gera um novo)." >> $GITHUB_STEP_SUMMARY
+
+  # ── Job C — Regressão científica ───────────────────────────────────
+  # SARIMAX, XGBoost, EMOS H2, Métodos 2C.3, comparabilidade/métricas
+  # científicas e proteção contra alteração indevida de artefatos
+  # científicos. NUNCA recalibra nada — só roda a suíte de testes já
+  # existente, que por sua vez só lê fixtures locais e os dados reais
+  # já commitados (nunca busca rede, nunca chama update_dashboard.py).
+  regressao_cientifica:
+    name: "Job C — Regressão científica (SARIMAX/XGBoost/EMOS H2/2C.3)"
+    runs-on: ubuntu-latest
+    # 45 min, não 30 — reavaliado na revisão externa (20/10/2026) com
+    # dados reais, não arbitrariamente: medindo a MESMA lista de testes
+    # duas vezes seguidas, no mesmo sandbox, sem nenhuma mudança de
+    # código entre as execuções, o tempo real variou de 21m15s para
+    # 30m29s (1273s → 1815s, +43%) — só variância de carga, 0 falhas
+    # nas duas. A segunda medição por si só já consome o orçamento
+    # antigo de 30 min SÓ na execução dos testes, antes de somar
+    # checkout (agora fetch-depth:0), setup-python e pip install. 45
+    # min dá ~15 min de margem sobre a pior medição local observada —
+    # ainda pode não bastar no runner real do GitHub Actions (mais
+    # lento/com menos núcleos que este sandbox); o primeiro run real
+    # é o dado que decide se isso precisa subir de novo.
+    timeout-minutes: 45
+    steps:
+      # fetch-depth: 0 é OBRIGATÓRIO aqui — achado da revisão externa
+      # (20/10/2026), confirmado por simulação real: tests.test_nmme_
+      # auditoria_observacional_historica (parte desta lista) chama
+      # scripts/nmme_auditoria_observacional_historica.verificar_dados_
+      # 1996_2010_precedem_pipeline_atual(), que usa `git log --follow
+      # --diff-filter=A` para achar o commit que introduziu
+      # data/serie_subst.csv — isso precisa do histórico completo.
+      #
+      # Com checkout padrão (depth=1, só o commit do PR), o resultado
+      # não é um erro visível: é PIOR — num clone raso, git trata o
+      # único commit "enxertado" (sem pai pra comparar) como se tivesse
+      # "adicionado" TODOS os arquivos do zero. `git log --follow
+      # --diff-filter=A` então aponta o PRÓPRIO commit do PR como "o
+      # primeiro a introduzir o arquivo" — um valor completamente sem
+      # sentido, mas que o teste aceita silenciosamente, porque ele
+      # mesmo recalcula o valor esperado com a MESMA chamada git rasa
+      # (ambos os lados erram do mesmo jeito e "concordam"). Confirmado
+      # empiricamente: clone raso (depth=1) retornou o SHA do próprio
+      # commit de ponta; o mesmo clone com `git fetch --unshallow`
+      # (equivalente a fetch-depth:0) voltou a retornar o commit real
+      # de 2026-07 que introduziu o arquivo. Sem fetch-depth:0 aqui, o
+      # CI nunca pegaria uma regressão real nesta checagem — passaria
+      # sempre, estivesse certo ou não.
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # requirements-c3s.txt (não requirements.txt) é o arquivo correto
+      # aqui — achado real da PR #57: tests.test_c3s*/test_nmme_* (12
+      # módulos) importam xarray/PyYAML no nível do módulo, mas nenhum
+      # dos dois pacotes nunca esteve em requirements.txt (lacuna
+      # pré-existente, nunca exposta porque nenhum workflow antes deste
+      # rodava a suíte completa num ambiente limpo). requirements-c3s.txt
+      # já declara os dois (já usado por c3s_poc.yml/nmme_poc.yml) —
+      # reaproveitar em vez de duplicar em requirements.txt preserva os
+      # 5 workflows operacionais intocados: nenhum deles chama scripts/
+      # c3s_poc.py ou scripts/nmme_poc.py (os únicos 2 scripts de
+      # produção que usam xarray), só os testes deste job precisam.
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-c3s.txt
+
+      # Meio NÃO invasivo (revisão externa, 21/10/2026): só um passo de
+      # workflow, nenhuma linha de scripts/cfsv2_emos_h2_implementacao.py
+      # nem de tests/test_cfsv2_emos_h2_implementacao.py tocada. Registra
+      # CPU/versões/BLAS do runner que de fato executa os testes
+      # científicos — associa resultado PASS/FAIL ao hardware real,
+      # sem impor hipótese: só dado, mesma coleta já usada no Job D.
+      #
+      # Investigação "ENSO-CI — Investigação final direcionada" (item
+      # 2, 21/10/2026): numpy.show_config() acima só mostra o BUILD do
+      # OpenBLAS (baseline estático do wheel, sempre "Haswell" aqui,
+      # igual em qualquer CPU) — threadpoolctl.threadpool_info(),
+      # chamado DEPOIS de uma operação BLAS trivial (só para forçar o
+      # carregamento preguiçoso da biblioteca), mostra a arquitetura
+      # REALMENTE selecionada em tempo de execução pelo DYNAMIC_ARCH
+      # do OpenBLAS para a CPU real do processo — confirmado
+      # localmente nesta investigação que os dois valores podem
+      # divergir. threadpoolctl já é dependência transitiva instalada
+      # (scikit-learn/xgboost, requirements.txt) — nenhuma dependência
+      # nova. Array próprio, descartado — não altera nenhum cálculo.
+      - name: Ambiente — versões e backend numérico do runner real
+        run: |
+          python -c "
+          import sys, numpy, scipy, platform
+          print('python:', sys.version)
+          print('platform:', platform.platform())
+          print('processor:', platform.processor())
+          print('numpy:', numpy.__version__)
+          print('scipy:', scipy.__version__)
+          numpy.show_config()
+          print('--- backend BLAS efetivo (threadpoolctl, após aquecimento) ---')
+          import threadpoolctl
+          _ = numpy.dot(numpy.ones(8), numpy.ones(8))
+          for d in threadpoolctl.threadpool_info():
+              if d.get('user_api') in ('blas', 'lapack'):
+                  print({k: d.get(k) for k in (
+                      'user_api', 'internal_api', 'prefix', 'version',
+                      'threading_layer', 'architecture', 'num_threads')})
+          "
+          echo "--- CPU do runner ---"
+          cat /proc/cpuinfo | grep "model name" | head -1
+
+      - name: Testes científicos — C3S, CFSv2/EMOS H2, CHIRPS v3, NMME
+        run: |
+          python -m unittest -v \
+            tests.test_c3s \
+            tests.test_c3s_calibracao \
+            tests.test_c3s_hindcast_completo \
+            tests.test_c3s_multimodel \
+            tests.test_c3s_multimodel_catalogo \
+            tests.test_c3s_multimodel_hindcast \
+            tests.test_c3s_multimodel_poc \
+            tests.test_c3s_multiorigem \
+            tests.test_c3s_poc \
+            tests.test_c3s_skill \
+            tests.test_cfsv2_calibracao_aditiva \
+            tests.test_cfsv2_calibracao_mos_linear \
+            tests.test_cfsv2_calibracao_multiplicativa \
+            tests.test_cfsv2_diagnostico_multiplicativo \
+            tests.test_cfsv2_diagnostico_previsibilidade_2c3e \
+            tests.test_cfsv2_emos_h2_implementacao \
+            tests.test_cfsv2_emos_h2_viabilidade_warmup \
+            tests.test_cfsv2_gate_calibracao_probabilistica \
+            tests.test_cfsv2_mos_linear_auditoria_disponibilidade \
+            tests.test_cfsv2_robustez_h2_spread \
+            tests.test_cfsv2_validacao_cientifica \
+            tests.test_cfsv2_viabilidade_quantile_mapping \
+            tests.test_chirps_extracao_sintetica \
+            tests.test_chirps_v3_extracao \
+            tests.test_chirps_v3_piloto \
+            tests.test_chirps_v3_reconstrucao_historica \
+            tests.test_chirps_v3_sensibilidade_espacial \
+            tests.test_nmme_auditoria_chirps_sinobras \
+            tests.test_nmme_auditoria_observacional_historica \
+            tests.test_nmme_auditoria_sinobras_por_fazenda \
+            tests.test_nmme_backend_abstraction \
+            tests.test_nmme_catalogo \
+            tests.test_nmme_cpc_cpt \
+            tests.test_nmme_extracao_historica \
+            tests.test_nmme_iri_member \
+            tests.test_nmme_piloto_historico \
+            tests.test_nmme_poc \
+            tests.test_nmme_poc_espacial_fazendas \
+            tests.test_nmme_poc_real_cfsv2
+
+      - name: Proteção explícita contra alteração indevida de artefatos científicos
+        run: |
+          python -m unittest -v tests.test_enso_iri_set2026.PreservacaoDeModelosCientificosTestCase
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## 🔬 Job C — Regressão científica" >> $GITHUB_STEP_SUMMARY
+          echo "SARIMAX/XGBoost/EMOS H2/Métodos 2C.3 (C3S, CFSv2, CHIRPS v3, NMME) " >> $GITHUB_STEP_SUMMARY
+          echo "+ guarda de preservação de artefatos científicos. Nunca recalibra nada." >> $GITHUB_STEP_SUMMARY
+

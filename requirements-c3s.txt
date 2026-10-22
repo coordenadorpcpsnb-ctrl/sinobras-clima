@@ -43,4 +43,12 @@ cftime>=1.6.3
 # requirements-c3s.txt num runner limpo, que não tem nada instalado
 # "incidentalmente" (ao contrário de um ambiente de desenvolvimento
 # local onde PyYAML costuma já estar presente por outra dependência).
+#
+# Fase ENSO-CI (PR #57) — também passou a ser instalado pelo Job C de
+# .github/workflows/ci.yml, pelo mesmo motivo: a suíte completa nunca
+# tinha rodado antes num runner limpo, e vários módulos test_c3s*/
+# test_nmme_* importam xarray/yaml no nível do módulo. Nenhum dos 5
+# workflows operacionais (update.yml, indices_semanal.yml, publicar.yml,
+# lembretes) instala este arquivo nem precisa — eles nunca chamam
+# scripts/c3s_poc.py ou scripts/nmme_poc.py.
 PyYAML>=6
