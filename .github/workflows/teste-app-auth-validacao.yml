@@ -1,0 +1,139 @@
+name: TESTE DESCARTÁVEL — validação da App sinobras-clima-automation
+
+# Arquivo TEMPORÁRIO — vive só na branch claude/teste-app-auth-validacao,
+# nunca deve ser mesclado a main. Dispara por push, não por
+# workflow_dispatch: workflow_dispatch exige que o arquivo já exista na
+# branch padrão para ser disparável manualmente — um workflow deste tipo,
+# vivendo só numa branch de teste, não teria como ser disparado assim sem
+# tocar main primeiro, o que este teste explicitamente não pode fazer.
+# on: push não tem essa exigência: o GitHub avalia o arquivo como ele
+# existe no próprio commit empurrado.
+#
+# Gatilho restrito a esta branch exata + ao caminho deste próprio
+# arquivo — só o push que o introduz (ou uma edição deliberada dele)
+# dispara o teste; qualquer outro commit nesta branch que não toque
+# este arquivo não reexecuta nada.
+on:
+  push:
+    branches:
+      - claude/teste-app-auth-validacao
+    paths:
+      - '.github/workflows/teste-app-auth-validacao.yml'
+
+permissions:
+  contents: read   # leitura padrão do checkout; a escrita usa o token da App, nunca este GITHUB_TOKEN
+
+jobs:
+  validar_app:
+    name: Validar autenticação, escopo e push da App (sem dado científico, sem deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (leitura, sem credencial de escrita)
+        uses: actions/checkout@v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Verificar pré-condições (sem exibir valores)
+        env:
+          CLIENT_ID_PRESENTE: ${{ vars.SINOBRAS_AUTOMATION_APP_CLIENT_ID != '' }}
+          PRIVATE_KEY_PRESENTE: ${{ secrets.SINOBRAS_AUTOMATION_APP_PRIVATE_KEY != '' }}
+        run: |
+          set -eo pipefail
+          if [ "$CLIENT_ID_PRESENTE" != "true" ]; then
+            echo "::error::Variable SINOBRAS_AUTOMATION_APP_CLIENT_ID não configurada ou vazia — abortando antes de qualquer autenticação."
+            exit 1
+          fi
+          if [ "$PRIVATE_KEY_PRESENTE" != "true" ]; then
+            echo "::error::Secret SINOBRAS_AUTOMATION_APP_PRIVATE_KEY não configurado ou vazio — abortando antes de qualquer autenticação."
+            exit 1
+          fi
+          echo "Pré-condições presentes (valores não exibidos)."
+
+      - name: Gerar token de instalação da App
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.SINOBRAS_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SINOBRAS_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: sinobras-clima
+          permission-contents: write
+
+      - name: Confirmar escopo do token (leitura, sem escrita)
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -eo pipefail
+          resposta="$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer ${APP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/installation/repositories)" \
+            || { echo "::error::Falha ao consultar /installation/repositories — ver corpo da resposta acima (sem credenciais nele)."; exit 1; }
+
+          total=$(echo "$resposta" | python3 -c "import sys,json; print(json.load(sys.stdin)['total_count'])")
+          nome=$(echo "$resposta" | python3 -c "import sys,json; print(json.load(sys.stdin)['repositories'][0]['full_name'])")
+
+          echo "Escopo confirmado: total_count=$total, repositorio=$nome" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$total" != "1" ] || [ "$nome" != "${{ github.repository }}" ]; then
+            echo "::error::Escopo do token inesperado (total=$total, repo=$nome) — abortando antes de qualquer escrita."
+            exit 1
+          fi
+
+      - name: Resolver identidade da conta bot da App
+        id: identidade
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -eo pipefail
+          resposta="$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer ${APP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${APP_SLUG}%5Bbot%5D")" \
+            || { echo "::error::Falha ao consultar /users/${APP_SLUG}[bot] — ver corpo da resposta acima."; exit 1; }
+
+          bot_id=$(echo "$resposta" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "bot_id=$bot_id" >> "$GITHUB_OUTPUT"
+          echo "Identidade resolvida: ${APP_SLUG}[bot] (id=$bot_id)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Escrever e empurrar arquivo de teste (branch descartável derivada)
+        id: escrever
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BOT_ID: ${{ steps.identidade.outputs.bot_id }}
+        run: |
+          set -eo pipefail
+
+          cleanup() {
+            git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          HEADER_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          echo "::add-mask::${HEADER_VALUE}"
+          git config --local http.https://github.com/.extraheader "${HEADER_VALUE}"
+
+          BRANCH="claude/teste-app-auth-validacao-run-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+
+          mkdir -p tmp
+          echo "Teste de validação da App ${APP_SLUG}[bot] — run ${{ github.run_id }} — $(date -u +%FT%TZ)" > tmp/enso-app-auth-validacao.txt
+
+          git config user.name  "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git add tmp/enso-app-auth-validacao.txt
+          git commit -m "test: validacao descartavel da App sinobras-clima-automation"
+          git push origin "$BRANCH"
+
+          commit_sha=$(git rev-parse HEAD)
+          echo "branch_derivada=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+          echo "Branch de teste criada e empurrada: $BRANCH ($commit_sha)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sumário
+        if: always()
+        run: |
+          echo "## Teste de validação — sinobras-clima-automation" >> "$GITHUB_STEP_SUMMARY"
+          echo "Nenhum deploy, nenhum script científico, nenhuma alteração em docs/, data/, scripts/ ou main foi executada por este workflow." >> "$GITHUB_STEP_SUMMARY"
