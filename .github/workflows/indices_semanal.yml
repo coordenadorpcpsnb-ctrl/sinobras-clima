@@ -16,6 +16,32 @@ name: Índices ENSO — semanal + RONI (início do mês)
 # depois de 60 dias sem PUSH real, e este workflow só commitava antes
 # quando os índices em si mudavam — uma sequência longa de "nada
 # mudou" podia desligar os cinco workflows do repositório de uma vez.
+#
+# Fase ENSO-PUB (24/10/2026): publica o próprio deploy do GitHub Pages
+# quando há alteração real em docs/index.html — antes, este workflow
+# dependia de publicar.yml disparar por push em docs/, mas o push aqui
+# é autenticado com o GITHUB_TOKEN padrão, que NÃO aciona outro workflow
+# por evento push (comportamento documentado do GitHub, confirmado por
+# auditoria empírica do histórico real de execuções de publicar.yml —
+# nenhum commit de indices_semanal.yml jamais apareceu como head de uma
+# execução com event=push, só em execuções manuais/workflow_dispatch).
+# Resultado real antes da correção: RONI/wksst ficavam commitados no
+# repositório, mas o Monitor ENSO publicado no Pages não era atualizado
+# entre um ciclo mensal (dia 21) e o outro.
+#
+# Revisão externa, 2ª rodada (ajustes antes da PR): a 1ª versão deste
+# patch colocava os passos de deploy ANTES do heartbeat — uma falha
+# exclusiva do deploy-pages interromperia o job e impediria o heartbeat
+# de rodar, arriscando a desativação por 60 dias sem push (armadilha 9)
+# por um motivo que nada tem a ver com o heartbeat em si. Corrigido:
+# heartbeat agora roda sempre antes de qualquer passo de publicação, e
+# a decisão de publicar passa a comparar o SHA capturado no checkout
+# contra o HEAD final (depois de qualquer `git pull --rebase` desta
+# execução) especificamente em `docs/` — não reaproveita o sinal de
+# "alterado" do commit (que é sobre docs/index.html + data/, calculado
+# ANTES do rebase), para não publicar um estado de docs/ que o próprio
+# rebase já tornou obsoleto nem deixar de publicar uma mudança que
+# chegou via rebase de outro workflow do mesmo grupo de concorrência.
 on:
   schedule:
     # Toda segunda-feira, 12h BRT (15h UTC) — fetch numérico semanal
@@ -42,22 +68,42 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-# Só commita/empurra — não chama deploy-pages diretamente. O push em
-# docs/index.html dispara publicar.yml, que já cuida da publicação
-# (por isso não precisa de permissão pages/id-token aqui).
+# Commita/empurra E publica o Pages diretamente (Fase ENSO-PUB) — o
+# push aqui usa o GITHUB_TOKEN padrão, que não dispara publicar.yml por
+# push (ver nota acima), então pages/id-token são necessários neste
+# workflow, no mesmo padrão já validado em produção por update.yml.
 permissions:
   contents: write
+  pages:    write
+  id-token: write
 
 jobs:
   atualizar_indices:
     name: Buscar índices ENSO (wksst 4 regiões + RONI)
     runs-on: ubuntu-latest
+    # Mesmo padrão de update.yml. A url só é preenchida quando o passo
+    # "Publicar no GitHub Pages" roda de fato (gate: steps.publicar_diff.
+    # outputs.mudou — ver passos abaixo) — em execuções sem alteração
+    # real em docs/, o registro de ambiente desta execução fica com url
+    # vazia (cosmético, não afeta o Pages publicado, que continua
+    # servindo o último deploy real).
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
+
+      # Referência para decidir publicação mais abaixo (passo "Verificar
+      # necessidade de publicação") — compara docs/ neste SHA contra o
+      # HEAD final, depois de qualquer commit/rebase desta execução, em
+      # vez de reaproveitar o diff pré-rebase do passo de commit.
+      - name: Capturar SHA inicial
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v5.6.0
@@ -98,15 +144,19 @@ jobs:
       - name: Verificar integridade do dashboard
         run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
 
+      # `dados`: só o que o commit abaixo stage (docs/index.html + data/),
+      # calculado ANTES de qualquer rebase — sinal de "preciso commitar",
+      # não de "preciso publicar" (ver passo "Verificar necessidade de
+      # publicação", mais abaixo, que é o sinal correto para o deploy).
       - name: Verificar alterações
         id: diff
         run: |
           git diff --quiet docs/index.html data/ && \
-            echo "alterado=false" >> $GITHUB_OUTPUT || \
-            echo "alterado=true"  >> $GITHUB_OUTPUT
+            echo "dados=false" >> $GITHUB_OUTPUT || \
+            echo "dados=true"  >> $GITHUB_OUTPUT
 
       - name: Commit dos índices atualizados
-        if: steps.diff.outputs.alterado == 'true'
+        if: steps.diff.outputs.dados == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -132,7 +182,15 @@ jobs:
       # feira (e também nos dias 1-5), bem abaixo do limite de 60 dias,
       # garantindo push real mesmo quando wksst/RONI não mudam. NÃO
       # remover sem entender esse motivo.
+      #
+      # Posição deliberada ANTES dos passos de publicação (revisão
+      # externa, 2ª rodada): mesma posição relativa ao commit que já
+      # tinha antes (ainda interrompido por falha de integridade/commit,
+      # comportamento inalterado) — mas agora nenhuma falha exclusiva de
+      # upload/deploy do Pages (que só roda depois) pode impedir este
+      # heartbeat de rodar.
       - name: Heartbeat — mantém push semanal para os workflows não serem desativados
+        id: heartbeat
         run: |
           mkdir -p data
           TZ='America/Araguaina' date +'%Y-%m-%d %H:%M BRT' > data/.ultima_verificacao
@@ -144,13 +202,62 @@ jobs:
           git add data/.ultima_verificacao
           if git diff --cached --quiet; then
             echo "heartbeat de hoje já commitado — nada a fazer"
+            echo "commitou=false" >> "$GITHUB_OUTPUT"
           else
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git commit -m "chore: heartbeat semanal — mantém workflows agendados ativos (CLAUDE.md armadilha 9)"
             git pull --rebase origin "${GITHUB_REF_NAME}"
             git push
+            echo "commitou=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Unconditional (depende só dos passos anteriores terem sucesso,
+      # mesma regra padrão do job) — garante que a decisão de publicar
+      # considere o HEAD final, já incluindo qualquer `git pull --rebase`
+      # feito acima (pelo commit e/ou pelo heartbeat). Se nada rodou push
+      # nesta execução, este `pull --rebase` é um no-op seguro (local já
+      # está em dia); nunca cria commit novo por si só.
+      - name: Sincronizar com a main antes de decidir a publicação
+        run: git pull --rebase origin "${GITHUB_REF_NAME}"
+
+      # Sinal correto para o deploy (distinto de `steps.diff.outputs.
+      # dados`, que é sobre docs/index.html + data/ ANTES do rebase):
+      # compara o SHA do checkout contra o HEAD atual, só em docs/ — o
+      # escopo real publicado pelo deploy-pages (este workflow nunca
+      # toca docs/relatorio-executivo.docx, só docs/index.html, mas o
+      # artefato do Pages é o diretório docs/ inteiro, então o gate usa
+      # o diretório inteiro em vez de um arquivo específico, por
+      # robustez caso isso mude no futuro). Cobre tanto a própria
+      # alteração desta execução quanto qualquer alteração de docs/
+      # trazida pelo rebase de outro workflow do mesmo grupo de
+      # concorrência — sem isso, publicaríamos com base num diff
+      # calculado antes do rebase, que pode estar obsoleto.
+      - name: Verificar necessidade de publicação
+        id: publicar_diff
+        run: |
+          git diff --quiet "${{ steps.base.outputs.sha }}" -- docs/ && \
+            echo "mudou=false" >> "$GITHUB_OUTPUT" || \
+            echo "mudou=true"  >> "$GITHUB_OUTPUT"
+
+      # Roda só quando docs/ de fato mudou (ver passo acima) — evita
+      # deploy redundante em execuções de heartbeat puro, onde o Pages
+      # já serve o conteúdo correto. Depende implicitamente de todos os
+      # passos anteriores terem tido sucesso (regra padrão do GitHub
+      # Actions: um `run:` que falha interrompe o job, nenhum passo sem
+      # `if: always()` roda depois) — cobre "erro no push impede
+      # publicar artefato potencialmente não persistido" sem precisar de
+      # uma condição explícita adicional.
+      - name: Preparar para GitHub Pages
+        if: steps.publicar_diff.outputs.mudou == 'true'
+        uses: actions/upload-pages-artifact@v3.0.1
+        with:
+          path: docs/
+
+      - name: Publicar no GitHub Pages
+        id: deploy
+        if: steps.publicar_diff.outputs.mudou == 'true'
+        uses: actions/deploy-pages@v4.0.5
 
       - name: Sumário
         if: always()
@@ -160,8 +267,41 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Data** | $(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT') |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Alterações** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dados (índices)** | ${{ steps.diff.outputs.dados == 'true' && '🆕 atualizados' || '— sem alteração' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Estado do mecanismo do IRI** | ${{ steps.atualizar.outputs.iri_estado }} |" >> $GITHUB_STEP_SUMMARY
+          # Heartbeat: reporta o outcome REAL do passo (sucesso/falha),
+          # não só se havia algo a commitar — ver steps.heartbeat.outputs.
+          # commitou (true/false) e steps.heartbeat.outcome.
+          case "${{ steps.heartbeat.outcome }}" in
+            success)
+              if [ "${{ steps.heartbeat.outputs.commitou }}" = "true" ]; then
+                echo "| **Heartbeat** | ✅ executado — novo commit (push semanal garantido) |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| **Heartbeat** | ✅ executado — nada a fazer (heartbeat de hoje já commitado) |" >> $GITHUB_STEP_SUMMARY
+              fi
+              ;;
+            skipped|"")
+              echo "| **Heartbeat** | ⏭️ não executado — job interrompido num passo anterior (ex.: integridade) |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            *)
+              echo "| **Heartbeat** | ❌ falhou (ver logs do passo \"Heartbeat\") |" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+          # Publicação: nunca declara sucesso só pela existência de uma
+          # URL — usa o outcome real do passo "Publicar no GitHub Pages"
+          # (skipped quando o gate `mudou` é false, success/failure
+          # quando ele roda de fato).
+          case "${{ steps.deploy.outcome }}" in
+            success)
+              echo "| **Publicação (Pages)** | ✅ publicado — ${{ steps.deploy.outputs.page_url }} |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            skipped|"")
+              echo "| **Publicação (Pages)** | ⏭️ pulada — docs/ sem alteração nesta execução (steps.publicar_diff.outputs.mudou=${{ steps.publicar_diff.outputs.mudou }}) |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            *)
+              echo "| **Publicação (Pages)** | ❌ reprovada — havia alteração em docs/ mas o deploy falhou (ver logs do passo \"Publicar no GitHub Pages\") |" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
           # Estado vem direto da função Python (verificar_mudanca_pagina_iri,
           # ver Correção 2) — nunca inferido de git diff. 4 valores
           # possíveis: initialized/changed/unchanged/unavailable.
