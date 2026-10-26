@@ -58,6 +58,12 @@ def rodar_uma_repeticao(grupo, repeticao):
     else:
         env.pop('OPENBLAS_CORETYPE', None)
     env['OPENBLAS_NUM_THREADS'] = grupo['num_threads']
+    # Controla explicitamente a variável de paralelismo concorrente mais
+    # provável de confundir o resultado (OpenMP, usado por scikit-learn/
+    # xgboost — não pelo EMOS H2 em si, mas presente no mesmo processo
+    # via import) — sem isso, um OMP_NUM_THREADS diferente do
+    # OPENBLAS_NUM_THREADS pedido seria uma variável não controlada.
+    env['OMP_NUM_THREADS'] = grupo['num_threads']
 
     proc = subprocess.run(
         [sys.executable, str(WORKER)],

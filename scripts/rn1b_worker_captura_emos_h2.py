@@ -10,16 +10,27 @@ só chama scripts/cfsv2_emos_h2_implementacao.py (produção, intocado) com
 os MESMOS dois fixtures sintéticos dos testes que reprovaram no Job C,
 copiados literalmente de tests/test_cfsv2_emos_h2_implementacao.py
 (IndependenciaD0TestCase.test_d_sigma_d0_identico_ao_variar_ensemble_std_das_linhas_de_treino
-e MutacaoObservacaoFuturaTestCase.test_a_mutar_observacao_da_linha_imediatamente_anterior_nao_afeta_avaliacao_mais_recente),
-para poder capturar os campos ricos (res.success/status/message/fun/x/jac/
-nit/nfev) que `python -m unittest` por si só não exporia — os testes
-originais continuam existindo e passíveis de serem rodados normalmente,
-sem nenhuma alteração.
+e MutacaoObservacaoFuturaTestCase.test_a_mutar_observacao_da_linha_imediatamente_anterior_nao_afeta_avaliacao_mais_recente).
+
+Captura de res.jac/res.x completo: a implementação de produção já grava
+status/message/nit/nfev/a/b/gamma_c/d (equivalentes a res.status/
+res.message/res.nit/res.nfev/res.x desempacotado), mas NÃO grava
+res.jac. Para isso, usa-se um wrapper de observação em torno de
+`emos.minimize` (reatribuição do nome no módulo, igual ao padrão já
+validado na Fase ENSO-CI — ver auditoria, Job D/E, _rodar_metodo_
+original) — o wrapper chama a função REAL com os MESMOS argumentos,
+nunca os altera, e só GUARDA uma referência ao `res` retornado antes de
+devolvê-lo inalterado. Autoteste (`_autoteste_wrapper_nao_altera_resultado`)
+roda a cada execução e aborta (exit 2) se o wrapper mudar qualquer campo
+do resultado em relação à chamada direta — nunca assumido, sempre
+reverificado.
 
 Imprime UM objeto JSON por linha em stdout — o processo pai (driver) só
 precisa ler stdout, nunca precisa importar numpy/scipy ele mesmo.
 """
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -32,12 +43,15 @@ import threadpoolctl
 import cfsv2_emos_h2_implementacao as emos
 import cfsv2_validacao_cientifica as v
 
+_MINIMIZE_ORIGINAL = emos.minimize
+
 
 def _info_blas():
     infos = []
     for d in threadpoolctl.threadpool_info():
         if d.get('user_api') == 'blas':
-            infos.append({k: d.get(k) for k in ('prefix', 'version', 'architecture', 'num_threads')})
+            infos.append({k: d.get(k) for k in
+                           ('prefix', 'filepath', 'version', 'architecture', 'num_threads')})
     return infos
 
 
@@ -52,6 +66,13 @@ def _cpu_model():
     return None
 
 
+_VARS_CONCORRENCIA = (
+    'OPENBLAS_CORETYPE', 'OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS',
+    'MKL_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS',
+    'OPENBLAS_MAIN_FREE', 'GOTO_NUM_THREADS',
+)
+
+
 def _info_ambiente():
     # aquecimento mínimo — só para forçar o carregamento preguiçoso do
     # BLAS antes de ler threadpoolctl, igual ao padrão já usado em
@@ -64,6 +85,7 @@ def _info_ambiente():
         'scipy': __import__('scipy').__version__,
         'cpu_model': _cpu_model(),
         'blas_libs': _info_blas(),
+        'variaveis_concorrencia': {k: os.environ.get(k) for k in _VARS_CONCORRENCIA},
     }
 
 
@@ -117,6 +139,20 @@ def _pares_mutacao(n):
     return linhas
 
 
+def _hash_fixtures():
+    """Hash determinístico dos dois fixtures — os 5 grupos da matriz rodam
+    este MESMO worker sem nenhum parâmetro de grupo influenciando os
+    dados; este hash é o jeito de provar isso no artefato final, não só
+    assumir pela leitura do código."""
+    h = hashlib.sha256()
+    for df in (_pares_independencia_d0(lambda i: 15.0),
+               _pares_independencia_d0(lambda i: 5.0 + 3.0 * (i % 11)),
+               pd.DataFrame(_pares_mutacao(125))):
+        h.update(pd.util.hash_pandas_object(df.drop(columns=['membros', 'anos_hist_climatologia']),
+                                             index=True).values.tobytes())
+    return h.hexdigest()[:16]
+
+
 def _linha_para_dict(linha, campos_extra):
     d = {c: linha.get(c) for c in campos_extra}
     for k, val in d.items():
@@ -136,9 +172,81 @@ _CAMPOS_RICOS = (
 )
 
 
+class _ObservadorMinimize:
+    """Wrapper de PURA OBSERVAÇÃO sobre emos.minimize — encaminha para a
+    função real com os MESMOS argumentos (*args/**kwargs inalterados),
+    nunca toca x0/bounds/options, e só guarda uma referência ao último
+    `res` por tamanho de theta (4=completo, 3=d0) antes de devolvê-lo
+    SEM MODIFICAÇÃO. Instalado/removido só dentro deste processo filho
+    descartável — nunca persiste no módulo de produção além da duração
+    deste script."""
+
+    def __init__(self):
+        self.ultimo_completo = None
+        self.ultimo_d0 = None
+
+    def __call__(self, fun, x0, *args, **kwargs):
+        res = _MINIMIZE_ORIGINAL(fun, x0, *args, **kwargs)
+        if len(x0) == 4:
+            self.ultimo_completo = res
+        elif len(x0) == 3:
+            self.ultimo_d0 = res
+        return res
+
+
+def _autoteste_wrapper_nao_altera_resultado():
+    """Roda a MESMA chamada real com e sem o wrapper instalado, com os
+    MESMOS dados, e compara byte-a-byte (via repr dos campos relevantes)
+    — se o wrapper alterar qualquer coisa, aborta antes de qualquer
+    coleta real (nunca assume, sempre reverifica nesta execução)."""
+    clim_obs = np.full(10, 70.0)
+    anom = np.linspace(-5, 5, 10)
+    erro_sd = np.full(10, 20.0)
+    spread_rel = np.full(10, 1.0)
+    y = 70.0 + 0.5 * anom
+
+    res_sem_wrapper = emos.ajustar_emos_completo(clim_obs, anom, erro_sd, spread_rel, y)
+
+    observador = _ObservadorMinimize()
+    emos.minimize = observador
+    try:
+        res_com_wrapper = emos.ajustar_emos_completo(clim_obs, anom, erro_sd, spread_rel, y)
+    finally:
+        emos.minimize = _MINIMIZE_ORIGINAL
+
+    campos = ('success', 'status', 'message', 'fun', 'nit', 'nfev')
+    for campo in campos:
+        v1, v2 = getattr(res_sem_wrapper, campo), getattr(res_com_wrapper, campo)
+        if repr(v1) != repr(v2):
+            raise RuntimeError(
+                f'AUTOTESTE FALHOU: wrapper de observação alterou res.{campo} '
+                f'({v1!r} -> {v2!r}) — abortando, NUNCA coletando dados com o wrapper suspeito.')
+    if not np.allclose(res_sem_wrapper.x, res_com_wrapper.x) or \
+       not np.allclose(res_sem_wrapper.jac, res_com_wrapper.jac):
+        raise RuntimeError('AUTOTESTE FALHOU: wrapper de observação alterou res.x/res.jac.')
+    if observador.ultimo_completo is None or repr(observador.ultimo_completo.fun) != repr(res_com_wrapper.fun):
+        raise RuntimeError('AUTOTESTE FALHOU: wrapper não capturou a chamada observada corretamente.')
+
+
+def _rodar_com_observador(fn_fixture):
+    observador = _ObservadorMinimize()
+    emos.minimize = observador
+    try:
+        resultado = fn_fixture()
+    finally:
+        emos.minimize = _MINIMIZE_ORIGINAL
+    jac_completo = observador.ultimo_completo.jac.tolist() if observador.ultimo_completo is not None else None
+    jac_d0 = observador.ultimo_d0.jac.tolist() if observador.ultimo_d0 is not None else None
+    return resultado, jac_completo, jac_d0
+
+
 def rodar_teste_independencia_d0():
-    tabela_a = emos.construir_emos_h2_expanding(_pares_independencia_d0(lambda i: 15.0))
-    tabela_b = emos.construir_emos_h2_expanding(_pares_independencia_d0(lambda i: 5.0 + 3.0 * (i % 11)))
+    def _fixture():
+        tabela_a = emos.construir_emos_h2_expanding(_pares_independencia_d0(lambda i: 15.0))
+        tabela_b = emos.construir_emos_h2_expanding(_pares_independencia_d0(lambda i: 5.0 + 3.0 * (i % 11)))
+        return tabela_a, tabela_b
+
+    (tabela_a, tabela_b), jac_completo, jac_d0 = _rodar_com_observador(_fixture)
     linha_a = tabela_a.sort_values('init_date').iloc[-1]
     linha_b = tabela_b.sort_values('init_date').iloc[-1]
 
@@ -155,17 +263,26 @@ def rodar_teste_independencia_d0():
         'passou': bool(passou),
         'serie_a': _linha_para_dict(linha_a, _CAMPOS_RICOS),
         'serie_b': _linha_para_dict(linha_b, _CAMPOS_RICOS),
+        # jac captura só a ÚLTIMA chamada de minimize observada nesta
+        # rodada (série b, processada depois da a) — suficiente para a
+        # linha avaliada que os testes de fato verificam.
+        'jac_completo_ultima_chamada': jac_completo,
+        'jac_d0_ultima_chamada': jac_d0,
     }
 
 
 def rodar_teste_mutacao_observacao_futura():
     linhas = _pares_mutacao(125)
-    tabela_antes = emos.construir_emos_h2_expanding(pd.DataFrame(linhas))
-    avaliacao_antes = tabela_antes.sort_values('init_date').iloc[-1].copy()
 
-    linhas_mutadas = [dict(linha) for linha in linhas]
-    linhas_mutadas[-2]['observacao'] = -999999.0
-    tabela_depois = emos.construir_emos_h2_expanding(pd.DataFrame(linhas_mutadas))
+    def _fixture():
+        tabela_antes = emos.construir_emos_h2_expanding(pd.DataFrame(linhas))
+        linhas_mutadas = [dict(linha) for linha in linhas]
+        linhas_mutadas[-2]['observacao'] = -999999.0
+        tabela_depois = emos.construir_emos_h2_expanding(pd.DataFrame(linhas_mutadas))
+        return tabela_antes, tabela_depois
+
+    (tabela_antes, tabela_depois), jac_completo, jac_d0 = _rodar_com_observador(_fixture)
+    avaliacao_antes = tabela_antes.sort_values('init_date').iloc[-1].copy()
     avaliacao_depois = tabela_depois[
         tabela_depois['init_date'] == avaliacao_antes['init_date']].iloc[0]
 
@@ -183,12 +300,23 @@ def rodar_teste_mutacao_observacao_futura():
         'passou': bool(passou),
         'avaliacao_antes': _linha_para_dict(avaliacao_antes, _CAMPOS_RICOS),
         'avaliacao_depois': _linha_para_dict(avaliacao_depois, _CAMPOS_RICOS),
+        # jac captura a última chamada observada (tabela_depois, última
+        # linha processada) — mesma ressalva do teste acima.
+        'jac_completo_ultima_chamada': jac_completo,
+        'jac_d0_ultima_chamada': jac_d0,
     }
 
 
 def main():
+    try:
+        _autoteste_wrapper_nao_altera_resultado()
+    except RuntimeError as exc:
+        print(json.dumps({'erro_autoteste': str(exc)}, ensure_ascii=False))
+        sys.exit(2)
+
     resultado = {
         'ambiente': _info_ambiente(),
+        'hash_fixtures': _hash_fixtures(),
         'resultados': [
             rodar_teste_independencia_d0(),
             rodar_teste_mutacao_observacao_futura(),
