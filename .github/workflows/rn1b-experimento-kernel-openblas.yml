@@ -1,0 +1,93 @@
+name: RN-1B — experimento controlado de kernel OpenBLAS (EMOS H2)
+
+# Workflow TEMPORÁRIO — vive só na branch claude/rn1b-experimento-openblas-kernel,
+# nunca deve ser mesclado a main. Mesmo padrão já validado em
+# teste-app-auth-validacao.yml (Fase ENSO-APP): dispara por push,
+# restrito a esta branch + ao caminho deste próprio arquivo — nunca por
+# workflow_dispatch (exigiria o arquivo em main).
+#
+# Só LÊ o repositório e roda os dois testes-alvo isolados (não a suíte
+# completa de 1659 testes — ver docs/enso-rn1b-experimento-kernel-openblas.md,
+# seção de estimativa de recursos). Nenhum commit, push, deploy ou
+# alteração de dado/dashboard/relatório. Nenhuma fórmula, bound,
+# tolerância ou critério do EMOS H2 é tocado — só variáveis de ambiente
+# (OPENBLAS_CORETYPE/OPENBLAS_NUM_THREADS) antes de importar numpy/scipy
+# num processo filho isolado por repetição.
+on:
+  push:
+    branches:
+      - claude/rn1b-experimento-openblas-kernel
+    paths:
+      - '.github/workflows/rn1b-experimento-kernel-openblas.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  experimento:
+    name: Matriz G0-G4 — kernel OpenBLAS x threads x EMOS H2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências (mesmo conjunto do Job C de ci.yml)
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-c3s.txt
+
+      - name: CPU alocada nesta execução (informativo — GitHub não permite pedir AMD/Intel)
+        run: cat /proc/cpuinfo | grep "model name" | head -1
+
+      - name: Rodar matriz de experimentos (5 grupos x 5 repetições = 25 processos isolados)
+        run: |
+          python scripts/rn1b_experimento_kernel_openblas.py \
+            --saida rn1b_resultados.jsonl --repeticoes 5
+
+      - name: Resumo por grupo
+        if: always()
+        run: |
+          python3 -c "
+          import json, collections
+          contagem = collections.defaultdict(lambda: {'pass': 0, 'fail': 0, 'erro': 0, 'arquiteturas': set()})
+          try:
+              with open('rn1b_resultados.jsonl') as fh:
+                  linhas = [json.loads(l) for l in fh]
+          except FileNotFoundError:
+              linhas = []
+          for d in linhas:
+              g = d['grupo']
+              if d.get('erro'):
+                  contagem[g]['erro'] += 1
+                  continue
+              libs = d.get('ambiente', {}).get('blas_libs', [])
+              if libs:
+                  contagem[g]['arquiteturas'].add(libs[-1].get('architecture'))
+              todos_pass = all(r['passou'] for r in d.get('resultados', []))
+              contagem[g]['pass' if todos_pass else 'fail'] += 1
+          print('## 🔬 RN-1B — resultado da matriz')
+          print()
+          print('| Grupo | PASS | FAIL | ERRO | Arquitetura(s) observada(s) |')
+          print('|---|---|---|---|---|')
+          for g in sorted(contagem):
+              c = contagem[g]
+              print(f\"| {g} | {c['pass']} | {c['fail']} | {c['erro']} | {', '.join(sorted(x for x in c['arquiteturas'] if x))} |\")
+          " >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "⚠️ Nenhuma fórmula, bound, tolerância ou critério do EMOS H2 foi alterado nesta execução — só ambiente (kernel/threads)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar resultados brutos como artefato
+        if: always()
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: rn1b-resultados-${{ github.run_id }}
+          path: rn1b_resultados.jsonl
+          retention-days: 14
