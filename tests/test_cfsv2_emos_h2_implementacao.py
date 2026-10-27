@@ -13,6 +13,14 @@ futura; independência do ajuste `d=0` (estrutural e por construção de
 cenário sintético); disparo de STOP-ON-FAILURE em não-convergência e
 em solução numericamente inválida; e smoke test com dados reais.
 
+RN-2B (estabilização científica da CI): os fixtures de
+IndependenciaD0TestCase/MutacaoObservacaoFuturaTestCase passaram a usar
+ruído determinístico (`_ruido_determinista`), eliminando o colapso de
+resíduo/sigma que levava `gamma_c` ao limite inferior exato — ver
+docs/enso-ci-emos-h2-auditoria-diagnostica.md. Esse regime extremo
+continua coberto, com os fixtures ORIGINAIS intactos, em
+`EstresseNumericoFronteiraGammaCTestCase`.
+
 Roda com:
     python -m unittest tests.test_cfsv2_emos_h2_implementacao -v
 """
@@ -32,6 +40,17 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import cfsv2_calibracao_mos_linear as mos  # noqa: E402
 import cfsv2_emos_h2_implementacao as emos  # noqa: E402
 import cfsv2_validacao_cientifica as v  # noqa: E402
+
+
+def _ruido_determinista(n, seed, escala):
+    """RN-2B — ruído gaussiano determinístico (mesma seed => mesmo
+    ruído sempre) para dar variância de resíduo genuína aos fixtures
+    de propriedade (IndependenciaD0/MutacaoObservacaoFutura), evitando
+    o colapso de sigma/gamma_c documentado em
+    docs/enso-ci-emos-h2-auditoria-diagnostica.md. Nunca usado no
+    fixture degenerado original, preservado intacto em
+    EstresseNumericoFronteiraGammaCTestCase."""
+    return np.random.default_rng(seed).normal(0.0, escala, n)
 
 
 class CrpsAnaliticoTestCase(unittest.TestCase):
@@ -267,9 +286,16 @@ class MutacaoObservacaoFuturaTestCase(unittest.TestCase):
     alterar drasticamente a OBSERVAÇÃO de uma linha com
     `target_month >= init_date_avaliada` não pode mudar nada
     (parâmetros, forecast/distribuição, CRPS) de uma avaliação
-    passada."""
+    passada.
 
-    def _pares(self, n):
+    RN-2B: fixture com ruído determinístico (`_ruido_determinista`) em
+    vez da série perfeitamente linear original, que colapsava
+    resíduos/`sigma` e levava `gamma_c` ao limite inferior exato (ver
+    docs/enso-ci-emos-h2-auditoria-diagnostica.md). O fixture
+    degenerado original continua coberto, intacto, em
+    EstresseNumericoFronteiraGammaCTestCase."""
+
+    def _pares(self, n, ruido):
         linhas = []
         for i in range(n):
             mes = (i % 12) + 1
@@ -279,7 +305,8 @@ class MutacaoObservacaoFuturaTestCase(unittest.TestCase):
             linhas.append({
                 'init_date': init_date, 'target_month': str(target_p),
                 'target_ano': target_p.year, 'target_mes': target_p.month,
-                'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                'observacao': max(0.0, 80.0 + 0.3 * i + ruido[i]),
+                'ensemble_mean': 100.0 + 0.5 * i,
                 'ensemble_std': 15.0 + 0.1 * (i % 7), 'membros': np.full(24, 100.0 + 0.5 * i),
                 'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
                 'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
@@ -292,10 +319,35 @@ class MutacaoObservacaoFuturaTestCase(unittest.TestCase):
         return linhas
 
     def test_a_mutar_observacao_da_linha_imediatamente_anterior_nao_afeta_avaliacao_mais_recente(self):
-        linhas = self._pares(125)
+        ruido = _ruido_determinista(125, seed=20261028, escala=10.0)
+        linhas = self._pares(125, ruido)
         tabela_antes = emos.construir_emos_h2_expanding(pd.DataFrame(linhas))
         avaliacao_antes = tabela_antes.sort_values('init_date').iloc[-1].copy()
         self.assertEqual(avaliacao_antes['status_emos'], emos.STATUS_OK)
+
+        # RN-2B — verificação independente de que a linha mutada
+        # (linhas[-2]) está genuinamente inelegível para o treino desta
+        # avaliação pela condição `target_month_treino < init_date_avaliada`
+        # (ela viola essa condição por IGUALDADE — target_month de
+        # linhas[-2] é exatamente o init_date da avaliação — não por
+        # acaso), e de que há treinamento efetivo não trivial cuja
+        # linha mais recente de fato usada é a imediatamente anterior
+        # à mutada (linhas[-3]). Sem isto, o teste abaixo passaria
+        # mesmo se a regra causal estivesse quebrada e não houvesse
+        # treinamento nenhum, ou se linhas[-2] fosse incluída por erro
+        # mas coincidisse em não alterar o resultado.
+        self.assertGreater(avaliacao_antes['n_treino_emos'], 0,
+                            'treinamento vazio tornaria a verificação de não-vazamento trivial')
+        self.assertFalse(
+            v._periodo(linhas[-2]['target_month']) < v._periodo(avaliacao_antes['init_date']),
+            'linha -2 deveria estar na fronteira exata de inelegibilidade '
+            '(target_month_treino == init_date_avaliada, nunca <) — se isto falhar, o '
+            'fixture não está mais testando o caso que este teste pretende cobrir')
+        self.assertEqual(avaliacao_antes['max_init_date_treino'], linhas[-3]['init_date'],
+                          'a linha de treino mais recente efetivamente usada deveria ser '
+                          'linhas[-3] — prova de que linhas[-2] (a mutada) foi excluída pela '
+                          'condição de causalidade, nunca por coincidência de amostra')
+        self.assertNotEqual(avaliacao_antes['max_init_date_treino'], linhas[-2]['init_date'])
 
         linhas_mutadas = [dict(linha) for linha in linhas]
         linhas_mutadas[-2]['observacao'] = -999999.0
@@ -340,7 +392,18 @@ class IndependenciaD0TestCase(unittest.TestCase):
         `d=0` (parâmetros, sigma_d0, crps_d0) da mesma avaliação tem
         que ser EXATAMENTE igual nas duas, provando que `sigma_d0` não
         usa essa informação para nenhuma linha (nem de treino, nem a
-        avaliada)."""
+        avaliada).
+
+        RN-2B: `observacao` recebe o MESMO ruído gaussiano
+        determinístico nas duas séries (só `ensemble_std`/
+        `spread_relativo` diferem, preservando a condição do teste) em
+        vez da série perfeitamente linear original, que colapsava
+        resíduos de treino a ~1e-6 e `sigma`/`c` a valores quase nulos
+        (ver docs/enso-ci-emos-h2-auditoria-diagnostica.md). O regime
+        degenerado original continua coberto, intacto, em
+        EstresseNumericoFronteiraGammaCTestCase."""
+        ruido = _ruido_determinista(125, seed=20261027, escala=10.0)
+
         def _pares(spread_fn):
             linhas = []
             for i in range(125):
@@ -351,7 +414,8 @@ class IndependenciaD0TestCase(unittest.TestCase):
                 linhas.append({
                     'init_date': init_date, 'target_month': str(target_p),
                     'target_ano': target_p.year, 'target_mes': target_p.month,
-                    'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                    'observacao': max(0.0, 80.0 + 0.3 * i + ruido[i]),
+                    'ensemble_mean': 100.0 + 0.5 * i,
                     'ensemble_std': spread_fn(i), 'membros': np.full(24, 100.0 + 0.5 * i),
                     'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
                     'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
@@ -375,6 +439,13 @@ class IndependenciaD0TestCase(unittest.TestCase):
         # ver com a independência do d0 que este teste verifica).
         self.assertEqual(linha_a['status_emos_d0'], emos.STATUS_OK)
         self.assertEqual(linha_b['status_emos_d0'], emos.STATUS_OK)
+        # RN-2B — reforço (não substitui o anterior): com o fixture não
+        # degenerado, o modelo COMPLETO também deveria convergir
+        # normalmente nas duas séries, confirmando que o novo fixture
+        # não reproduz o regime de fronteira — documentando a mudança,
+        # nunca ocultando-a.
+        self.assertEqual(linha_a['status_emos_completo'], emos.STATUS_OK)
+        self.assertEqual(linha_b['status_emos_completo'], emos.STATUS_OK)
 
         for campo in ('a_d0', 'b_d0', 'gamma_c_d0', 'c_d0', 'sigma_d0', 'mu_latente_d0', 'crps_d0'):
             self.assertAlmostEqual(linha_a[campo], linha_b[campo], places=6,
@@ -410,6 +481,215 @@ class IndependenciaD0TestCase(unittest.TestCase):
         # se fossem idênticos, seria sinal de que d0 não foi reajustado
         # de forma independente.
         self.assertNotAlmostEqual(np.exp(gamma_c), np.exp(gamma_c_d0), places=2)
+
+
+class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
+    """RN-2B — cobertura dedicada do regime numérico extremo que os
+    fixtures ORIGINAIS de IndependenciaD0TestCase/
+    MutacaoObservacaoFuturaTestCase produziam antes desta revisão:
+    séries sintéticas perfeitamente lineares, sem ruído, que colapsam
+    resíduos de treino a ~1e-6 e `sigma`/`c` a valores quase nulos,
+    levando `gamma_c`/`gamma_c_d0` ao limite inferior exato — ver
+    docs/enso-ci-emos-h2-auditoria-diagnostica.md (seções 8-10) e
+    docs/enso-ci-emos-h2-proposta-robustez-numerica.md. Os dois
+    fixtures abaixo são preservados INTACTOS (idênticos aos usados
+    pelos testes de propriedade antes da RN-2B) — só a classe que os
+    hospeda e o contrato de verificação mudaram, nunca os dados.
+
+    Contrato de aprovação (nunca aprova ABNORMAL automaticamente,
+    nunca ignora falha de convergência genuína, nunca usa skip/xfail,
+    nunca distingue por CPU — aceita estados numéricos diferentes
+    conforme o ambiente, mas só com verificação explícita em cada um):
+
+    1. `res.fun` tem que ser finito SEMPRE, incondicionalmente.
+    2. Se NENHUM parâmetro do resultado está num bound: `res.success`
+       tem que ser True — sem isso não há explicação conhecida/testada
+       para a falha (auditoria, seção 10: a única chamada genuinamente
+       mal otimizada observada não estava numa fronteira e tinha
+       gradiente livre 2-3 ordens de magnitude maior que o caso
+       benigno).
+    3. Se ALGUM parâmetro está num bound e `res.success=False`: só é
+       aceito como "fronteira benigna" se o gradiente dos parâmetros
+       LIVRES for pequeno (< LIMIAR_GRADIENTE_LIVRE, calibrado com
+       margem ampla entre os dois exemplos de referência da auditoria:
+       benigno ~0,0015; mal otimizado ~0,67-18,9). Caso contrário, o
+       teste FALHA — nunca aprova silenciosamente.
+    4. Todo resultado observado é impresso explicitamente (diagnóstico
+       separado da condição de aprovação/reprovação).
+    """
+
+    LIMIAR_GRADIENTE_LIVRE = 0.05  # ver docstring da classe — margem ampla
+    # entre o exemplo benigno (~0,0015) e o mal otimizado (~0,67-18,9)
+    # da auditoria (docs/enso-ci-emos-h2-auditoria-diagnostica.md, seções 8/10).
+
+    @staticmethod
+    def _diagnostico_fronteira_benigna(x, jac, bounds, tol_bound=1e-6,
+                                        limiar_grad_livre=LIMIAR_GRADIENTE_LIVRE):
+        """Discriminador só de DIAGNÓSTICO (vive no teste, nunca no
+        código de produção) — aplica o achado empírico da auditoria
+        (gradiente dos parâmetros livres pequeno discrimina fronteira
+        benigna de otimização genuinamente ruim), nunca reimplementa
+        nem substitui o critério `success` do scipy."""
+        x = np.asarray(x, dtype=float)
+        jac = np.asarray(jac, dtype=float)
+        no_bound = [
+            (lo is not None and abs(xi - lo) < tol_bound) or
+            (hi is not None and abs(xi - hi) < tol_bound)
+            for xi, (lo, hi) in zip(x, bounds)
+        ]
+        indices_livres = [i for i, no in enumerate(no_bound) if not no]
+        if not any(no_bound):
+            return {'aceitavel': False, 'no_bound': no_bound, 'grad_livre_max': None,
+                    'motivo': 'nenhum parâmetro no bound — ABNORMAL sem fronteira ativa '
+                              'não tem explicação benigna conhecida/testada'}
+        grad_livre_max = float(np.max(np.abs(jac[indices_livres]))) if indices_livres else 0.0
+        aceitavel = grad_livre_max < limiar_grad_livre
+        motivo = (f'gradiente livre máximo={grad_livre_max:.6g} '
+                  f'{"<" if aceitavel else ">="} limiar={limiar_grad_livre} — '
+                  f'{"consistente" if aceitavel else "INCONSISTENTE"} com fronteira benigna')
+        return {'aceitavel': aceitavel, 'no_bound': no_bound, 'grad_livre_max': grad_livre_max,
+                'motivo': motivo}
+
+    def test_a_discriminador_aceita_o_exemplo_benigno_da_auditoria(self):
+        """Regressão literal — auditoria, seção 8: chamada decisiva
+        reproduzida identicamente em toda execução AMD+Haswell
+        observada, fronteira em gamma_c (3º componente), gradiente
+        livre pequeno."""
+        x = np.array([4.0000012, 0.6, -20.0])
+        jac = np.array([2.393306108216331e-05, 0.001515917621979863, 0.00010609730260496464])
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+        diag = self._diagnostico_fronteira_benigna(x, jac, bounds)
+        self.assertTrue(diag['aceitavel'], diag['motivo'])
+
+    def test_b_discriminador_rejeita_o_exemplo_mal_otimizado_da_auditoria(self):
+        """Regressão literal — auditoria, seção 10: a única chamada
+        genuinamente mal otimizada observada (`fun` 97,5x pior que o
+        cluster bom) tem gradiente livre 2-3 ordens de magnitude maior
+        (jac[0]=0,67, jac[1]=18,9), mesmo com gamma_c também no bound
+        (componente de fronteira ~0,0001061, igual ao caso benigno —
+        a auditoria já havia confirmado que esse componente, isolado,
+        não discrimina os dois casos)."""
+        x = np.array([0.0, 1.0, -20.0])
+        jac = np.array([0.67, 18.9, 0.0001061])
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+        diag = self._diagnostico_fronteira_benigna(x, jac, bounds)
+        self.assertFalse(diag['aceitavel'], diag['motivo'])
+
+    def _validos_causais(self, pares):
+        pares_p = pares.assign(_p=pd.PeriodIndex(pares['init_date'], freq='M')).sort_values('_p')
+        avaliada_p = pares_p['_p'].iloc[-1]
+        validos = pares_p[pares_p['_p'] < avaliada_p].copy()
+        validos = validos.assign(_target_p=pd.PeriodIndex(validos['target_month'], freq='M'))
+        return validos[validos['_target_p'] < avaliada_p]
+
+    def test_c_fronteira_submodelo_completo_fixture_degenerado_original_independencia_d0(self):
+        """Fixture ORIGINAL da série B de IndependenciaD0TestCase
+        (antes da RN-2B), preservado byte a byte — exercita
+        diretamente `ajustar_emos_completo` (nunca reimplementado)
+        sobre o conjunto de treino causal real da última avaliação."""
+        def _pares(spread_fn):
+            linhas = []
+            for i in range(125):
+                mes = (i % 12) + 1
+                ano = 1990 + i // 12
+                init_date = f'{ano}-{mes:02d}'
+                target_p = v._periodo(init_date) + 1
+                linhas.append({
+                    'init_date': init_date, 'target_month': str(target_p),
+                    'target_ano': target_p.year, 'target_mes': target_p.month,
+                    'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                    'ensemble_std': spread_fn(i), 'membros': np.full(24, 100.0 + 0.5 * i),
+                    'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
+                    'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
+                    'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 20.0,
+                    'spread_relativo': spread_fn(i) / 15.0,
+                    'tercil_33': 60.0, 'tercil_67': 90.0,
+                    'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                    'valido': True,
+                })
+            return pd.DataFrame(linhas)
+
+        pares = _pares(lambda i: 5.0 + 3.0 * (i % 11))
+        validos = self._validos_causais(pares)
+        self.assertGreaterEqual(len(validos), emos.N_TREINO_MINIMO_EMOS)
+
+        res = emos.ajustar_emos_completo(
+            validos['climatologia_observada'].to_numpy(dtype=float),
+            validos['anom_ensemble'].to_numpy(dtype=float),
+            validos['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos['spread_relativo'].to_numpy(dtype=float),
+            validos['observacao'].to_numpy(dtype=float))
+
+        self.assertTrue(np.isfinite(res.fun),
+                         'res.fun precisa ser finito SEMPRE, independente do status de convergência')
+        diag = self._diagnostico_fronteira_benigna(res.x, res.jac, emos.BOUNDS_COMPLETO)
+        algum_no_bound = any(diag['no_bound'])
+        if not algum_no_bound:
+            self.assertTrue(res.success,
+                             'nenhum parâmetro no bound: ABNORMAL sem fronteira ativa não tem '
+                             'explicação benigna conhecida — tratado como falha real')
+        elif not res.success:
+            self.assertTrue(diag['aceitavel'], f'status={res.status} message={res.message!r} '
+                                                f'— {diag["motivo"]}')
+            print(f'[EstresseNumerico] completo (IndependenciaD0, série B): ABNORMAL aceito como '
+                  f'fronteira benigna (status={res.status}, message={res.message!r}) — {diag["motivo"]}')
+        else:
+            print(f'[EstresseNumerico] completo (IndependenciaD0, série B): convergiu normalmente '
+                  f'com parâmetro no bound (status={res.status}, message={res.message!r})')
+
+    def test_d_fronteira_submodelo_d0_fixture_degenerado_original_mutacao(self):
+        """Fixture ORIGINAL de MutacaoObservacaoFuturaTestCase (antes
+        da RN-2B), preservado byte a byte — exercita diretamente
+        `ajustar_emos_d0` (nunca reimplementado) sobre o conjunto de
+        treino causal real da última avaliação."""
+        def _pares(n):
+            linhas = []
+            for i in range(n):
+                mes = (i % 12) + 1
+                ano = 1990 + i // 12
+                init_date = f'{ano}-{mes:02d}'
+                target_p = v._periodo(init_date) + 1
+                linhas.append({
+                    'init_date': init_date, 'target_month': str(target_p),
+                    'target_ano': target_p.year, 'target_mes': target_p.month,
+                    'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                    'ensemble_std': 15.0 + 0.1 * (i % 7), 'membros': np.full(24, 100.0 + 0.5 * i),
+                    'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
+                    'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
+                    'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 20.0,
+                    'spread_relativo': (15.0 + 0.1 * (i % 7)) / 15.0,
+                    'tercil_33': 60.0, 'tercil_67': 90.0,
+                    'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                    'valido': True,
+                })
+            return pd.DataFrame(linhas)
+
+        pares = _pares(125)
+        validos = self._validos_causais(pares)
+        self.assertGreaterEqual(len(validos), emos.N_TREINO_MINIMO_EMOS)
+
+        res = emos.ajustar_emos_d0(
+            validos['climatologia_observada'].to_numpy(dtype=float),
+            validos['anom_ensemble'].to_numpy(dtype=float),
+            validos['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos['observacao'].to_numpy(dtype=float))
+
+        self.assertTrue(np.isfinite(res.fun),
+                         'res.fun precisa ser finito SEMPRE, independente do status de convergência')
+        diag = self._diagnostico_fronteira_benigna(res.x, res.jac, emos.BOUNDS_D0)
+        algum_no_bound = any(diag['no_bound'])
+        if not algum_no_bound:
+            self.assertTrue(res.success,
+                             'nenhum parâmetro no bound: ABNORMAL sem fronteira ativa não tem '
+                             'explicação benigna conhecida — tratado como falha real')
+        elif not res.success:
+            self.assertTrue(diag['aceitavel'], f'status={res.status} message={res.message!r} '
+                                                f'— {diag["motivo"]}')
+            print(f'[EstresseNumerico] d0 (MutacaoObservacaoFutura): ABNORMAL aceito como '
+                  f'fronteira benigna (status={res.status}, message={res.message!r}) — {diag["motivo"]}')
+        else:
+            print(f'[EstresseNumerico] d0 (MutacaoObservacaoFutura): convergiu normalmente '
+                  f'com parâmetro no bound (status={res.status}, message={res.message!r})')
 
 
 class StopOnFailureSinteticoTestCase(unittest.TestCase):
