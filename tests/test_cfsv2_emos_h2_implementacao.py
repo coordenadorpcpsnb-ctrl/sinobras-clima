@@ -496,45 +496,50 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
     pelos testes de propriedade antes da RN-2B) — só a classe que os
     hospeda e o contrato de verificação mudaram, nunca os dados.
 
-    Contrato de aprovação, revisado (RN-2B, 2ª rodada — nunca aprova
+    Contrato de aprovação, revisado (RN-2B, 3ª rodada — nunca aprova
     ABNORMAL automaticamente, nunca ignora falha de convergência
     genuína, nunca usa skip/xfail, nunca distingue por CPU; aceita
     estados numéricos diferentes conforme o ambiente, mas só com
-    verificação explícita e independente em cada um):
+    verificação explícita e independente em cada um). Dividido em duas
+    partes deliberadamente separadas:
 
-    1. Dimensões de `x`/`jac`/`bounds` precisam ser consistentes.
-    2. `x`, `jac` e `fun` precisam ser finitos SEMPRE, incondicionalmente.
-    3. `x` precisa respeitar os bounds (com folga numérica) — nunca
-       aceita violação.
-    4. Se NENHUM parâmetro está num bound: `res.success` tem que ser
-       True — sem isso não há explicação conhecida/testada para a
-       falha.
-    5. A classificação "fronteira benigna" só se aplica à assinatura
-       EXATA já documentada na auditoria (`status=2`,
-       `message` iniciando com `'ABNORMAL: '`) — qualquer outro status
-       ou mensagem de falha é tratado como desconhecido e nunca
-       aprovado por este caminho.
-    6. No(s) parâmetro(s) no bound, o SINAL do gradiente precisa ser
-       consistente com a condição de KKT de um mínimo de fronteira: no
-       limite inferior, `jac >= -tolerância` (aumentar o parâmetro não
-       pode reduzir o objetivo); no limite superior, `jac <=
-       tolerância`. Uma solução no limite inferior com gradiente
-       claramente negativo (apontando para uma direção de melhoria
-       viável — aumentar o parâmetro reduziria o objetivo) é
-       classificada como não convergência real, nunca como fronteira
-       benigna.
-    7. O gradiente dos parâmetros LIVRES precisa ser pequeno (<
-       LIMIAR_GRADIENTE_LIVRE, calibrado com margem ampla entre os
-       exemplos de referência da auditoria: benigno ~0,0015; mal
-       otimizado ~0,67-18,9).
-    8. Quando a função objetivo original e os dados causais estão
-       disponíveis: `fun` não pode ser superado por nenhum vizinho
-       determinístico amostrado diretamente da MESMA função objetivo
-       (nunca chamando `minimize` de novo — isso seria não
-       determinístico/dependente de kernel BLAS) além de uma
-       tolerância relativa documentada.
-    9. Todo resultado observado é impresso explicitamente (diagnóstico
-       separado da condição de aprovação/reprovação).
+    A) `_verificar_qualidade_geral` — SEMPRE exigida, independente de
+       `res.success`:
+       1. Dimensões de `x`/`jac`/`bounds` consistentes.
+       2. `x`, `jac` e `fun` finitos.
+       3. `x` respeita os bounds (com folga numérica).
+       4. Quando a função objetivo original e os dados causais estão
+          disponíveis: a avaliação direta `objetivo_fn(x, *args)`
+          precisa ser finita (uma avaliação inicial não finita NUNCA
+          pode ser aprovada só porque nenhum vizinho apareceu "melhor"
+          — comparar com NaN é sempre False em Python, um loophole
+          silencioso que esta verificação fecha explicitamente) e
+          precisa ser consistente com `fun` (tolerância relativa
+          documentada).
+       5. `fun` não pode ser superado por nenhum vizinho determinístico
+          amostrado diretamente da MESMA função objetivo (nunca
+          chamando `minimize` de novo — isso seria não
+          determinístico/dependente de kernel BLAS) além de uma
+          tolerância relativa documentada.
+
+    B) `_diagnostico_fronteira_benigna` — só exigida quando
+       `res.success=False`, e só DEPOIS de A) já ter sido aprovada:
+       1. A classificação "fronteira benigna" só se aplica à
+          assinatura EXATA já documentada na auditoria (`status=2`,
+          `message` iniciando com `'ABNORMAL: '`) — qualquer outro
+          status/mensagem é tratado como desconhecido e nunca aprovado
+          por este caminho.
+       2. No(s) parâmetro(s) no bound, o SINAL do gradiente precisa
+          ser consistente com a condição de KKT de um mínimo de
+          fronteira (não pode apontar para uma direção de melhoria
+          viável).
+       3. O gradiente dos parâmetros LIVRES precisa ser pequeno (<
+          LIMIAR_GRADIENTE_LIVRE).
+
+    Uma solução com `success=True` nunca precisa da assinatura
+    ABNORMAL nem do limiar heurístico de gradiente livre — só da
+    qualidade geral (A). Todo resultado observado é impresso
+    explicitamente (diagnóstico separado da condição de aprovação).
     """
 
     STATUS_ABNORMAL_CONHECIDO = 2
@@ -555,6 +560,16 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
     # que a assinatura de solução ruim — não foi escolhida para fazer
     # nenhum teste específico passar.
     TOL_QUALIDADE_RELATIVA = 0.01
+    # Tolerância de consistência entre `fun` (valor registrado por
+    # `OptimizeResult`) e a reavaliação direta `objetivo_fn(x, *args)`:
+    # 1e-6 relativo. O ruído de ponto flutuante típico de float64 é
+    # ~2,2e-16 (epsilon da máquina); somando/multiplicando algumas
+    # centenas de termos (o tamanho típico das janelas de treino aqui),
+    # o erro acumulado esperado fica em torno de sqrt(n)*epsilon ou
+    # n*epsilon, várias ordens de magnitude abaixo de 1e-6 — qualquer
+    # diferença real (ex.: argumentos na ordem errada, função errada)
+    # produz divergências muito maiores que isso.
+    TOL_CONSISTENCIA_FUN_RELATIVA = 1e-6
 
     # Passos deterministas para a varredura de vizinhança (nunca usa RNG,
     # nunca chama minimize) — combina passos relativos à magnitude atual
@@ -573,10 +588,17 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         envolve o L-BFGS-B (só as operações elementares de
         numpy/scipy.stats que `_objetivo_completo`/`_objetivo_d0` já
         fazem, idênticas em qualquer plataforma dentro da precisão de
-        float64)."""
+        float64). Retorna (valor_inicial, melhor_valor, melhor_ponto) —
+        `valor_inicial` é exposto separadamente para que o chamador
+        possa rejeitar explicitamente uma avaliação não finita, nunca
+        aprovar por "nenhum vizinho encontrado melhor" (comparação com
+        NaN é sempre False em Python)."""
         x = np.asarray(x, dtype=float)
-        melhor_valor = float(objetivo_fn(x, *args_objetivo))
+        valor_inicial = float(objetivo_fn(x, *args_objetivo))
+        melhor_valor = valor_inicial
         melhor_ponto = x.copy()
+        if not np.isfinite(valor_inicial):
+            return valor_inicial, melhor_valor, melhor_ponto.tolist()
         passos_por_dim = []
         for xi in x:
             passos = {abs(xi) * f for f in EstresseNumericoFronteiraGammaCTestCase.FRACOES_RELATIVAS}
@@ -595,21 +617,18 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
                     if np.isfinite(valor) and valor < melhor_valor:
                         melhor_valor = valor
                         melhor_ponto = candidato
-        return melhor_valor, melhor_ponto.tolist()
+        return valor_inicial, melhor_valor, melhor_ponto.tolist()
 
     @staticmethod
-    def _diagnostico_fronteira_benigna(x, jac, bounds, status=None, message=None, fun=None,
-                                        objetivo_fn=None, args_objetivo=None,
-                                        tol_bound=TOL_BOUND,
-                                        limiar_grad_livre=LIMIAR_GRADIENTE_LIVRE,
-                                        tol_sinal_kkt=TOL_SINAL_KKT,
-                                        tol_qualidade_relativa=TOL_QUALIDADE_RELATIVA):
-        """Discriminador só de DIAGNÓSTICO (vive no teste, nunca no
-        código de produção) — nunca reimplementa nem substitui o
-        critério `success` do scipy; só decide se um `success=False`
-        específico é explicável pela fronteira benigna já documentada
-        na auditoria, com verificações explícitas em cada etapa (nunca
-        aprova por omissão)."""
+    def _verificar_qualidade_geral(x, jac, bounds, fun, objetivo_fn=None, args_objetivo=None,
+                                    tol_bound=TOL_BOUND,
+                                    tol_qualidade_relativa=TOL_QUALIDADE_RELATIVA,
+                                    tol_consistencia_fun_relativa=TOL_CONSISTENCIA_FUN_RELATIVA):
+        """Verificações de qualidade SEMPRE exigidas, independente de
+        `success` — dimensões, finitude, bounds, consistência entre
+        `fun` e a reavaliação direta da função objetivo, e ausência de
+        vizinho determinístico melhor. Nunca reimplementa o otimizador,
+        nunca chama `minimize`."""
         x = np.asarray(x, dtype=float)
         jac = np.asarray(jac, dtype=float)
 
@@ -629,6 +648,61 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
                 return {'aceitavel': False, 'motivo': f'x[{i}]={xi} viola o limite inferior {lo}'}
             if hi is not None and xi > hi + tol_bound:
                 return {'aceitavel': False, 'motivo': f'x[{i}]={xi} viola o limite superior {hi}'}
+
+        no_bound = [
+            (lo is not None and abs(xi - lo) < tol_bound) or
+            (hi is not None and abs(xi - hi) < tol_bound)
+            for xi, (lo, hi) in zip(x, bounds)
+        ]
+
+        if objetivo_fn is not None and args_objetivo is not None:
+            valor_inicial, melhor_vizinho, ponto_vizinho = EstresseNumericoFronteiraGammaCTestCase \
+                ._melhor_vizinho_deterministico(x, bounds, objetivo_fn, args_objetivo)
+
+            if not np.isfinite(valor_inicial):
+                return {'aceitavel': False, 'no_bound': no_bound,
+                        'motivo': f'objetivo_fn(x, *args) não é finito ({valor_inicial!r}) — nunca '
+                                  'aprovado por ausência de vizinhos melhores (comparação com '
+                                  'valor não finito nunca é confiável)'}
+
+            if fun is not None:
+                diff_rel_fun = abs(fun - valor_inicial) / max(abs(fun), abs(valor_inicial), 1e-12)
+                if diff_rel_fun > tol_consistencia_fun_relativa:
+                    return {'aceitavel': False, 'no_bound': no_bound,
+                            'motivo': f'fun={fun:.6g} inconsistente com objetivo_fn(x, *args)='
+                                      f'{valor_inicial:.6g} (diferença relativa {diff_rel_fun:.4%} '
+                                      f'> tolerância {tol_consistencia_fun_relativa:.1%})'}
+
+            fun_base = fun if fun is not None else valor_inicial
+            tolerancia_abs = tol_qualidade_relativa * max(abs(fun_base), 1e-12)
+            if melhor_vizinho < fun_base - tolerancia_abs:
+                diff_rel = (fun_base - melhor_vizinho) / max(abs(fun_base), 1e-12)
+                return {'aceitavel': False, 'no_bound': no_bound,
+                        'motivo': f'fun={fun_base:.6g} é superado por um vizinho determinístico '
+                                  f'fun_vizinho={melhor_vizinho:.6g} em x_vizinho={ponto_vizinho} '
+                                  f'(diferença relativa {diff_rel:.4%} > tolerância '
+                                  f'{tol_qualidade_relativa:.1%}) — solução genuinamente '
+                                  'inadequada, independente de success'}
+
+        motivo = 'dimensões/finitude/bounds OK' + (
+            '; qualidade local confirmada contra vizinhos determinísticos (fun consistente com '
+            'a reavaliação direta)' if objetivo_fn is not None else '')
+        return {'aceitavel': True, 'no_bound': no_bound, 'motivo': motivo}
+
+    @staticmethod
+    def _diagnostico_fronteira_benigna(x, jac, bounds, status=None, message=None,
+                                        tol_bound=TOL_BOUND,
+                                        limiar_grad_livre=LIMIAR_GRADIENTE_LIVRE,
+                                        tol_sinal_kkt=TOL_SINAL_KKT):
+        """Discriminador só de DIAGNÓSTICO (vive no teste, nunca no
+        código de produção) — PRESSUPÕE que `_verificar_qualidade_geral`
+        já foi aprovada separadamente; esta função só cobre o que é
+        ESPECÍFICO de uma falha de convergência (`success=False`):
+        assinatura exata, sinal de KKT na fronteira, magnitude do
+        gradiente livre. Nunca reimplementa nem substitui o critério
+        `success` do scipy."""
+        x = np.asarray(x, dtype=float)
+        jac = np.asarray(jac, dtype=float)
 
         no_bound = [
             (lo is not None and abs(xi - lo) < tol_bound) or
@@ -685,28 +759,33 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
                               'genuinamente ruim, não com fronteira benigna (auditoria: caso mal '
                               'otimizado tem 0,67-18,9)'}
 
-        if objetivo_fn is not None and args_objetivo is not None and fun is not None:
-            melhor_vizinho, ponto_vizinho = EstresseNumericoFronteiraGammaCTestCase \
-                ._melhor_vizinho_deterministico(x, bounds, objetivo_fn, args_objetivo)
-            tolerancia_abs = tol_qualidade_relativa * max(abs(fun), 1e-12)
-            if melhor_vizinho < fun - tolerancia_abs:
-                diff_rel = (fun - melhor_vizinho) / max(abs(fun), 1e-12)
-                return {'aceitavel': False, 'no_bound': no_bound, 'grad_livre_max': grad_livre_max,
-                        'motivo': f'fun={fun:.6g} é superado por um vizinho determinístico '
-                                  f'fun_vizinho={melhor_vizinho:.6g} em x_vizinho={ponto_vizinho} '
-                                  f'(diferença relativa {diff_rel:.4%} > tolerância '
-                                  f'{tol_qualidade_relativa:.1%}) — solução genuinamente '
-                                  'inadequada, não fronteira benigna'}
-
         motivo = (f'gradiente livre máximo={grad_livre_max:.6g} < limiar={limiar_grad_livre}; '
                   'sinal KKT consistente com mínimo de fronteira; status/message compatíveis '
-                  'com ABNORMAL conhecido' +
-                  ('; qualidade local confirmada contra vizinhos determinísticos'
-                   if objetivo_fn is not None else ''))
+                  'com ABNORMAL conhecido')
         return {'aceitavel': True, 'no_bound': no_bound, 'grad_livre_max': grad_livre_max,
                 'motivo': motivo}
 
-    # ── Regressão literal contra os exemplos da auditoria ──────────────
+    @staticmethod
+    def _verificar_resultado_otimizador(res, bounds, objetivo_fn, args_objetivo):
+        """Combina as duas partes do contrato (A: qualidade geral,
+        sempre; B: fronteira benigna, só quando `res.success=False`)
+        sobre um `OptimizeResult` real OU simulado (`mock.Mock` com os
+        mesmos atributos) — usado pelos testes k/l (fixtures reais) e
+        pelos testes de regressão que simulam `success=True`."""
+        diag_geral = EstresseNumericoFronteiraGammaCTestCase._verificar_qualidade_geral(
+            res.x, res.jac, bounds, res.fun, objetivo_fn=objetivo_fn, args_objetivo=args_objetivo)
+        if not diag_geral['aceitavel']:
+            return False, f'qualidade geral reprovada: {diag_geral["motivo"]}'
+        if res.success:
+            return True, f'convergência normal (status={res.status}, message={res.message!r}); {diag_geral["motivo"]}'
+        diag_fronteira = EstresseNumericoFronteiraGammaCTestCase._diagnostico_fronteira_benigna(
+            res.x, res.jac, bounds, status=res.status, message=res.message)
+        if not diag_fronteira['aceitavel']:
+            return False, f'status={res.status} message={res.message!r} — {diag_fronteira["motivo"]}'
+        return True, (f'ABNORMAL aceito como fronteira benigna (status={res.status}, '
+                      f'message={res.message!r}) — {diag_fronteira["motivo"]}; {diag_geral["motivo"]}')
+
+    # ── Regressão literal contra os exemplos da auditoria (parte B) ────
 
     def test_a_discriminador_aceita_o_exemplo_benigno_da_auditoria(self):
         """Regressão literal — auditoria, seção 8: chamada decisiva
@@ -733,41 +812,15 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         diag = self._diagnostico_fronteira_benigna(x, jac, bounds)
         self.assertFalse(diag['aceitavel'], diag['motivo'])
 
-    # ── Regressões negativas adicionais (RN-2B, 2ª rodada) ──────────────
-
-    def test_c_discriminador_rejeita_dimensoes_incompativeis(self):
+    def test_c_discriminador_rejeita_falha_sem_fronteira_ativa(self):
+        x = np.array([4.0, 0.6, -5.0])  # nenhum parâmetro no bound
+        jac = np.array([0.001, 0.001, 0.0001])
         bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
-        diag = self._diagnostico_fronteira_benigna(np.array([1.0, 2.0]), np.array([0.1, 0.1, 0.1]),
-                                                     bounds)
+        diag = self._diagnostico_fronteira_benigna(x, jac, bounds, status=2, message='ABNORMAL: ')
         self.assertFalse(diag['aceitavel'])
-        self.assertIn('dimensões incompatíveis', diag['motivo'])
+        self.assertIn('nenhum parâmetro no bound', diag['motivo'])
 
-    def test_d_discriminador_rejeita_parametros_ou_gradiente_nao_finitos(self):
-        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
-        diag_x = self._diagnostico_fronteira_benigna(np.array([np.nan, 0.6, -20.0]),
-                                                       np.array([0.0, 0.001, 0.0001]), bounds)
-        self.assertFalse(diag_x['aceitavel'])
-        self.assertIn('não finitos', diag_x['motivo'])
-
-        diag_jac = self._diagnostico_fronteira_benigna(np.array([4.0, 0.6, -20.0]),
-                                                         np.array([0.0, np.inf, 0.0001]), bounds)
-        self.assertFalse(diag_jac['aceitavel'])
-        self.assertIn('não finito', diag_jac['motivo'])
-
-        diag_fun = self._diagnostico_fronteira_benigna(np.array([4.0, 0.6, -20.0]),
-                                                         np.array([0.0, 0.001, 0.0001]), bounds,
-                                                         fun=np.nan)
-        self.assertFalse(diag_fun['aceitavel'])
-        self.assertIn('fun não finito', diag_fun['motivo'])
-
-    def test_e_discriminador_rejeita_violacao_de_bound(self):
-        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
-        diag = self._diagnostico_fronteira_benigna(np.array([4.0, 0.6, -25.0]),
-                                                     np.array([0.0, 0.001, 0.0001]), bounds)
-        self.assertFalse(diag['aceitavel'])
-        self.assertIn('viola', diag['motivo'])
-
-    def test_f_discriminador_rejeita_sinal_kkt_incompativel_com_minimo_de_fronteira(self):
+    def test_d_discriminador_rejeita_sinal_kkt_incompativel_com_minimo_de_fronteira(self):
         """O caso explícito pedido na revisão: uma solução no limite
         inferior com gradiente claramente NEGATIVO aponta para uma
         direção de melhoria viável (aumentar o parâmetro reduziria o
@@ -781,15 +834,7 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         self.assertFalse(diag['aceitavel'], diag['motivo'])
         self.assertIn('direção de melhoria viável', diag['motivo'])
 
-    def test_g_discriminador_rejeita_falha_sem_fronteira_ativa(self):
-        x = np.array([4.0, 0.6, -5.0])  # nenhum parâmetro no bound
-        jac = np.array([0.001, 0.001, 0.0001])
-        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
-        diag = self._diagnostico_fronteira_benigna(x, jac, bounds, status=2, message='ABNORMAL: ')
-        self.assertFalse(diag['aceitavel'])
-        self.assertIn('nenhum parâmetro no bound', diag['motivo'])
-
-    def test_h_discriminador_rejeita_status_ou_mensagem_diferente_do_abnormal_conhecido(self):
+    def test_e_discriminador_rejeita_status_ou_mensagem_diferente_do_abnormal_conhecido(self):
         x = np.array([4.0000012, 0.6, -20.0])
         jac = np.array([2.39e-05, 0.0015, 0.0001061])
         bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
@@ -804,14 +849,47 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         self.assertFalse(diag_msg['aceitavel'])
         self.assertIn('não é a ABNORMAL conhecida', diag_msg['motivo'])
 
-    def test_i_discriminador_rejeita_solucao_com_qualidade_pior_que_vizinho_deterministico(self):
-        """Mesmo com gradiente LIVRE pequeno (passaria isoladamente o
-        critério da seção anterior) e status/message idênticos ao caso
-        benigno, uma avaliação DIRETA da função objetivo num vizinho
-        determinístico pode revelar que a solução está longe do
-        mínimo — esta verificação nunca confia só no gradiente
-        reportado. Função sintética simples (não o EMOS H2 real — esse
-        é exercitado de novo nos testes k/l com dados causais reais),
+    # ── Regressão da qualidade geral (parte A — sempre exigida) ────────
+
+    def test_f_qualidade_geral_rejeita_dimensoes_incompativeis(self):
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+        diag = self._verificar_qualidade_geral(np.array([1.0, 2.0]), np.array([0.1, 0.1, 0.1]),
+                                                 bounds, fun=1.0)
+        self.assertFalse(diag['aceitavel'])
+        self.assertIn('dimensões incompatíveis', diag['motivo'])
+
+    def test_g_qualidade_geral_rejeita_parametros_gradiente_ou_fun_nao_finitos(self):
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+        diag_x = self._verificar_qualidade_geral(np.array([np.nan, 0.6, -20.0]),
+                                                   np.array([0.0, 0.001, 0.0001]), bounds, fun=1.0)
+        self.assertFalse(diag_x['aceitavel'])
+        self.assertIn('não finitos', diag_x['motivo'])
+
+        diag_jac = self._verificar_qualidade_geral(np.array([4.0, 0.6, -20.0]),
+                                                     np.array([0.0, np.inf, 0.0001]), bounds, fun=1.0)
+        self.assertFalse(diag_jac['aceitavel'])
+        self.assertIn('não finito', diag_jac['motivo'])
+
+        diag_fun = self._verificar_qualidade_geral(np.array([4.0, 0.6, -20.0]),
+                                                     np.array([0.0, 0.001, 0.0001]), bounds,
+                                                     fun=np.nan)
+        self.assertFalse(diag_fun['aceitavel'])
+        self.assertIn('fun não finito', diag_fun['motivo'])
+
+    def test_h_qualidade_geral_rejeita_violacao_de_bound(self):
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+        diag = self._verificar_qualidade_geral(np.array([4.0, 0.6, -25.0]),
+                                                 np.array([0.0, 0.001, 0.0001]), bounds, fun=1.0)
+        self.assertFalse(diag['aceitavel'])
+        self.assertIn('viola', diag['motivo'])
+
+    def test_i_qualidade_geral_rejeita_solucao_com_qualidade_pior_que_vizinho_deterministico(self):
+        """Mesmo com gradiente LIVRE pequeno, uma avaliação DIRETA da
+        função objetivo num vizinho determinístico pode revelar que a
+        solução está longe do mínimo — esta verificação nunca confia
+        só no gradiente reportado e é independente de `success`.
+        Função sintética simples (não o EMOS H2 real — esse é
+        exercitado de novo nos testes k/l com dados causais reais),
         com mínimo verdadeiro conhecido em (5,3)."""
         def objetivo_simples(theta, *_args):
             return float((theta[0] - 5.0) ** 2 + (theta[1] - 3.0) ** 2)
@@ -821,17 +899,16 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
         fun_mal = objetivo_simples(x_mal)
 
-        diag = self._diagnostico_fronteira_benigna(
-            x_mal, jac_mal, bounds, status=2, message='ABNORMAL: ', fun=fun_mal,
+        diag = self._verificar_qualidade_geral(
+            x_mal, jac_mal, bounds, fun=fun_mal,
             objetivo_fn=objetivo_simples, args_objetivo=())
         self.assertFalse(diag['aceitavel'], diag['motivo'])
         self.assertIn('vizinho determinístico', diag['motivo'])
 
-    def test_j_discriminador_aceita_quando_qualidade_local_confirmada(self):
+    def test_j_qualidade_geral_aceita_quando_confirmada_localmente(self):
         """Mesma função sintética do teste anterior, agora avaliada NO
         mínimo verdadeiro (5,3) — nenhum vizinho determinístico deveria
-        ser melhor (dentro da tolerância), então a verificação de
-        qualidade não deveria rejeitar."""
+        ser melhor (dentro da tolerância)."""
         def objetivo_simples(theta, *_args):
             return float((theta[0] - 5.0) ** 2 + (theta[1] - 3.0) ** 2)
 
@@ -840,10 +917,89 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
         fun_bom = objetivo_simples(x_bom)
 
-        diag = self._diagnostico_fronteira_benigna(
-            x_bom, jac_bom, bounds, status=2, message='ABNORMAL: ', fun=fun_bom,
+        diag = self._verificar_qualidade_geral(
+            x_bom, jac_bom, bounds, fun=fun_bom,
             objetivo_fn=objetivo_simples, args_objetivo=())
         self.assertTrue(diag['aceitavel'], diag['motivo'])
+
+    def test_k_qualidade_geral_rejeita_avaliacao_inicial_nao_finita_sem_aprovar_por_omissao(self):
+        """RN-2B, 3ª rodada — item 2 explícito: se `objetivo_fn(x, *args)`
+        não é finito, isso NUNCA pode ser aprovado por "nenhum vizinho
+        encontrado melhor" (comparar com NaN/Inf é sempre False em
+        Python — um loophole silencioso). `fun` passado é finito e
+        plausível de propósito, para provar que é a avaliação DIRETA
+        (não o `fun` já registrado) que está sendo checada aqui."""
+        def objetivo_sempre_nan(theta, *_args):
+            return float('nan')
+
+        x = np.array([1.0, 1.0, -20.0])
+        jac = np.array([0.001, 0.001, 0.0001061])
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+
+        diag = self._verificar_qualidade_geral(
+            x, jac, bounds, fun=3.0, objetivo_fn=objetivo_sempre_nan, args_objetivo=())
+        self.assertFalse(diag['aceitavel'])
+        self.assertIn('não é finito', diag['motivo'])
+
+    def test_l_qualidade_geral_rejeita_fun_inconsistente_com_avaliacao_direta(self):
+        """`fun` (o valor registrado no `OptimizeResult`) precisa ser
+        consistente com uma reavaliação direta de `objetivo_fn(x,
+        *args)` — uma divergência grande entre os dois (ex.: `fun` de
+        uma chamada anterior, argumentos trocados) tem que ser
+        rejeitada, mesmo que nenhum vizinho apareça melhor que o `fun`
+        (errado) informado."""
+        def objetivo_simples(theta, *_args):
+            return float((theta[0] - 5.0) ** 2 + (theta[1] - 3.0) ** 2)
+
+        x = np.array([5.0, 3.0, -20.0])  # no mínimo verdadeiro: objetivo real = 0.0
+        jac = np.array([0.0, 0.0, 0.0001061])
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+
+        diag = self._verificar_qualidade_geral(
+            x, jac, bounds, fun=500.0,  # deliberadamente muito diferente do valor real (0.0)
+            objetivo_fn=objetivo_simples, args_objetivo=())
+        self.assertFalse(diag['aceitavel'])
+        self.assertIn('inconsistente', diag['motivo'])
+
+    def test_m_rejeita_quando_success_true_mas_qualidade_pior_que_vizinho_deterministico(self):
+        """RN-2B, 3ª rodada — item 3 explícito: uma solução com
+        `success=True` (simulado via `mock.Mock`, sem precisar rodar o
+        otimizador real) mas significativamente pior que um vizinho
+        determinístico tem que ser rejeitada pelo contrato completo
+        (`_verificar_resultado_otimizador`) — qualidade geral nunca é
+        dispensada só porque o otimizador reportou sucesso."""
+        def objetivo_simples(theta, *_args):
+            return float((theta[0] - 5.0) ** 2 + (theta[1] - 3.0) ** 2)
+
+        x_mal = np.array([0.0, 0.0, -20.0])
+        fun_mal = objetivo_simples(x_mal)
+        res_mock = mock.Mock(success=True, status=0,
+                              message='CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH',
+                              x=x_mal, jac=np.array([0.001, 0.001, 0.0001061]), fun=fun_mal)
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+
+        aceitavel, motivo = self._verificar_resultado_otimizador(
+            res_mock, bounds, objetivo_simples, ())
+        self.assertFalse(aceitavel, motivo)
+        self.assertIn('qualidade geral reprovada', motivo)
+
+    def test_n_aceita_quando_success_true_e_qualidade_confirmada(self):
+        """Contraparte do teste anterior: `success=True` genuíno, no
+        mínimo verdadeiro — tem que ser aceito, sem exigir nenhum dos
+        critérios específicos de ABNORMAL (status/message/sinal KKT)."""
+        def objetivo_simples(theta, *_args):
+            return float((theta[0] - 5.0) ** 2 + (theta[1] - 3.0) ** 2)
+
+        x_bom = np.array([5.0, 3.0, -20.0])
+        fun_bom = objetivo_simples(x_bom)
+        res_mock = mock.Mock(success=True, status=0,
+                              message='CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH',
+                              x=x_bom, jac=np.array([0.0, 0.0, 0.0001061]), fun=fun_bom)
+        bounds = [(None, None), (None, None), (emos.GAMMA_C_LO, emos.GAMMA_C_HI)]
+
+        aceitavel, motivo = self._verificar_resultado_otimizador(
+            res_mock, bounds, objetivo_simples, ())
+        self.assertTrue(aceitavel, motivo)
 
     # ── Fixtures reais degenerados (preservados intactos) ───────────────
 
@@ -900,14 +1056,13 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
             })
         return pd.DataFrame(linhas)
 
-    def test_k_fronteira_submodelo_completo_fixture_degenerado_original_independencia_d0(self):
+    def test_o_fronteira_submodelo_completo_fixture_degenerado_original_independencia_d0(self):
         """Fixture ORIGINAL da série B de IndependenciaD0TestCase
         (antes da RN-2B), preservado byte a byte — exercita
         diretamente `ajustar_emos_completo` (nunca reimplementado)
         sobre o conjunto de treino causal real da última avaliação,
-        agora com o contrato revisado completo (KKT de sinal, status/
-        message exatos, qualidade local contra a função objetivo
-        real)."""
+        com o contrato completo (qualidade geral SEMPRE + fronteira
+        benigna só se `success=False`)."""
         pares = self._pares_independencia_d0_degenerado(lambda i: 5.0 + 3.0 * (i % 11))
         validos = self._validos_causais(pares)
         self.assertGreaterEqual(len(validos), emos.N_TREINO_MINIMO_EMOS)
@@ -921,31 +1076,17 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         )
         res = emos.ajustar_emos_completo(*args_objetivo)
 
-        self.assertTrue(np.isfinite(res.fun),
-                         'res.fun precisa ser finito SEMPRE, independente do status de convergência')
-        diag = self._diagnostico_fronteira_benigna(
-            res.x, res.jac, emos.BOUNDS_COMPLETO, status=res.status, message=res.message,
-            fun=res.fun, objetivo_fn=emos._objetivo_completo, args_objetivo=args_objetivo)
-        algum_no_bound = any(diag.get('no_bound') or [])
-        if not algum_no_bound:
-            self.assertTrue(res.success,
-                             'nenhum parâmetro no bound: ABNORMAL sem fronteira ativa não tem '
-                             'explicação benigna conhecida — tratado como falha real')
-        elif not res.success:
-            self.assertTrue(diag['aceitavel'], f'status={res.status} message={res.message!r} '
-                                                f'— {diag["motivo"]}')
-            print(f'[EstresseNumerico] completo (IndependenciaD0, série B): ABNORMAL aceito como '
-                  f'fronteira benigna (status={res.status}, message={res.message!r}) — {diag["motivo"]}')
-        else:
-            print(f'[EstresseNumerico] completo (IndependenciaD0, série B): convergiu normalmente '
-                  f'com parâmetro no bound (status={res.status}, message={res.message!r})')
+        aceitavel, motivo = self._verificar_resultado_otimizador(
+            res, emos.BOUNDS_COMPLETO, emos._objetivo_completo, args_objetivo)
+        self.assertTrue(aceitavel, motivo)
+        print(f'[EstresseNumerico] completo (IndependenciaD0, série B): {motivo}')
 
-    def test_l_fronteira_submodelo_d0_fixture_degenerado_original_mutacao(self):
+    def test_p_fronteira_submodelo_d0_fixture_degenerado_original_mutacao(self):
         """Fixture ORIGINAL de MutacaoObservacaoFuturaTestCase (antes
         da RN-2B), preservado byte a byte — exercita diretamente
         `ajustar_emos_d0` (nunca reimplementado) sobre o conjunto de
         treino causal real da última avaliação, com o contrato
-        revisado completo."""
+        completo."""
         pares = self._pares_mutacao_degenerado(125)
         validos = self._validos_causais(pares)
         self.assertGreaterEqual(len(validos), emos.N_TREINO_MINIMO_EMOS)
@@ -958,28 +1099,14 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         )
         res = emos.ajustar_emos_d0(*args_objetivo)
 
-        self.assertTrue(np.isfinite(res.fun),
-                         'res.fun precisa ser finito SEMPRE, independente do status de convergência')
-        diag = self._diagnostico_fronteira_benigna(
-            res.x, res.jac, emos.BOUNDS_D0, status=res.status, message=res.message,
-            fun=res.fun, objetivo_fn=emos._objetivo_d0, args_objetivo=args_objetivo)
-        algum_no_bound = any(diag.get('no_bound') or [])
-        if not algum_no_bound:
-            self.assertTrue(res.success,
-                             'nenhum parâmetro no bound: ABNORMAL sem fronteira ativa não tem '
-                             'explicação benigna conhecida — tratado como falha real')
-        elif not res.success:
-            self.assertTrue(diag['aceitavel'], f'status={res.status} message={res.message!r} '
-                                                f'— {diag["motivo"]}')
-            print(f'[EstresseNumerico] d0 (MutacaoObservacaoFutura): ABNORMAL aceito como '
-                  f'fronteira benigna (status={res.status}, message={res.message!r}) — {diag["motivo"]}')
-        else:
-            print(f'[EstresseNumerico] d0 (MutacaoObservacaoFutura): convergiu normalmente '
-                  f'com parâmetro no bound (status={res.status}, message={res.message!r})')
+        aceitavel, motivo = self._verificar_resultado_otimizador(
+            res, emos.BOUNDS_D0, emos._objetivo_d0, args_objetivo)
+        self.assertTrue(aceitavel, motivo)
+        print(f'[EstresseNumerico] d0 (MutacaoObservacaoFutura): {motivo}')
 
     # ── Integração com STOP-ON-FAILURE (RN-2B, item 4) ──────────────────
 
-    def test_m_stop_on_failure_integrado_quando_fixture_degenerado_nao_converge_independencia_d0(self):
+    def test_q_stop_on_failure_integrado_quando_fixture_degenerado_nao_converge_independencia_d0(self):
         """Confirma, no pipeline REAL (`construir_emos_h2_expanding`,
         nunca reimplementado), que se o fixture degenerado desta
         classe realmente não convergir neste ambiente, a linha fica
@@ -1011,7 +1138,7 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
             print('[EstresseNumerico/StopOnFailure] completo convergiu normalmente neste ambiente '
                   '(regime degenerado não disparou aqui — ambiente-dependente, documentado)')
 
-    def test_n_stop_on_failure_integrado_quando_fixture_degenerado_nao_converge_mutacao(self):
+    def test_r_stop_on_failure_integrado_quando_fixture_degenerado_nao_converge_mutacao(self):
         """Mesma verificação do teste anterior, para o submodelo `d0`
         sobre o fixture degenerado de MutacaoObservacaoFuturaTestCase."""
         pares = self._pares_mutacao_degenerado(125)
