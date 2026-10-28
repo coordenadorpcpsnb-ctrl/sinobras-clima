@@ -25,6 +25,7 @@ Roda com:
     python -m unittest tests.test_cfsv2_emos_h2_implementacao -v
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -37,6 +38,7 @@ import numpy as np
 import pandas as pd
 import scipy
 from scipy.integrate import quad
+from scipy.optimize import approx_fprime
 
 try:
     import threadpoolctl  # RN-2D — só diagnóstico, nunca decide nada (ver item 5)
@@ -1524,6 +1526,178 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         self.assertTrue(todos_finitos, 'alguma das 9 chamadas de comparação de ftol produziu '
                                         'x/fun não finito nesta execução — isso não deveria '
                                         'acontecer em nenhum dos três ftol testados')
+
+    # ── RN-2F — jacobiano analítico experimental e comparação de escala ─
+    # Deriva o gradiente do CRPS censurado em zero a partir de _G/
+    # crps_normal_censurada JÁ APROVADOS (nunca reimplementados), usando
+    # a identidade G'(t)=Phi(t)^2 (demonstrada e validada contra mpmath
+    # na RN-2E) — fica só nesta suíte, nunca entra em
+    # scripts/cfsv2_emos_h2_implementacao.py. Puramente diagnóstico.
+
+    @staticmethod
+    def _dcrps_dmu_analitico(z, a0):
+        return 1.0 - 2.0 * emos._Phi(z) + emos._Phi(a0) ** 2
+
+    @staticmethod
+    def _dcrps_dsigma_analitico(z, a0):
+        return ((emos._G(z) + emos._G(-z) - emos._G(a0))
+                + z * (1.0 - 2.0 * emos._Phi(z)) + a0 * emos._Phi(a0) ** 2)
+
+    @classmethod
+    def _jac_objetivo_completo_analitico(cls, theta, clim_obs_arr, anom_arr, erro_sd_arr,
+                                          spread_rel_arr, y_arr):
+        a, b, gamma_c, d = theta
+        mu = clim_obs_arr + a + b * anom_arr
+        c = np.exp(gamma_c)
+        w = c + d * spread_rel_arr ** 2
+        sigma = erro_sd_arr * np.sqrt(w)
+        z = (y_arr - mu) / sigma
+        a0 = -mu / sigma
+        dC_dmu = cls._dcrps_dmu_analitico(z, a0)
+        dC_dsigma = cls._dcrps_dsigma_analitico(z, a0)
+        dsigma_dgamma_c = sigma * c / (2.0 * w)
+        dsigma_dd = sigma * spread_rel_arr ** 2 / (2.0 * w)
+        return np.array([
+            np.mean(dC_dmu), np.mean(dC_dmu * anom_arr),
+            np.mean(dC_dsigma * dsigma_dgamma_c), np.mean(dC_dsigma * dsigma_dd)])
+
+    @classmethod
+    def _jac_objetivo_d0_analitico(cls, theta_d0, clim_obs_arr, anom_arr, erro_sd_arr, y_arr):
+        a_d0, b_d0, gamma_c_d0 = theta_d0
+        mu = clim_obs_arr + a_d0 + b_d0 * anom_arr
+        c_d0 = np.exp(gamma_c_d0)
+        sigma = erro_sd_arr * np.sqrt(c_d0)
+        z = (y_arr - mu) / sigma
+        a0 = -mu / sigma
+        dC_dmu = cls._dcrps_dmu_analitico(z, a0)
+        dC_dsigma = cls._dcrps_dsigma_analitico(z, a0)
+        return np.array([np.mean(dC_dmu), np.mean(dC_dmu * anom_arr), np.mean(dC_dsigma * sigma / 2.0)])
+
+    K_ESCALA_RN2F = 10000.0
+
+    @classmethod
+    def _comparar_configuracoes_abcd(cls, rotulo, theta0, bounds, objetivo_original,
+                                      jac_analitico, args_objetivo):
+        """RN-2F — compara, a partir do MESMO theta0/bounds/dados
+        causais, 4 configurações: A (baseline: jacobiano numérico,
+        ftol=1e-10, gtol=1e-6), B (jacobiano analítico experimental,
+        mesmo ftol/gtol de A), C (objetivo reescalado por K=10000,
+        jacobiano numérico, gtol reescalado por K para preservar seu
+        significado no espaço original — ftol não precisa de reescala
+        porque é um critério RELATIVO, invariante à multiplicação por
+        uma constante), D (reescalado + jacobiano analítico também
+        multiplicado por K). Para C/D, `fun`/`jac` são sempre
+        NORMALIZADOS de volta à escala original (divididos por K)
+        antes de aplicar o contrato RN-2B real (importado, nunca
+        alterado) — nunca favorece nenhum candidato na comparação."""
+        K = cls.K_ESCALA_RN2F
+
+        def objetivo_escalado(th, *a):
+            return K * objetivo_original(th, *a)
+
+        def jac_escalado(th, *a):
+            return K * jac_analitico(th, *a)
+
+        configs = {
+            'A_baseline': dict(fun=objetivo_original, jac=None,
+                                options={'ftol': 1e-10, 'gtol': 1e-6, 'maxiter': 2000}),
+            'B_jacobiano_analitico': dict(fun=objetivo_original, jac=jac_analitico,
+                                           options={'ftol': 1e-10, 'gtol': 1e-6, 'maxiter': 2000}),
+            'C_objetivo_reescalado': dict(fun=objetivo_escalado, jac=None,
+                                           options={'ftol': 1e-10, 'gtol': K * 1e-6, 'maxiter': 2000}),
+            'D_reescalado_jacobiano': dict(fun=objetivo_escalado, jac=jac_escalado,
+                                           options={'ftol': 1e-10, 'gtol': K * 1e-6, 'maxiter': 2000}),
+        }
+
+        resultados = {}
+        for cfg_nome, cfg in configs.items():
+            res = emos.minimize(cfg['fun'], theta0, args=args_objetivo, method='L-BFGS-B',
+                                 bounds=bounds, jac=cfg['jac'], options=cfg['options'])
+            escalado = cfg_nome[0] in ('C', 'D')
+            fun_original = res.fun / K if escalado else res.fun
+            jac_original = np.asarray(res.jac) / K if escalado else np.asarray(res.jac)
+
+            print(f'[RN-2F/{rotulo}] {cfg_nome}: success={res.success} status={res.status} '
+                  f'message={res.message!r}')
+            print(f'[RN-2F/{rotulo}] {cfg_nome}:   fun_interno={res.fun!r}  '
+                  f'fun_escala_original={fun_original!r}  (escalado={escalado})')
+            print(f'[RN-2F/{rotulo}] {cfg_nome}:   jac_escala_original={jac_original.tolist()}')
+            print(f'[RN-2F/{rotulo}] {cfg_nome}:   x={res.x.tolist()}  nit={res.nit}  nfev={res.nfev}  '
+                  f'ftol={cfg["options"]["ftol"]}  gtol={cfg["options"]["gtol"]}')
+
+            res_normalizado = copy.copy(res)
+            res_normalizado.fun = float(fun_original)
+            res_normalizado.jac = jac_original
+            aceitavel, motivo = cls._verificar_resultado_otimizador(
+                res_normalizado, bounds, objetivo_original, args_objetivo)
+            elegivel_pipeline_producao = bool(res.success)
+            print(f'[RN-2F/{rotulo}] {cfg_nome}:   *** contrato RN-2B (normalizado p/ escala '
+                  f'original): aceitavel={aceitavel} ***')
+            print(f'[RN-2F/{rotulo}] {cfg_nome}:       motivo: {motivo}')
+            print(f'[RN-2F/{rotulo}] {cfg_nome}:   elegível pipeline de produção (só success): '
+                  f'{elegivel_pipeline_producao}')
+            resultados[cfg_nome] = dict(res=res, fun_original=fun_original, jac_original=jac_original,
+                                         aceitavel=aceitavel, motivo=motivo,
+                                         elegivel_pipeline_producao=elegivel_pipeline_producao)
+        return resultados
+
+    def test_t_comparacao_escala_e_jacobiano_quatro_configuracoes(self):
+        """RN-2F — compara, a partir do theta0 ORIGINAL (nunca um
+        reinício artificial), 4 configurações (A baseline, B jacobiano
+        analítico, C objetivo reescalado K=10000, D reescalado +
+        jacobiano analítico escalado) para os submodelos completo e
+        d0. Puramente diagnóstico: nunca altera emos.OPCOES_OTIMIZADOR
+        nem o contrato RN-2B, e nunca substitui test_o/p/q/r. Única
+        asserção: finitude (não decide nada sobre o resultado da
+        comparação)."""
+        self._log_ambiente_numerico()
+
+        pares_completo = self._pares_independencia_d0_degenerado(lambda i: 5.0 + 3.0 * (i % 11))
+        validos_completo = self._validos_causais(pares_completo)
+        args_completo = (
+            validos_completo['climatologia_observada'].to_numpy(dtype=float),
+            validos_completo['anom_ensemble'].to_numpy(dtype=float),
+            validos_completo['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos_completo['spread_relativo'].to_numpy(dtype=float),
+            validos_completo['observacao'].to_numpy(dtype=float))
+
+        # Validação prévia do jacobiano analítico contra diferenças
+        # finitas, no próprio theta0 — antes de qualquer comparação.
+        jac_an = self._jac_objetivo_completo_analitico(emos.THETA0_COMPLETO, *args_completo)
+        jac_fd = approx_fprime(emos.THETA0_COMPLETO, emos._objetivo_completo,
+                                               1.49e-8, *args_completo)
+        print(f'[RN-2F] validação prévia completo@theta0: jac_analitico={jac_an.tolist()} '
+              f'jac_FD={jac_fd.tolist()} '
+              f'diff_relativa={(np.abs(jac_an - jac_fd) / np.maximum(np.abs(jac_an), 1e-12)).tolist()}')
+
+        resultados_completo = self._comparar_configuracoes_abcd(
+            'completo_theta0_original', emos.THETA0_COMPLETO, emos.BOUNDS_COMPLETO,
+            emos._objetivo_completo, self._jac_objetivo_completo_analitico, args_completo)
+
+        pares_d0 = self._pares_mutacao_degenerado(125)
+        validos_d0 = self._validos_causais(pares_d0)
+        args_d0 = (
+            validos_d0['climatologia_observada'].to_numpy(dtype=float),
+            validos_d0['anom_ensemble'].to_numpy(dtype=float),
+            validos_d0['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos_d0['observacao'].to_numpy(dtype=float))
+
+        jac_an_d0 = self._jac_objetivo_d0_analitico(emos.THETA0_D0, *args_d0)
+        jac_fd_d0 = approx_fprime(emos.THETA0_D0, emos._objetivo_d0, 1.49e-8, *args_d0)
+        print(f'[RN-2F] validação prévia d0@theta0: jac_analitico={jac_an_d0.tolist()} '
+              f'jac_FD={jac_fd_d0.tolist()} '
+              f'diff_relativa={(np.abs(jac_an_d0 - jac_fd_d0) / np.maximum(np.abs(jac_an_d0), 1e-12)).tolist()}')
+
+        resultados_d0 = self._comparar_configuracoes_abcd(
+            'd0_theta0_original', emos.THETA0_D0, emos.BOUNDS_D0,
+            emos._objetivo_d0, self._jac_objetivo_d0_analitico, args_d0)
+
+        todos_finitos = all(
+            np.all(np.isfinite(r['res'].x)) and np.isfinite(r['fun_original'])
+            for bloco in (resultados_completo, resultados_d0)
+            for r in bloco.values())
+        self.assertTrue(todos_finitos, 'alguma das 8 configurações produziu x/fun não finito '
+                                        '— isso não deveria acontecer em nenhuma delas')
 
 
 class StopOnFailureSinteticoTestCase(unittest.TestCase):
