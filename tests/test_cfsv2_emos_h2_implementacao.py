@@ -25,6 +25,9 @@ Roda com:
     python -m unittest tests.test_cfsv2_emos_h2_implementacao -v
 """
 
+import hashlib
+import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -32,7 +35,13 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
+import scipy
 from scipy.integrate import quad
+
+try:
+    import threadpoolctl  # RN-2D — só diagnóstico, nunca decide nada (ver item 5)
+except ImportError:
+    threadpoolctl = None
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -785,6 +794,165 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         return True, (f'ABNORMAL aceito como fronteira benigna (status={res.status}, '
                       f'message={res.message!r}) — {diag_fronteira["motivo"]}; {diag_geral["motivo"]}')
 
+    # ── RN-2D — instrumentação de observação pura ───────────────────────
+    # Objetivo: testar (não presumir) se chamadas idênticas a `minimize`
+    # produzem resultados diferentes dentro do mesmo processo/ambiente, e
+    # se isso está associado a paralelismo do OpenBLAS. Nunca decide
+    # aprovação/rejeição, nunca altera argumento/resultado/critério, e
+    # roda sempre ANTES de qualquer assertTrue/assertFalse — uma falha de
+    # asserção nunca pode impedir a captura da evidência.
+
+    _AMBIENTE_NUMERICO_LOGADO = False
+
+    @classmethod
+    def _log_ambiente_numerico(cls):
+        """Log incondicional, uma vez por processo, do ambiente numérico
+        efetivo — nunca presume que dois runs com o mesmo kernel nominal
+        (ex.: 'Haswell') têm o mesmo comportamento interno; só registra o
+        que threadpoolctl e o SO reportam DESTE processo."""
+        if cls._AMBIENTE_NUMERICO_LOGADO:
+            return
+        cls._AMBIENTE_NUMERICO_LOGADO = True
+
+        cpu_model = 'NAO_DISPONIVEL'
+        try:
+            with open('/proc/cpuinfo') as fh:
+                for linha_cpu in fh:
+                    if linha_cpu.startswith('model name'):
+                        cpu_model = linha_cpu.split(':', 1)[1].strip()
+                        break
+        except OSError:
+            pass
+
+        if threadpoolctl is not None:
+            # threadpool_info() devolve [] se nenhuma operação BLAS real
+            # já rodou neste processo — força o carregamento preguiçoso
+            # do backend antes de perguntar.
+            _ = np.zeros((8, 8)) @ np.zeros((8, 8))
+            info_blas = threadpoolctl.threadpool_info()
+        else:
+            info_blas = 'NAO_DISPONIVEL (pacote threadpoolctl ausente)'
+
+        env_vars = {var: os.environ.get(var, 'NAO_DEFINIDA') for var in (
+            'OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS',
+            'NUMEXPR_NUM_THREADS', 'OPENBLAS_CORETYPE', 'GOTO_NUM_THREADS',
+            'OPENBLAS_VERBOSE')}
+
+        registro = {
+            'python': sys.version.split()[0],
+            'numpy': np.__version__,
+            'scipy': scipy.__version__,
+            'cpu_model_name': cpu_model,
+            'threadpoolctl': info_blas,
+            'env_blas_openmp': env_vars,
+        }
+        print('[RN-2D/Ambiente] ' + json.dumps(registro, sort_keys=True, default=str))
+
+    @staticmethod
+    def _fingerprint_arrays(args_objetivo):
+        """Hash sha256 determinístico de cada array de treino,
+        preservando ordem/dtype/shape/conteúdo float64 — nunca só a
+        contagem de linhas (RN-2D, item 4). `args_objetivo=None` ou
+        vazio é registrado como tal, nunca estimado."""
+        if not args_objetivo:
+            return 'NAO_DISPONIVEL', []
+        partes = []
+        for i, arr in enumerate(args_objetivo):
+            a = np.ascontiguousarray(np.asarray(arr, dtype=float))
+            h = hashlib.sha256(a.tobytes()).hexdigest()
+            partes.append(f'arr{i}(shape={a.shape},dtype={a.dtype})={h}')
+        combinado = hashlib.sha256('|'.join(partes).encode()).hexdigest()
+        return combinado, partes
+
+    @staticmethod
+    def _observar_chamadas_minimize():
+        """RN-2D, item 3 — observa (sem alterar) todas as chamadas a
+        `emos.minimize` feitas dentro do bloco `with` devolvido. A
+        função científica original é sempre chamada sem modificação de
+        argumentos, e o MESMO objeto de resultado que ela devolve é
+        repassado ao chamador real (`ajustar_emos_completo`/
+        `ajustar_emos_d0`) — o `side_effect` só registra e repassa,
+        nunca substitui nem adiciona uma chamada extra a `minimize`.
+        Restaurado automaticamente ao sair do `with` (`mock.patch.object`
+        sem `wraps`, para controlar explicitamente a chamada real e
+        capturar seu retorno exato)."""
+        minimize_original = emos.minimize
+        chamadas = []
+
+        def _observador(*args, **kwargs):
+            resultado = minimize_original(*args, **kwargs)
+            chamadas.append({'args': args, 'kwargs': kwargs, 'resultado': resultado})
+            return resultado
+
+        gerenciador = mock.patch.object(emos, 'minimize', side_effect=_observador)
+        return gerenciador, chamadas
+
+    @classmethod
+    def _log_chamada_otimizador(cls, test_id, chamada_id, submodelo, res, bounds,
+                                 objetivo_fn, args_objetivo, theta0=None, options=None):
+        """RN-2D — log incondicional de UMA chamada ao otimizador, ANTES
+        de qualquer asserção. Nunca decide aprovação/rejeição — só
+        registra o que `OptimizeResult`, a reavaliação direta e a busca
+        de vizinho determinístico (já existente, reaproveitada, nunca
+        chama `minimize`) mostram. Campo ausente é registrado
+        explicitamente como tal, nunca estimado."""
+        _AUSENTE = object()  # sentinela por identidade — nunca comparar array com '==' / '!='
+
+        def _campo(nome, default='NAO_DISPONIVEL'):
+            valor = getattr(res, nome, _AUSENTE)
+            return default if valor is _AUSENTE or valor is None else valor
+
+        x_raw = _campo('x', default=_AUSENTE)
+        x = np.asarray(x_raw, dtype=float) if x_raw is not _AUSENTE else None
+        jac_raw = _campo('jac', default=_AUSENTE)
+        jac = np.asarray(jac_raw, dtype=float) if jac_raw is not _AUSENTE else None
+        fun = _campo('fun')
+
+        no_bound = 'NAO_DISPONIVEL'
+        if x is not None and bounds is not None:
+            no_bound = [
+                bool((lo is not None and abs(xi - lo) < cls.TOL_BOUND) or
+                     (hi is not None and abs(xi - hi) < cls.TOL_BOUND))
+                for xi, (lo, hi) in zip(x, bounds)
+            ]
+
+        avaliacao_direta = 'NAO_DISPONIVEL'
+        melhor_vizinho_valor = 'NAO_DISPONIVEL'
+        melhor_vizinho_ponto = 'NAO_DISPONIVEL'
+        if x is not None and bounds is not None and objetivo_fn is not None and args_objetivo:
+            valor_inicial, melhor_valor, melhor_ponto = cls._melhor_vizinho_deterministico(
+                x, bounds, objetivo_fn, args_objetivo)
+            avaliacao_direta = valor_inicial
+            melhor_vizinho_valor = melhor_valor
+            melhor_vizinho_ponto = melhor_ponto
+
+        fingerprint, partes_fingerprint = cls._fingerprint_arrays(args_objetivo)
+
+        registro = {
+            'teste': test_id,
+            'chamada': chamada_id,
+            'submodelo': submodelo,
+            'success': _campo('success'),
+            'status': _campo('status'),
+            'message': str(_campo('message')),
+            'x': x.tolist() if x is not None else 'NAO_DISPONIVEL',
+            'jac': jac.tolist() if jac is not None else 'NAO_DISPONIVEL',
+            'fun': fun,
+            'nit': _campo('nit'),
+            'nfev': _campo('nfev'),
+            'bounds': bounds if bounds is not None else 'NAO_DISPONIVEL',
+            'no_bound': no_bound,
+            'theta0': (np.asarray(theta0).tolist() if theta0 is not None else 'NAO_DISPONIVEL'),
+            'options': (dict(options) if options is not None else 'NAO_DISPONIVEL'),
+            'avaliacao_direta_objetivo_fn': avaliacao_direta,
+            'melhor_vizinho_valor': melhor_vizinho_valor,
+            'melhor_vizinho_ponto': melhor_vizinho_ponto,
+            'fingerprint_args': fingerprint,
+            'fingerprint_args_detalhe': partes_fingerprint,
+        }
+        print('[RN-2D/Chamada] ' + json.dumps(registro, sort_keys=True, default=str))
+        return registro
+
     # ── Regressão literal contra os exemplos da auditoria (parte B) ────
 
     def test_a_discriminador_aceita_o_exemplo_benigno_da_auditoria(self):
@@ -1076,6 +1244,11 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         )
         res = emos.ajustar_emos_completo(*args_objetivo)
 
+        self._log_ambiente_numerico()
+        self._log_chamada_otimizador('test_o', 'A', 'completo', res, emos.BOUNDS_COMPLETO,
+                                      emos._objetivo_completo, args_objetivo,
+                                      theta0=emos.THETA0_COMPLETO, options=emos.OPCOES_OTIMIZADOR)
+
         aceitavel, motivo = self._verificar_resultado_otimizador(
             res, emos.BOUNDS_COMPLETO, emos._objetivo_completo, args_objetivo)
         self.assertTrue(aceitavel, motivo)
@@ -1099,6 +1272,11 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         )
         res = emos.ajustar_emos_d0(*args_objetivo)
 
+        self._log_ambiente_numerico()
+        self._log_chamada_otimizador('test_p', 'A', 'd0', res, emos.BOUNDS_D0,
+                                      emos._objetivo_d0, args_objetivo,
+                                      theta0=emos.THETA0_D0, options=emos.OPCOES_OTIMIZADOR)
+
         aceitavel, motivo = self._verificar_resultado_otimizador(
             res, emos.BOUNDS_D0, emos._objetivo_d0, args_objetivo)
         self.assertTrue(aceitavel, motivo)
@@ -1115,16 +1293,43 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         tratada como válida. Não modifica nenhum comportamento de
         produção, só verifica o que já existe."""
         pares = self._pares_independencia_d0_degenerado(lambda i: 5.0 + 3.0 * (i % 11))
-        tabela = emos.construir_emos_h2_expanding(pares)
+
+        self._log_ambiente_numerico()
+        gerenciador, chamadas = self._observar_chamadas_minimize()
+        with gerenciador:
+            tabela = emos.construir_emos_h2_expanding(pares)
         linha = tabela.sort_values('init_date').iloc[-1]
 
+        # Chamada B — última avaliação elegível feita INTERNAMENTE pelo
+        # pipeline real para o submodelo completo (RN-2D, item 3).
+        chamadas_completo = [c for c in chamadas if c['args'][0] is emos._objetivo_completo]
+        if chamadas_completo:
+            c_b = chamadas_completo[-1]
+            self._log_chamada_otimizador(
+                'test_q', 'B', 'completo', c_b['resultado'],
+                c_b['kwargs'].get('bounds'), emos._objetivo_completo,
+                c_b['kwargs'].get('args'),
+                theta0=c_b['args'][1] if len(c_b['args']) > 1 else None,
+                options=c_b['kwargs'].get('options'))
+        else:
+            print('[RN-2D/Chamada] test_q chamada B: NAO_CAPTURADA — nenhuma chamada a minimize '
+                  'para o submodelo completo ocorreu dentro de construir_emos_h2_expanding '
+                  '(nenhuma linha atingiu N_TREINO_MINIMO_EMOS para este fixture) — campo '
+                  'ausente, não estimado')
+
+        # Chamada C — chamada direta, feita pelo próprio teste, depois do
+        # pipeline, sobre o MESMO conjunto de treino causal (RN-2D, item 3).
         validos = self._validos_causais(pares)
-        res_direto = emos.ajustar_emos_completo(
+        args_diretos = (
             validos['climatologia_observada'].to_numpy(dtype=float),
             validos['anom_ensemble'].to_numpy(dtype=float),
             validos['erro_clim_sd_mes'].to_numpy(dtype=float),
             validos['spread_relativo'].to_numpy(dtype=float),
             validos['observacao'].to_numpy(dtype=float))
+        res_direto = emos.ajustar_emos_completo(*args_diretos)
+        self._log_chamada_otimizador('test_q', 'C', 'completo', res_direto,
+                                      emos.BOUNDS_COMPLETO, emos._objetivo_completo, args_diretos,
+                                      theta0=emos.THETA0_COMPLETO, options=emos.OPCOES_OTIMIZADOR)
 
         if not res_direto.success:
             self.assertEqual(linha['status_emos_completo'], emos.STATUS_NAO_CONVERGIU)
@@ -1142,15 +1347,42 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
         """Mesma verificação do teste anterior, para o submodelo `d0`
         sobre o fixture degenerado de MutacaoObservacaoFuturaTestCase."""
         pares = self._pares_mutacao_degenerado(125)
-        tabela = emos.construir_emos_h2_expanding(pares)
+
+        self._log_ambiente_numerico()
+        gerenciador, chamadas = self._observar_chamadas_minimize()
+        with gerenciador:
+            tabela = emos.construir_emos_h2_expanding(pares)
         linha = tabela.sort_values('init_date').iloc[-1]
 
+        # Chamada B — última avaliação elegível feita INTERNAMENTE pelo
+        # pipeline real para o submodelo d0 (RN-2D, item 3).
+        chamadas_d0 = [c for c in chamadas if c['args'][0] is emos._objetivo_d0]
+        if chamadas_d0:
+            c_b = chamadas_d0[-1]
+            self._log_chamada_otimizador(
+                'test_r', 'B', 'd0', c_b['resultado'],
+                c_b['kwargs'].get('bounds'), emos._objetivo_d0,
+                c_b['kwargs'].get('args'),
+                theta0=c_b['args'][1] if len(c_b['args']) > 1 else None,
+                options=c_b['kwargs'].get('options'))
+        else:
+            print('[RN-2D/Chamada] test_r chamada B: NAO_CAPTURADA — nenhuma chamada a minimize '
+                  'para o submodelo d0 ocorreu dentro de construir_emos_h2_expanding (nenhuma '
+                  'linha atingiu N_TREINO_MINIMO_EMOS para este fixture) — campo ausente, não '
+                  'estimado')
+
+        # Chamada C — chamada direta, feita pelo próprio teste, depois do
+        # pipeline, sobre o MESMO conjunto de treino causal (RN-2D, item 3).
         validos = self._validos_causais(pares)
-        res_direto = emos.ajustar_emos_d0(
+        args_diretos = (
             validos['climatologia_observada'].to_numpy(dtype=float),
             validos['anom_ensemble'].to_numpy(dtype=float),
             validos['erro_clim_sd_mes'].to_numpy(dtype=float),
             validos['observacao'].to_numpy(dtype=float))
+        res_direto = emos.ajustar_emos_d0(*args_diretos)
+        self._log_chamada_otimizador('test_r', 'C', 'd0', res_direto,
+                                      emos.BOUNDS_D0, emos._objetivo_d0, args_diretos,
+                                      theta0=emos.THETA0_D0, options=emos.OPCOES_OTIMIZADOR)
 
         if not res_direto.success:
             self.assertEqual(linha['status_emos_d0'], emos.STATUS_NAO_CONVERGIU)
