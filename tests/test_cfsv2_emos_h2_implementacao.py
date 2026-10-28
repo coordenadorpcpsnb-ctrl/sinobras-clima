@@ -134,6 +134,29 @@ class RegraCausalTreinoTestCase(unittest.TestCase):
     implementação)."""
 
     def _pares_sinteticos(self, n, mes_inicial=1, ano_inicial=1990):
+        # RN-2H — achado ao rodar a suíte COMPLETA (não só os testes novos)
+        # contra a implementação reescalada: esta série era perfeitamente
+        # linear/sem ruído (mesmo padrão degenerado que RN-2B já havia
+        # corrigido em IndependenciaD0TestCase/MutacaoObservacaoFuturaTestCase
+        # — ver docs/enso-ci-emos-h2-auditoria-diagnostica.md), e só por
+        # coincidência de ambiente o otimizador SEM reescala convergia aqui
+        # com `success=True` (mensagem 'RELATIVE REDUCTION OF F <=
+        # FACTR*EPSMCH' — o próprio sintoma de parada prematura por ftol que
+        # a reescala corrige). Com K=10000, o submodelo completo passa a
+        # devolver `success=False`/ABNORMAL neste MESMO ponto ótimo
+        # (x≈[4,0.6,-20,0], fun idêntico ao d0, que converge com
+        # success=True) — confirmado, via o contrato já aprovado
+        # `EstresseNumericoFronteiraGammaCTestCase._verificar_resultado_otimizador`,
+        # como o mesmo caso "ABNORMAL de fronteira benigna" documentado na
+        # auditoria, nunca uma solução pior (ver docs/rn2h-escala-interna-
+        # emos-h2.md). Como o propósito deste teste é a regra CAUSAL (janela
+        # de treino), não o comportamento numérico do otimizador, o ruído
+        # determinístico (mesma técnica/`_ruido_determinista` já usada em
+        # RN-2B) rompe a degenerescência sem alterar nenhum critério de
+        # aceitação de produção nem a lógica causal exercitada por
+        # `test_b_n_treino_emos_bate_com_a_regra_corrigida` (que não depende
+        # do valor de `observacao`).
+        ruido = _ruido_determinista(n, seed=20261028, escala=10.0)
         linhas = []
         for i in range(n):
             mes = ((mes_inicial - 1 + i) % 12) + 1
@@ -143,7 +166,7 @@ class RegraCausalTreinoTestCase(unittest.TestCase):
             linhas.append({
                 'init_date': init_date, 'target_month': str(target_p),
                 'target_ano': target_p.year, 'target_mes': target_p.month,
-                'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                'observacao': max(0.0, 80.0 + 0.3 * i + ruido[i]), 'ensemble_mean': 100.0 + 0.5 * i,
                 'ensemble_std': 15.0, 'membros': np.full(24, 100.0 + 0.5 * i),
                 'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
                 'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
@@ -1172,8 +1195,15 @@ class StopOnFailureSinteticoTestCase(unittest.TestCase):
 
     def test_a_nao_convergencia_simulada(self):
         with mock.patch.object(emos, 'minimize') as m:
+            # fun/jac precisam ser numéricos mesmo em falha simulada —
+            # RN-2H normaliza ambos (res.fun/K, res.jac/K) incondicionalmente
+            # dentro de _aplicar_escala_interna, exatamente como faria com
+            # um OptimizeResult real (que sempre traz fun/jac, mesmo quando
+            # success=False); um Mock sem esses atributos não representa
+            # fielmente esse contrato.
             resultado_falso = mock.Mock(success=False, status=1, message='falhou', nit=5, nfev=10,
-                                         x=np.array([0.0, 1.0, 0.0, 0.0]))
+                                         x=np.array([0.0, 1.0, 0.0, 0.0]),
+                                         fun=1.0, jac=np.array([0.0, 0.0, 0.0, 0.0]))
             m.return_value = resultado_falso
             res = emos.ajustar_emos_completo(np.full(5, 70.0), np.zeros(5), np.full(5, 20.0),
                                                np.ones(5), np.full(5, 70.0))
@@ -1283,7 +1313,13 @@ class StopOnFailureIntegradoTestCase(unittest.TestCase):
 
         def contar(fun, x0, args=(), **kwargs):
             res = orig_minimize(fun, x0, args=args, **kwargs)
-            if fun is emos._objetivo_completo:
+            # RN-2H: `fun` chega aqui como o fecho `_objetivo_escalado`
+            # criado dentro de `_aplicar_escala_interna`, nunca mais
+            # `emos._objetivo_completo` por identidade — `bounds`,
+            # porém, continua sendo repassado sem cópia, então sua
+            # identidade com `emos.BOUNDS_COMPLETO` ainda identifica
+            # corretamente qual submodelo está sendo ajustado.
+            if kwargs.get('bounds') is emos.BOUNDS_COMPLETO:
                 contagem['n'] += 1
             return res
 
@@ -1296,7 +1332,7 @@ class StopOnFailureIntegradoTestCase(unittest.TestCase):
 
         def minimize_falho_na_ultima_completo(fun, x0, args=(), **kwargs):
             res = orig_minimize(fun, x0, args=args, **kwargs)
-            if fun is emos._objetivo_completo:
+            if kwargs.get('bounds') is emos.BOUNDS_COMPLETO:
                 contador['completo'] += 1
                 if contador['completo'] == n_chamadas_completo:
                     res.success = False
@@ -1324,6 +1360,394 @@ class StopOnFailureIntegradoTestCase(unittest.TestCase):
             tabela_sem_falha['init_date'] != avaliada_alvo].set_index('init_date')['status_emos']
         pd.testing.assert_series_equal(outras.sort_index(), outras_sem_falha.sort_index(),
                                         check_names=False)
+
+
+class EscalaInternaOtimizacaoTestCase(unittest.TestCase):
+    """RN-2H — cobertura dedicada da reescala NUMÉRICA interna
+    (`K_ESCALA_INTERNA_OTIMIZACAO`/`_aplicar_escala_interna`) aplicada
+    dentro de `ajustar_emos_completo`/`ajustar_emos_d0` (ver
+    docs/rn2h-escala-interna-emos-h2.md). Nunca reimplementa
+    `_objetivo_completo`/`_objetivo_d0`/`crps_normal_censurada`/
+    `prob_zero`/`media_preditiva_censurada`/`quantil_censurado`; reusa
+    os fixtures degenerados e o contrato de qualidade já aprovados em
+    `EstresseNumericoFronteiraGammaCTestCase` (nunca duplicados) e o
+    ruído determinístico de `_ruido_determinista` (RN-2B) para o
+    fixture bem-comportado do teste H. Nenhum teste aqui usa skip,
+    xfail, tolerância relaxada ou depende de identidade de CPU — os
+    testes C/D nunca fixam um valor específico de `success` (o
+    submodelo `d0` demonstravelmente aceita, neste ambiente, uma
+    fronteira ABNORMAL benigna nos dois fixtures degenerados,
+    verificado ao vivo antes de escrever estes testes); só o contrato
+    de qualidade já aprovado decide aceitação, exatamente como em
+    `test_o`/`test_p`."""
+
+    @staticmethod
+    def _validos_causais(pares):
+        # mesma lógica de EstresseNumericoFronteiraGammaCTestCase._validos_causais
+        # (não usa `self`), repetida aqui como função livre para não
+        # precisar instanciar aquela TestCase fora do runner.
+        pares_p = pares.assign(_p=pd.PeriodIndex(pares['init_date'], freq='M')).sort_values('_p')
+        avaliada_p = pares_p['_p'].iloc[-1]
+        validos = pares_p[pares_p['_p'] < avaliada_p].copy()
+        validos = validos.assign(_target_p=pd.PeriodIndex(validos['target_month'], freq='M'))
+        return validos[validos['_target_p'] < avaliada_p]
+
+    # ── A: normalização correta de fun/jac ──────────────────────────
+
+    def test_a_fun_e_jac_normalizados_de_volta_a_escala_original(self):
+        """Mocka só `scipy.optimize.minimize` (nunca `_objetivo_completo`)
+        com um `OptimizeResult` cujo `fun`/`jac` são valores arbitrários
+        NA ESCALA INTERNA (como o otimizador real devolveria ao
+        minimizar `K*objetivo`) — confirma que o valor PUBLICADO por
+        `ajustar_emos_completo` é exatamente esse valor dividido por K
+        (nunca normalizado duas vezes), que `x`/`success`/`status`/
+        `message` são repassados sem alteração, e que `gtol` foi
+        reescalado na mesma proporção enquanto `ftol`/`maxiter`/`bounds`
+        (por identidade) permanecem exatamente os originais."""
+        K = emos.K_ESCALA_INTERNA_OTIMIZACAO
+        fun_interno = 37.5
+        jac_interno = np.array([120.0, -80.0, 4.0, 1.0])
+        x_qualquer = np.array([0.1, 0.9, 0.0, 0.05])
+        resultado_mock = mock.Mock(success=True, status=0, message='mock', nit=1, nfev=1,
+                                    x=x_qualquer, fun=fun_interno, jac=jac_interno)
+        with mock.patch.object(emos, 'minimize', return_value=resultado_mock) as m:
+            res = emos.ajustar_emos_completo(np.full(5, 70.0), np.zeros(5), np.full(5, 20.0),
+                                              np.ones(5), np.full(5, 70.0))
+
+        self.assertEqual(res.fun, fun_interno / K)
+        np.testing.assert_array_equal(res.jac, jac_interno / K)
+        np.testing.assert_array_equal(res.x, x_qualquer)
+        self.assertTrue(res.success)
+        self.assertEqual(res.status, 0)
+        self.assertEqual(res.message, 'mock')
+
+        opcoes_usadas = m.call_args.kwargs['options']
+        self.assertAlmostEqual(opcoes_usadas['gtol'], K * emos.OPCOES_OTIMIZADOR['gtol'])
+        self.assertEqual(opcoes_usadas['ftol'], emos.OPCOES_OTIMIZADOR['ftol'])
+        self.assertEqual(opcoes_usadas['maxiter'], emos.OPCOES_OTIMIZADOR['maxiter'])
+        self.assertIs(m.call_args.kwargs['bounds'], emos.BOUNDS_COMPLETO)
+        np.testing.assert_array_equal(m.call_args.args[1], emos.THETA0_COMPLETO)
+
+    # ── B: equivalência da função objetivo escalada e original ──────
+
+    def test_b_objetivo_escalado_e_exatamente_k_vezes_o_objetivo_original(self):
+        """Captura o fecho `_objetivo_escalado` de fato passado ao
+        `minimize` (mockado — nunca roda o otimizador real aqui) e
+        avalia em vários pontos: o valor tem que ser exatamente
+        `K * _objetivo_completo(theta, *args)` para todo theta,
+        incluindo um ponto-limite onde o objetivo original não é
+        finito (confirma que a escala se propaga corretamente mesmo
+        nesse caso)."""
+        K = emos.K_ESCALA_INTERNA_OTIMIZACAO
+        args_objetivo = (np.full(6, 70.0), np.linspace(-5, 5, 6), np.full(6, 20.0),
+                          np.linspace(0.5, 2.0, 6), np.full(6, 68.0))
+        capturado = {}
+
+        def capturar(fun, x0, **kwargs):
+            capturado['fun'] = fun
+            return mock.Mock(success=True, status=0, message='mock', nit=1, nfev=1,
+                              x=x0, fun=0.0, jac=np.zeros(len(x0)))
+
+        with mock.patch.object(emos, 'minimize', side_effect=capturar):
+            emos.ajustar_emos_completo(*args_objetivo)
+
+        objetivo_escalado = capturado['fun']
+        for theta in (emos.THETA0_COMPLETO, np.array([1.0, 0.5, 2.0, 0.3]),
+                      np.array([-1.0, 2.0, -3.0, 0.0])):
+            esperado = K * emos._objetivo_completo(theta, *args_objetivo)
+            obtido = objetivo_escalado(theta, *args_objetivo)
+            self.assertEqual(obtido, esperado)
+
+        theta_extremo = np.array([0.0, 1.0, 50.0, 0.0])  # gamma_c bem fora do regime típico
+        valor_original = emos._objetivo_completo(theta_extremo, *args_objetivo)
+        valor_escalado = objetivo_escalado(theta_extremo, *args_objetivo)
+        if np.isfinite(valor_original):
+            self.assertEqual(valor_escalado, K * valor_original)
+        else:
+            self.assertFalse(np.isfinite(valor_escalado))
+
+    # ── C/D: convergência a partir do theta0 original, fixtures problemáticos ──
+
+    def test_c_convergencia_do_submodelo_completo_a_partir_do_theta0_original(self):
+        """Fixture EXATO (série B de `IndependenciaD0`, degenerado) onde
+        RN-2C/RN-2D documentaram a parada prematura do L-BFGS-B sem a
+        reescala — reaproveitado de `EstresseNumericoFronteiraGammaCTestCase`,
+        nunca reconstruído. Chama a implementação REAL (nunca mockada)
+        `ajustar_emos_completo` e confirma: (1) o `minimize` real é
+        invocado com `x0` exatamente `THETA0_COMPLETO`, nunca alterado
+        pela reescala; (2) a solução passa pelo contrato de qualidade
+        já aprovado (`_verificar_resultado_otimizador`, nunca
+        reimplementado) — nunca um valor fixo de `success` (ver
+        docstring da classe)."""
+        pares = EstresseNumericoFronteiraGammaCTestCase._pares_independencia_d0_degenerado(
+            lambda i: 5.0 + 3.0 * (i % 11))
+        validos = self._validos_causais(pares)
+        self.assertGreaterEqual(len(validos), emos.N_TREINO_MINIMO_EMOS)
+
+        args_objetivo = (
+            validos['climatologia_observada'].to_numpy(dtype=float),
+            validos['anom_ensemble'].to_numpy(dtype=float),
+            validos['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos['spread_relativo'].to_numpy(dtype=float),
+            validos['observacao'].to_numpy(dtype=float),
+        )
+
+        orig_minimize = emos.minimize
+        x0_capturado = {}
+
+        def capturar_x0(fun, x0, **kwargs):
+            x0_capturado['x0'] = np.array(x0, copy=True)
+            return orig_minimize(fun, x0, **kwargs)
+
+        with mock.patch.object(emos, 'minimize', side_effect=capturar_x0):
+            res = emos.ajustar_emos_completo(*args_objetivo)
+
+        np.testing.assert_array_equal(x0_capturado['x0'], emos.THETA0_COMPLETO)
+
+        aceitavel, motivo = EstresseNumericoFronteiraGammaCTestCase._verificar_resultado_otimizador(
+            res, emos.BOUNDS_COMPLETO, emos._objetivo_completo, args_objetivo)
+        self.assertTrue(aceitavel, motivo)
+        print(f'[EscalaInterna/C] completo (fixture problemático, theta0 original preservado): '
+              f'success={res.success} {motivo}')
+
+    def test_d_convergencia_do_submodelo_d0_a_partir_do_theta0_original(self):
+        """Mesma verificação do teste C, para `ajustar_emos_d0` sobre o
+        fixture ORIGINAL de `MutacaoObservacaoFuturaTestCase` (degenerado,
+        reaproveitado sem modificação)."""
+        pares = EstresseNumericoFronteiraGammaCTestCase._pares_mutacao_degenerado(125)
+        validos = self._validos_causais(pares)
+        self.assertGreaterEqual(len(validos), emos.N_TREINO_MINIMO_EMOS)
+
+        args_objetivo = (
+            validos['climatologia_observada'].to_numpy(dtype=float),
+            validos['anom_ensemble'].to_numpy(dtype=float),
+            validos['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos['observacao'].to_numpy(dtype=float),
+        )
+
+        orig_minimize = emos.minimize
+        x0_capturado = {}
+
+        def capturar_x0(fun, x0, **kwargs):
+            x0_capturado['x0'] = np.array(x0, copy=True)
+            return orig_minimize(fun, x0, **kwargs)
+
+        with mock.patch.object(emos, 'minimize', side_effect=capturar_x0):
+            res = emos.ajustar_emos_d0(*args_objetivo)
+
+        np.testing.assert_array_equal(x0_capturado['x0'], emos.THETA0_D0)
+
+        aceitavel, motivo = EstresseNumericoFronteiraGammaCTestCase._verificar_resultado_otimizador(
+            res, emos.BOUNDS_D0, emos._objetivo_d0, args_objetivo)
+        self.assertTrue(aceitavel, motivo)
+        print(f'[EscalaInterna/D] d0 (fixture problemático, theta0 original preservado): '
+              f'success={res.success} {motivo}')
+
+    # ── E: preservação das propriedades de independência D0 ──────────
+
+    def test_e_ajustar_emos_d0_preserva_independencia_estrutural_e_de_estado_compartilhado(self):
+        """`ajustar_emos_d0` (o wrapper NOVO, não `_objetivo_d0`, já
+        coberto sem alteração em `IndependenciaD0TestCase.test_b`)
+        continua sem aceitar `spread_relativo`/`ensemble_std` na
+        assinatura. Além disso, como `_aplicar_escala_interna` é a
+        MESMA função compartilhada por `ajustar_emos_completo` e
+        `ajustar_emos_d0` (cada chamada copia `OPCOES_OTIMIZADOR` para
+        um dict novo — nunca muta o dict do módulo in-place), intercalar
+        uma chamada ao submodelo completo entre duas chamadas ao d0 com
+        os MESMOS 4 argumentos não pode alterar o resultado do d0."""
+        import inspect
+        params = ' '.join(inspect.signature(emos.ajustar_emos_d0).parameters.keys())
+        self.assertNotIn('spread', params)
+        self.assertNotIn('ensemble_std', params)
+
+        clim_obs = np.full(123, 70.0)
+        anom = np.linspace(-5, 5, 123)
+        erro_sd = np.full(123, 20.0)
+        y = 70.0 + 0.5 * anom
+
+        res_isolado = emos.ajustar_emos_d0(clim_obs, anom, erro_sd, y)
+
+        spread_rel_qualquer = np.linspace(0.2, 4.0, 123)
+        emos.ajustar_emos_completo(clim_obs, anom, erro_sd, spread_rel_qualquer, y)
+        res_depois_de_completo = emos.ajustar_emos_d0(clim_obs, anom, erro_sd, y)
+
+        self.assertEqual(res_isolado.success, res_depois_de_completo.success)
+        np.testing.assert_array_equal(res_isolado.x, res_depois_de_completo.x)
+        self.assertEqual(res_isolado.fun, res_depois_de_completo.fun)
+        np.testing.assert_array_equal(res_isolado.jac, res_depois_de_completo.jac)
+
+        self.assertEqual(emos.OPCOES_OTIMIZADOR, {'maxiter': 2000, 'ftol': 1e-10, 'gtol': 1e-6})
+
+    # ── F: STOP-ON-FAILURE para success=False ────────────────────────
+
+    def test_f_stop_on_failure_dispara_para_os_dois_submodelos_quando_minimize_sempre_falha(self):
+        """Monkeypatch em memória de `emos.minimize` (restaurado
+        automaticamente ao saír do `with`, nunca grava nada em disco —
+        mesmo padrão usado em RN-2G) forçando `success=False` em TODA
+        chamada — confirma, no pipeline REAL (`construir_emos_h2_expanding`,
+        nunca reimplementado), que `status_emos_completo`/
+        `status_emos_d0`/`status_emos` ficam `STATUS_NAO_CONVERGIU` e
+        que `a`/`a_d0` nunca são publicados, mesmo passando pela nova
+        normalização de escala (que nunca decide `success` — só
+        reescala `fun`/`jac`)."""
+        linhas = []
+        for i in range(130):
+            mes = (i % 12) + 1
+            ano = 1990 + i // 12
+            init_date = f'{ano}-{mes:02d}'
+            target_p = v._periodo(init_date) + 1
+            linhas.append({
+                'init_date': init_date, 'target_month': str(target_p),
+                'target_ano': target_p.year, 'target_mes': target_p.month,
+                'observacao': 80.0 + 0.3 * i, 'ensemble_mean': 100.0 + 0.5 * i,
+                'ensemble_std': 15.0, 'membros': np.full(24, 100.0 + 0.5 * i),
+                'climatologia_modelo_raw': 90.0, 'climatologia_observada': 70.0,
+                'anom_ensemble': (100.0 + 0.5 * i) - 90.0,
+                'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 20.0,
+                'spread_relativo': 1.0,
+                'tercil_33': 60.0, 'tercil_67': 90.0,
+                'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                'valido': True,
+            })
+        pares = pd.DataFrame(linhas)
+        orig_minimize = emos.minimize
+
+        def minimize_sempre_falha(fun, x0, **kwargs):
+            res = orig_minimize(fun, x0, **kwargs)
+            res.success = False
+            res.status = 99
+            res.message = 'falha forçada pelo teste (RN-2H/F)'
+            return res
+
+        with mock.patch.object(emos, 'minimize', side_effect=minimize_sempre_falha):
+            tabela = emos.construir_emos_h2_expanding(pares)
+
+        elegiveis = tabela[tabela['n_treino_emos'] >= emos.N_TREINO_MINIMO_EMOS]
+        self.assertGreater(len(elegiveis), 0)
+        self.assertTrue((elegiveis['status_emos_completo'] == emos.STATUS_NAO_CONVERGIU).all())
+        self.assertTrue((elegiveis['status_emos_d0'] == emos.STATUS_NAO_CONVERGIU).all())
+        self.assertTrue((elegiveis['status_emos'] == emos.STATUS_NAO_CONVERGIU).all())
+        self.assertTrue(elegiveis['a'].isna().all())
+        self.assertTrue(elegiveis['a_d0'].isna().all())
+
+    # ── G: rejeição de soluções success=True numericamente inadequadas ──
+
+    def test_g_rejeita_sucesso_true_numericamente_inadequado_atraves_da_implementacao_escalada(self):
+        """Mocka só `scipy.optimize.minimize` com um resultado
+        INTERNAMENTE ESCALADO (`fun`/`jac` na escala K, como o
+        otimizador real devolveria) reportando `success=True` num
+        ponto deliberadamente ruim (longe do ótimo conhecido deste
+        fixture) — depois de passar por `ajustar_emos_completo`
+        (normalização incluída), o contrato de rejeição já aprovado
+        (`_verificar_resultado_otimizador`, nunca reimplementado)
+        precisa rejeitar essa solução, confirmando que a nova
+        normalização não mascara uma solução inadequada como aceitável
+        só porque o otimizador (aqui, simulado) alega sucesso."""
+        pares = EstresseNumericoFronteiraGammaCTestCase._pares_independencia_d0_degenerado(
+            lambda i: 5.0 + 3.0 * (i % 11))
+        validos = self._validos_causais(pares)
+        args_objetivo = (
+            validos['climatologia_observada'].to_numpy(dtype=float),
+            validos['anom_ensemble'].to_numpy(dtype=float),
+            validos['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos['spread_relativo'].to_numpy(dtype=float),
+            validos['observacao'].to_numpy(dtype=float),
+        )
+        K = emos.K_ESCALA_INTERNA_OTIMIZACAO
+        x_mal = np.array([0.0, 0.0, 0.0, 0.0])  # longe do ótimo conhecido (~[4, 0.6, -20, 0])
+        fun_real_mal = emos._objetivo_completo(x_mal, *args_objetivo)
+        self.assertTrue(np.isfinite(fun_real_mal))
+
+        resultado_interno = mock.Mock(success=True, status=0,
+                                       message='CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH',
+                                       nit=1, nfev=1, x=x_mal, fun=K * fun_real_mal,
+                                       jac=np.zeros(4))
+        with mock.patch.object(emos, 'minimize', return_value=resultado_interno):
+            res = emos.ajustar_emos_completo(*args_objetivo)
+
+        self.assertAlmostEqual(res.fun, fun_real_mal)  # normalização confirmada
+        aceitavel, motivo = EstresseNumericoFronteiraGammaCTestCase._verificar_resultado_otimizador(
+            res, emos.BOUNDS_COMPLETO, emos._objetivo_completo, args_objetivo)
+        self.assertFalse(aceitavel, motivo)
+        print(f'[EscalaInterna/G] rejeitado corretamente: {motivo}')
+
+    # ── H: integridade dos resultados finais do pipeline conjunto ────
+
+    def test_h_integridade_dos_campos_publicados_pelo_pipeline_conjunto(self):
+        """Fixture NÃO degenerado (ruído gaussiano determinístico,
+        RN-2B — `_ruido_determinista`), onde os dois submodelos
+        convergem normalmente. Confirma que os campos PUBLICADOS por
+        `construir_emos_h2_expanding` (`mu_latente`, `sigma`,
+        `prob_zero`, `media_preditiva_censurada`, `mediana_preditiva`,
+        `crps_emos` e os equivalentes `_d0`) são EXATAMENTE
+        recomputáveis a partir dos parâmetros `a/b/gamma_c/d` (e
+        `a_d0/b_d0/gamma_c_d0`) publicados e dos dados causais da
+        própria linha avaliada, usando as MESMAS funções de produção
+        (`prob_zero`, `media_preditiva_censurada`, `quantil_censurado`,
+        `crps_normal_censurada` — nunca reimplementadas) — nenhum
+        resíduo de escala K sobrevive no resultado final."""
+        ruido = _ruido_determinista(140, seed=20261028, escala=8.0)
+        linhas = []
+        for i in range(140):
+            mes = (i % 12) + 1
+            ano = 1990 + i // 12
+            init_date = f'{ano}-{mes:02d}'
+            target_p = v._periodo(init_date) + 1
+            anom = (100.0 + 0.5 * i) - 90.0
+            linhas.append({
+                'init_date': init_date, 'target_month': str(target_p),
+                'target_ano': target_p.year, 'target_mes': target_p.month,
+                'observacao': max(0.0, 75.0 + 0.4 * anom + ruido[i]),
+                'ensemble_mean': 100.0 + 0.5 * i,
+                'ensemble_std': 12.0 + 0.1 * (i % 9), 'membros': np.full(24, 100.0 + 0.5 * i),
+                'climatologia_modelo_raw': 90.0, 'climatologia_observada': 75.0,
+                'anom_ensemble': anom,
+                'spread_clim_modelo_mes': 15.0, 'erro_clim_sd_mes': 18.0,
+                'spread_relativo': (12.0 + 0.1 * (i % 9)) / 15.0,
+                'tercil_33': 60.0, 'tercil_67': 90.0,
+                'anos_hist_climatologia': np.linspace(50.0, 110.0, 25),
+                'valido': True,
+            })
+        pares = pd.DataFrame(linhas)
+        tabela = emos.construir_emos_h2_expanding(pares)
+        linha = tabela.sort_values('init_date').iloc[-1]
+
+        self.assertEqual(linha['status_emos'], emos.STATUS_OK,
+                          'fixture não degenerado deveria convergir normalmente nos dois submodelos')
+
+        a, b, gamma_c, d = linha['a'], linha['b'], linha['gamma_c'], linha['d']
+        c = float(np.exp(gamma_c))
+        mu_recomputado = linha['climatologia_observada'] + a + b * linha['anom_ensemble']
+        sigma_recomputado = linha['erro_clim_sd_mes'] * np.sqrt(c + d * linha['spread_relativo'] ** 2)
+        self.assertAlmostEqual(mu_recomputado, linha['mu_latente'], places=9)
+        self.assertAlmostEqual(sigma_recomputado, linha['sigma'], places=9)
+        self.assertAlmostEqual(float(emos.prob_zero(mu_recomputado, sigma_recomputado)),
+                                linha['prob_zero'], places=9)
+        self.assertAlmostEqual(
+            float(emos.media_preditiva_censurada(mu_recomputado, sigma_recomputado)),
+            linha['media_preditiva_censurada'], places=9)
+        self.assertAlmostEqual(
+            float(emos.quantil_censurado(0.5, mu_recomputado, sigma_recomputado)),
+            linha['mediana_preditiva'], places=9)
+        self.assertAlmostEqual(
+            float(emos.crps_normal_censurada(linha['observacao'], mu_recomputado, sigma_recomputado)),
+            linha['crps_emos'], places=9)
+
+        a_d0, b_d0, gamma_c_d0 = linha['a_d0'], linha['b_d0'], linha['gamma_c_d0']
+        c_d0 = float(np.exp(gamma_c_d0))
+        mu_d0_recomputado = linha['climatologia_observada'] + a_d0 + b_d0 * linha['anom_ensemble']
+        sigma_d0_recomputado = linha['erro_clim_sd_mes'] * np.sqrt(c_d0)
+        self.assertAlmostEqual(mu_d0_recomputado, linha['mu_latente_d0'], places=9)
+        self.assertAlmostEqual(sigma_d0_recomputado, linha['sigma_d0'], places=9)
+        self.assertAlmostEqual(
+            float(emos.crps_normal_censurada(linha['observacao'], mu_d0_recomputado, sigma_d0_recomputado)),
+            linha['crps_d0'], places=9)
+
+        K = emos.K_ESCALA_INTERNA_OTIMIZACAO
+        self.assertLess(linha['crps_final_treino_completo'], 10.0,
+                         f"crps_final_treino_completo={linha['crps_final_treino_completo']} sugere "
+                         f"contaminação por K={K} (CRPS real desta série é de poucos mm)")
+        self.assertLess(linha['crps_final_treino_d0'], 10.0)
 
 
 class ClimatologiaCausalTestCase(unittest.TestCase):
