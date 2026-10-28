@@ -1396,6 +1396,135 @@ class EstresseNumericoFronteiraGammaCTestCase(unittest.TestCase):
             print('[EstresseNumerico/StopOnFailure] d0 convergiu normalmente neste ambiente '
                   '(regime degenerado não disparou aqui — ambiente-dependente, documentado)')
 
+    # ── RN-2E.2 — comparação diagnóstica de candidatos de ftol ──────────
+    # Puramente observacional: nunca decide se o otimizador de produção
+    # deve mudar (isso é decisão de revisão externa, fora deste teste) e
+    # nunca altera emos.OPCOES_OTIMIZADOR permanentemente — cada chamada
+    # usa sua própria cópia local do dict de opções.
+
+    @classmethod
+    def _comparar_ftol_candidatos(cls, rotulo_cenario, theta0, bounds, objetivo_fn, args_objetivo,
+                                   submodelo):
+        """Roda a MESMA otimização (mesmos dados causais, função
+        objetivo, jacobiano numérico `jac=None`, bounds, `gtol`,
+        `maxiter`, método L-BFGS-B) com `ftol` em {1e-10 (baseline,
+        valor real de produção), 1e-12, 1e-14} — só `ftol` varia.
+        Registra tudo incondicionalmente (`_log_chamada_otimizador`,
+        já existente) ANTES de qualquer classificação, e classifica
+        baseline-vs-candidato nos 4 cenários do RN-2E.2 (item 5) sem
+        decidir nada por si."""
+        resultados = {}
+        for ftol in (1e-10, 1e-12, 1e-14):
+            opcoes = dict(emos.OPCOES_OTIMIZADOR)
+            opcoes['ftol'] = ftol
+            res = emos.minimize(objetivo_fn, theta0, args=args_objetivo, method='L-BFGS-B',
+                                 bounds=bounds, jac=None, options=opcoes)
+            cls._log_chamada_otimizador(rotulo_cenario, f'ftol={ftol:g}', submodelo, res, bounds,
+                                         objetivo_fn, args_objetivo, theta0=theta0, options=opcoes)
+            aceitavel, motivo = cls._verificar_resultado_otimizador(
+                res, bounds, objetivo_fn, args_objetivo)
+            # Comportamento esperado do STOP-ON-FAILURE real
+            # (construir_emos_h2_expanding): a gate de produção hoje
+            # decide só por `res.success` (item 4 do protocolo deste
+            # teste) — nunca pelo contrato de qualidade mais estrito
+            # abaixo, que vive só nesta suíte.
+            stop_on_failure_esperado = (
+                'STATUS_OK (res.success=True — passaria à sanidade da linha avaliada)' if res.success
+                else 'STATUS_NAO_CONVERGIU (res.success=False — parâmetro NUNCA publicado)')
+            resultados[ftol] = {'res': res, 'aceitavel': aceitavel, 'motivo': motivo,
+                                 'stop_on_failure_esperado': stop_on_failure_esperado}
+            print(f'[RN-2E.2/{rotulo_cenario}] ftol={ftol:g}: aceitavel_rn2b={aceitavel}  '
+                  f'success={res.success}  status={res.status}  fun={res.fun!r}')
+            print(f'[RN-2E.2/{rotulo_cenario}]   motivo RN-2B: {motivo}')
+            print(f'[RN-2E.2/{rotulo_cenario}]   STOP-ON-FAILURE esperado: {stop_on_failure_esperado}')
+
+        base = resultados[1e-10]
+        for ftol_cand in (1e-12, 1e-14):
+            cand = resultados[ftol_cand]
+            if not base['aceitavel'] and cand['aceitavel']:
+                cenario = ('1 — baseline reprovada, candidato aprovado: evidência FAVORÁVEL à '
+                           'eficácia do candidato neste ambiente')
+            elif not base['aceitavel'] and not cand['aceitavel']:
+                cenario = ('2 — baseline e candidato reprovados: candidato insuficiente (ou '
+                           'problema adicional ainda não resolvido) neste ambiente')
+            elif base['aceitavel'] and cand['aceitavel']:
+                cenario = ('3 — baseline e candidato aprovados: INCONCLUSIVO quanto à '
+                           'capacidade do candidato de corrigir a falha (regime problemático '
+                           'não apareceu nesta execução — não é refutação)')
+            else:
+                cenario = '4 — baseline aprovada, candidato reprovado: evidência de REGRESSÃO'
+            diff_rel_fun = abs(cand['res'].fun - base['res'].fun) / max(abs(base['res'].fun), 1e-12)
+            print(f'[RN-2E.2/{rotulo_cenario}] CLASSIFICAÇÃO baseline(1e-10) vs '
+                  f'ftol={ftol_cand:g}: CENÁRIO {cenario}')
+            print(f'[RN-2E.2/{rotulo_cenario}]   diferença relativa de fun (qualidade) = '
+                  f'{diff_rel_fun:.6e}')
+        return resultados
+
+    def test_s_comparacao_ftol_candidato_vs_baseline_mesma_execucao(self):
+        """RN-2E.2 — compara, na MESMA execução/máquina desta CI,
+        ftol=1e-10 (baseline, o valor real de produção) contra 1e-12
+        e 1e-14 (candidatos), a partir do theta0 ORIGINAL — a
+        trajetória operacional real — para os submodelos completo e
+        d0, e SEPARADAMENTE (nunca confundido com a trajetória
+        operacional) a partir do ponto subótimo real registrado na
+        RN-2D (`x=[3.999800458117186, 0.60000412922862,
+        -18.649803463229464, 0.0]`). Puramente diagnóstico: nunca
+        altera `emos.OPCOES_OTIMIZADOR` permanentemente (cada chamada
+        usa sua própria cópia local), nunca decide aprovação de
+        produção por si — a única asserção aqui é uma checagem de
+        finitude que não falha por causa do RESULTADO da comparação
+        de ftol, e este teste nunca substitui, afrouxa nem desativa
+        test_o/test_p/test_q/test_r."""
+        self._log_ambiente_numerico()
+
+        # ── Trajetória operacional real: sempre a partir do theta0 ──
+        # original — nunca do ponto subótimo (isso vem depois, isolado).
+        pares_completo = self._pares_independencia_d0_degenerado(lambda i: 5.0 + 3.0 * (i % 11))
+        validos_completo = self._validos_causais(pares_completo)
+        args_completo = (
+            validos_completo['climatologia_observada'].to_numpy(dtype=float),
+            validos_completo['anom_ensemble'].to_numpy(dtype=float),
+            validos_completo['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos_completo['spread_relativo'].to_numpy(dtype=float),
+            validos_completo['observacao'].to_numpy(dtype=float))
+        res_completo_theta0 = self._comparar_ftol_candidatos(
+            'test_s_completo_theta0_original', emos.THETA0_COMPLETO, emos.BOUNDS_COMPLETO,
+            emos._objetivo_completo, args_completo, 'completo')
+
+        pares_d0 = self._pares_mutacao_degenerado(125)
+        validos_d0 = self._validos_causais(pares_d0)
+        args_d0 = (
+            validos_d0['climatologia_observada'].to_numpy(dtype=float),
+            validos_d0['anom_ensemble'].to_numpy(dtype=float),
+            validos_d0['erro_clim_sd_mes'].to_numpy(dtype=float),
+            validos_d0['observacao'].to_numpy(dtype=float))
+        res_d0_theta0 = self._comparar_ftol_candidatos(
+            'test_s_d0_theta0_original', emos.THETA0_D0, emos.BOUNDS_D0,
+            emos._objetivo_d0, args_d0, 'd0')
+
+        # ── Cenário DIAGNÓSTICO separado — reinício a partir do ponto ──
+        # subótimo real da RN-2D. NUNCA é a trajetória operacional (que
+        # está inteiramente acima, a partir de theta0 original); serve
+        # só para observar se, exatamente nesse ponto, um ftol menor
+        # ainda indica melhora disponível — não deve ser extrapolado
+        # para a trajetória real sem a CI confirmar separadamente.
+        print('[RN-2E.2] --- INÍCIO cenário de REINÍCIO DIAGNÓSTICO (ponto subótimo real da '
+              'RN-2D) — NUNCA a trajetória operacional, que usa sempre theta0 original ---')
+        x_subotimo_rn2d = np.array(
+            [3.999800458117186, 0.60000412922862, -18.649803463229464, 0.0])
+        res_completo_reinicio = self._comparar_ftol_candidatos(
+            'test_s_completo_REINICIO_DIAGNOSTICO_ponto_rn2d', x_subotimo_rn2d,
+            emos.BOUNDS_COMPLETO, emos._objetivo_completo, args_completo, 'completo')
+        print('[RN-2E.2] --- FIM cenário de reinício diagnóstico ---')
+
+        todos_finitos = all(
+            np.all(np.isfinite(r['res'].x)) and np.isfinite(r['res'].fun)
+            for bloco in (res_completo_theta0, res_d0_theta0, res_completo_reinicio)
+            for r in bloco.values())
+        self.assertTrue(todos_finitos, 'alguma das 9 chamadas de comparação de ftol produziu '
+                                        'x/fun não finito nesta execução — isso não deveria '
+                                        'acontecer em nenhum dos três ftol testados')
+
 
 class StopOnFailureSinteticoTestCase(unittest.TestCase):
     """Protocolo, seção 16.4/16.5/25 — status_emos dispara corretamente
