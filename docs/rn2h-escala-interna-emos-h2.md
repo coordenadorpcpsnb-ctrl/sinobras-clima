@@ -66,11 +66,21 @@ escala do objetivo é pequena (seção 4).
   | D — reescalado + jacobiano analítico | True | **aprovado** | 0,00021219 |
 
   A Configuração B prova que **trocar a fonte do gradiente não resolve
-  (e piora)** — a causa raiz não é a precisão do cálculo do gradiente,
-  é a interação entre a escala do objetivo e o critério `ftol` (seção
-  4). C e D chegam ao MESMO ótimo (`fun=0,00021219`), confirmando que a
-  reescala, por si só, já é suficiente — o jacobiano analítico (D) não
-  traz benefício adicional sobre o numérico padrão do scipy (C).
+  (e piora)** — isso é um fato empírico direto deste experimento,
+  descartando "precisão do cálculo do gradiente" como explicação
+  isolada. C e D chegam ao MESMO ótimo (`fun=0,00021219`), confirmando
+  que a reescala, por si só, já é suficiente — o jacobiano analítico
+  (D) não traz benefício adicional sobre o numérico padrão do scipy
+  (C). **O que este experimento NÃO isola**: por que a reescala
+  funciona — a explicação do mecanismo (interação entre a escala do
+  objetivo e o critério `ftol`, seção 4) é a hipótese mais bem
+  fundamentada e consistente com RN-2E.1/E.2 (baixar só o valor
+  numérico de `ftol`, sem reescalar, não ajudou a partir do `theta0`
+  real), mas não foi isolada de outros efeitos também sensíveis à
+  escala (passo da diferença finita, busca em linha — seção 5) por um
+  experimento dedicado a essa separação. Tratada como explicação
+  cientificamente bem apoiada, nunca como mecanismo exclusivo
+  comprovado isoladamente.
 - **RN-2G**: validação científica completa de K=10000 contra as 95
   avaliações históricas reais, usando uma réplica standalone da lógica
   de reescala (ainda não integrada ao código de produção) — resultado
@@ -123,6 +133,24 @@ instrução explícita — só o CARÁTER efetivo de `ftol` muda (absoluto →
 relativo) como consequência de ele agora se aplicar a `F`, nunca a
 constante em si.
 
+**Escopo exato da normalização de volta à escala original (RN-2I —
+esclarecimento pedido pela revisão externa):** `_aplicar_escala_interna`
+normaliza explicitamente só `res.fun` (dividido por `K`) e `res.jac`
+(dividido por `K`) antes de retornar — são os dois únicos campos do
+`OptimizeResult` que a implementação lê ou que `construir_emos_h2_expanding`
+consome (`fun`, `jac`, `x`, `success`, `status`, `message`, `nit`,
+`nfev`). `res.x`/`success`/`status`/`message`/`nit`/`nfev` não precisam de
+normalização (são adimensionais em `K` ou já pertencem ao espaço original
+de θ). **Nenhum outro campo do `OptimizeResult` é tocado ou verificado.**
+Em particular, `res.hess_inv` (a aproximação da inversa do Hessiano que o
+L-BFGS-B mantém internamente) continua representando a curvatura do
+problema ESCALADO (`Hess(F)=K·Hess(f)` ⟹ `hess_inv(F)=hess_inv(f)/K`) —
+se algum código vier a ler `res.hess_inv` diretamente no futuro (nenhum
+lê hoje; confirmado por busca em todo `scripts/` e `tests/`), ele estará
+fora de escala por um fator `K=10000` em relação às unidades originais,
+e precisaria de uma divisão por `K` equivalente à de `fun`/`jac`,
+hoje inexistente. Registrado como risco residual explícito (seção 7).
+
 ## 5. Mínimo matemático vs. trajetória numérica
 
 O mínimo MATEMÁTICO de `F=K·f` é idêntico ao de `f` (seção 3) — a
@@ -132,11 +160,15 @@ caráter (seção 4); o passo absoluto da diferença finita do scipy no
 espaço de θ (mesmo `h≈1,49e-8` nos dois casos) tem influência relativa
 diferente sobre a decisão de parada, porque a escala de `f` mudou; e a
 busca em linha interage com essas mesmas quantidades. A Configuração B
-do RN-2F (jacobiano ANALÍTICO, SEM reescala) prova isso empiricamente:
+do RN-2F (jacobiano ANALÍTICO, SEM reescala) prova empiricamente que
 trocar só a fonte do gradiente, mantendo a escala original, não corrigiu
-o problema e piorou — confirmando que a causa raiz está na interação
-entre escala do objetivo e critério de parada, nunca na precisão do
-cálculo do gradiente em si.
+o problema e piorou — isso descarta a precisão do cálculo do gradiente
+como explicação isolada. A atribuição mais específica (de que é
+exatamente a interação escala×`ftol`, e não outro efeito sensível à
+escala como o passo da diferença finita ou a busca em linha, listados
+acima) é a hipótese explicativa mais bem fundamentada disponível, não
+um mecanismo isolado comprovado por um experimento dedicado a
+separá-lo dos demais (ver ressalva equivalente na seção 2).
 
 ## 6. Limitações de reprodutibilidade
 
@@ -153,6 +185,31 @@ isso que esta rodada autoriza só UMA execução de CI, sem repetição em
 busca de ambiente favorável, e por que o item de entrega inclui um plano
 explícito de validação adicional em ambientes diferentes antes de
 qualquer merge (ver relatório final).
+
+**Correção (RN-2I) — ambiente efetivo da própria execução de CI desta
+PR:** o Job C da PR #62 (run `40760367806`) imprime, via
+`platform.processor()`/`threadpoolctl.threadpool_info()`/
+`/proc/cpuinfo` (instrumentação presente em `ci.yml`, não removida —
+texto anterior desta seção, que a atribuía só aos Jobs D/E/F temporários
+da PR #61, estava **incorreto** e é corrigido aqui):
+
+```
+model name : AMD EPYC 9V74 80-Core Processor
+{'user_api': 'blas', 'internal_api': 'openblas', 'prefix': 'libscipy_openblas',
+ 'version': '0.3.31.188.0', 'threading_layer': 'pthreads',
+ 'architecture': 'Haswell', 'num_threads': 4}
+numpy 2.4.6, scipy 1.17.1, Python 3.11.17, Ubuntu 24.04.5 LTS
+(runner hospedado GitHub, ubuntu-24.04, Azure eastus2)
+```
+
+Ou seja: **duas CPUs AMD distintas já testadas** (EPYC 7763 na RN-2C/D/F
+via PR #61; EPYC 9V74 nesta execução da RN-2H via PR #62) — mas o
+OpenBLAS escolheu automaticamente o kernel **Haswell nas duas**, pelas
+mesmas regras de detecção de instrução. **Ainda não há validação em
+nenhum kernel numérico genuinamente diferente (ex.: SkylakeX/AVX-512 ou
+outra arquitetura Intel)** — a melhoria de K=10000 continua confirmada
+só sob o kernel Haswell. Ver item de validação em ambiente distinto no
+relatório RN-2I.
 
 ## 7. Riscos residuais
 
@@ -206,6 +263,13 @@ Investigação direta confirmou:
   — decisão científica separada, não tomada aqui, e que precisaria de
   aprovação e revisão própria.
 
+**Campos do `OptimizeResult` fora do escopo da normalização (RN-2I):**
+como detalhado na seção 4, só `fun`/`jac` são normalizados de volta à
+escala original. `res.hess_inv` (quando presente) permanece na escala
+INTERNA (`K=10000`×) e não é lido por nenhum código hoje — mas é um
+risco residual explícito para qualquer uso futuro desse campo (ex.:
+diagnóstico de incerteza/Hessiana) que não reaplique a correção `/K`.
+
 **Submodelo D0 especificamente:** nos dois fixtures degenerados de teste
 reaproveitados desta rodada (série B de `IndependenciaD0TestCase` e a de
 `MutacaoObservacaoFuturaTestCase`), `ajustar_emos_d0` reportou
@@ -216,6 +280,65 @@ bateu exatamente com o publicado em todas as linhas — este comportamento
 também não se manifestou em dado real até aqui.
 
 ## 8. Resultado da comparação histórica (95 avaliações reais)
+
+**Especificação matemática da regra de equivalência (RN-2I — pedido
+explícito de precisão formal).** Sejam `v_novo` e `v_pub` o valor de um
+mesmo campo numérico na implementação nova e no CSV publicado,
+respectivamente, para a mesma linha (`init_date`). Define-se:
+
+```
+diff_abs = |v_novo - v_pub|
+diff_rel = diff_abs / max(|v_pub|, ε),  ε = 1e-12
+```
+
+O denominador `max(|v_pub|, ε)` é o único tratamento de referência
+próxima de zero nesta regra — existe exclusivamente para nunca dividir
+por zero exato; ele NÃO é o que evita falso-positivo perto de zero (ver
+abaixo). Por campo, `v` é classificado em um de três grupos e a VIOLAÇÃO
+é definida como:
+
+- **Grupo físico-mm** P = `{mu_latente, sigma, mu_latente_d0, sigma_d0,
+  media_preditiva_censurada, mediana_preditiva, crps_emos, crps_d0, a,
+  a_d0}` (inclui `a`/`a_d0`, recategorizados nesta rodada — são bias
+  ADITIVO na mesma unidade mm de `mu_latente`, nunca adimensionais):
+  `violação ⟺ (diff_abs ≥ 0,01mm) E (diff_rel ≥ 1e-4)`.
+- **Grupo adimensional** D = `{b, gamma_c, c, d, b_d0, gamma_c_d0,
+  c_d0}`: `violação ⟺ (diff_abs ≥ 1e-4) E (diff_rel ≥ 1e-4)`.
+- **`prob_zero`** (probabilidade): `violação ⟺ diff_abs ≥ 1e-4` (limiar
+  operacional, 0,01 ponto percentual — usado para a decisão real de
+  aprovação); o limiar estrito original (`diff_abs ≥ 1e-6`) é reportado
+  separadamente, só para registro, nunca para decidir aprovação.
+- **Campos categóricos/estruturais** (`success_completo`, `success_d0`,
+  `status_emos_completo`, `status_emos_d0`, `status_emos`, datas
+  causais, `n_treino_emos`): exigem igualdade EXATA, zero tolerância —
+  não entram na fórmula acima.
+
+**O que de fato neutraliza o artefato de "referência próxima de zero"
+é o E (AND), não o `ε` do denominador.** Um valor-base `v_pub` próximo
+de zero infla `diff_rel` (porque o denominador fica pequeno) mesmo para
+uma `diff_abs` irrelevante — mas como a violação exige os DOIS limiares
+simultaneamente, uma `diff_abs` abaixo do limiar absoluto (0,01mm ou
+1e-4, conforme o grupo) nunca é classificada como violação, não importa
+quão grande fique `diff_rel`. Esse foi o ponto operacional desta
+correção: a regra ESTRITA originalmente escrita na RN-2G usava OR entre
+abs/rel, o que classificava como "violação" qualquer caso de
+valor-base próximo de zero — 2 dos 51 casos identificados na reavaliação
+do item 2 desta rodada eram exatamente esse artefato.
+
+**Status de pré-registro (RN-2I — esclarecimento explícito pedido):**
+esta regra COMBINADA (E, com `a`/`a_d0` no grupo físico-mm) **não foi a
+regra originalmente escrita na RN-2G** — foi derivada e documentada
+DEPOIS de examinar os resultados da regra estrita original (OR,
+`a`/`a_d0` classificados por engano como adimensionais), explicitamente
+como correção pós-hoc (RN-2H, item 2 do pedido daquela rodada). Ela é
+apresentada aqui, de novo, como a regra JÁ CORRIGIDA — nunca como se
+tivesse sido pré-registrada antes de qualquer experimento. A regra
+ESTRITA original, para registro histórico nunca reescrito, teria
+contado 51 "violações" nos dados do RN-2G (réplica standalone); a imensa
+maioria eram artefatos de classificação (`a`/`a_d0`) ou de limiar
+operacionalmente mais estrito que o justificável (`prob_zero`), não
+diferenças científicas reais — ver item 2 da rodada RN-2H para a
+decomposição completa dessas 51 ocorrências.
 
 Reprocessamento com a implementação REAL e integrada desta branch (nunca
 uma réplica standalone):
@@ -268,10 +391,21 @@ A mudança está isolada em exatamente 2 arquivos:
   usado pela RN-2B, por ser incidentalmente degenerada — seção 7), e a
   nova classe `EscalaInternaOtimizacaoTestCase` (8 testes).
 
+**RN-2I (rodada de validação final pré-merge, só testes/documentação,
+sem commit/push ainda — ver relatório RN-2I):** este documento recebeu
+as correções/esclarecimentos descritos nas seções 4, 6, 7 e 8; e
+`tests/test_cfsv2_emos_h2_implementacao.py` recebeu 1 método novo em
+`ComDadosReaisTestCase`
+(`test_k_regressao_contra_csv_publicado_com_regra_de_equivalencia_corrigida`)
+que torna permanente e reproduzível a comparação histórica das 95
+avaliações (antes só em scripts de scratch fora do repositório).
+Nenhuma linha de `scripts/cfsv2_emos_h2_implementacao.py` foi tocada
+nesta rodada.
+
 Nenhuma outra função (`_objetivo_completo`, `_objetivo_d0`,
 `crps_normal_censurada`, `theta0`, `bounds`, regras de seleção
 científica, workflows) foi tocada. Nenhum dado histórico ou relatório de
-produção foi gerado ou alterado nesta rodada. Reverter é um `git revert`
-de ponta a ponta do(s) commit(s) desta branch/PR — sem dependência
-cruzada com PR #59 ou PR #61, ambas intocadas e independentes desta
-mudança.
+produção foi gerado ou alterado em nenhuma das rodadas. Reverter é um
+`git revert` de ponta a ponta do(s) commit(s) desta branch/PR — sem
+dependência cruzada com PR #59 ou PR #61, ambas intocadas e
+independentes desta mudança.

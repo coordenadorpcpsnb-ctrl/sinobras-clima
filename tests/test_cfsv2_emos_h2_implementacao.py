@@ -1907,6 +1907,85 @@ class ComDadosReaisTestCase(unittest.TestCase):
             self.assertEqual(int(ok[coluna].isna().sum()), 0,
                               f"{coluna} ausente em algum dos 95 casos avaliáveis")
 
+    # ── RN-2I, item 2 — versão permanente e reproduzível da comparação
+    # histórica (substitui os scripts de scratch da RN-2G/RN-2H) ──────
+
+    GRUPO_FISICO_MM = ('mu_latente', 'sigma', 'mu_latente_d0', 'sigma_d0',
+                        'media_preditiva_censurada', 'mediana_preditiva',
+                        'crps_emos', 'crps_d0', 'a', 'a_d0',
+                        'crps_final_treino_completo', 'crps_final_treino_d0',
+                        'crps_raw', 'crps_climatologia')
+    GRUPO_ADIMENSIONAL = ('b', 'gamma_c', 'c', 'd', 'b_d0', 'gamma_c_d0', 'c_d0')
+    CAMPOS_EXATOS = ('success_completo', 'success_d0', 'status_emos_completo',
+                      'status_emos_d0', 'status_emos', 'max_init_date_treino',
+                      'max_target_month_treino', 'target_month', 'target_ano',
+                      'target_mes', 'n_treino_emos')
+    EPS_DIFF_REL = 1e-12
+
+    def test_k_regressao_contra_csv_publicado_com_regra_de_equivalencia_corrigida(self):
+        """RN-2I, item 2 — versão mínima, PERMANENTE e reproduzível da
+        comparação histórica feita via scripts de scratch nas rodadas
+        RN-2G/RN-2H: reconstrói as 95 janelas causais com os MESMOS
+        carregadores reais de dados (`executar_emos_h2`, via `setUp`
+        desta classe, nunca reimplementado), reproduz a baseline já
+        publicada e compara os 21 campos numéricos (grupo físico-mm +
+        grupo adimensional) e os campos estruturais contra
+        `data/cfsv2_calibracao_2c3d/emos_h2_expanding.csv` usando a
+        regra de equivalência CORRIGIDA e formalizada em
+        `docs/rn2h-escala-interna-emos-h2.md` (seção 8): E (nunca OU)
+        entre diferença absoluta e relativa — nunca pré-registrada
+        antes dos experimentos que a motivaram, documentada aqui como
+        a regra já corrigida. Critérios fixos, nunca ajustados para
+        fazer este teste passar. Só LEITURA do CSV publicado — nunca
+        escreve nele."""
+        publicado = pd.read_csv(emos.CAMINHO_TABELA_EXPANDING)
+        publicado_ok = publicado[publicado['status_emos'] == emos.STATUS_OK] \
+            .sort_values('init_date').reset_index(drop=True)
+        nova_ok = self.tabela[self.tabela['status_emos'] == emos.STATUS_OK] \
+            .sort_values('init_date').reset_index(drop=True)
+
+        self.assertEqual(len(nova_ok), 95)
+        self.assertEqual(len(publicado_ok), 95)
+        self.assertEqual(nova_ok['init_date'].tolist(), publicado_ok['init_date'].tolist(),
+                          "conjunto de avaliações OK difere do publicado — mudança estrutural, "
+                          "não cabe na regra de equivalência numérica abaixo")
+
+        divergencias_exatas = []
+        for campo in self.CAMPOS_EXATOS:
+            diff = nova_ok[campo].astype(str).to_numpy() != publicado_ok[campo].astype(str).to_numpy()
+            if diff.any():
+                divergencias_exatas.append((campo, nova_ok.loc[diff, 'init_date'].tolist()))
+        self.assertEqual(divergencias_exatas, [],
+                          f"campos categóricos/estruturais exigem igualdade exata: {divergencias_exatas}")
+
+        violacoes = []
+        pior_por_campo = {}
+        for campo in self.GRUPO_FISICO_MM + self.GRUPO_ADIMENSIONAL + ('prob_zero',):
+            a_v = nova_ok[campo].to_numpy(dtype=float)
+            b_v = publicado_ok[campo].to_numpy(dtype=float)
+            mask = ~(np.isnan(a_v) | np.isnan(b_v))
+            diff_abs = np.abs(a_v[mask] - b_v[mask])
+            diff_rel = diff_abs / np.maximum(np.abs(b_v[mask]), self.EPS_DIFF_REL)
+            if campo in self.GRUPO_FISICO_MM:
+                viol = (diff_abs >= 0.01) & (diff_rel >= 1e-4)
+            elif campo in self.GRUPO_ADIMENSIONAL:
+                viol = (diff_abs >= 1e-4) & (diff_rel >= 1e-4)
+            else:  # prob_zero — limiar operacional (0,01 ponto percentual), nunca o estrito original
+                viol = diff_abs >= 1e-4
+            datas = nova_ok.loc[mask, 'init_date'].to_numpy()
+            if viol.any():
+                violacoes.append((campo, datas[viol].tolist(), diff_abs[viol].tolist()))
+            if len(diff_abs):
+                i = int(np.argmax(diff_abs))
+                pior_por_campo[campo] = (str(datas[i]), float(diff_abs[i]), float(diff_rel[i]))
+
+        print('[RN-2I/item2] pior diff_abs por campo, sempre mostrado (linha, diff_abs, diff_rel):')
+        for campo, (dt, da, dr) in pior_por_campo.items():
+            print(f'  {campo:28s} {dt}  diff_abs={da:.6e}  diff_rel={dr:.6e}')
+
+        self.assertEqual(violacoes, [],
+                          f"regra de equivalência corrigida reprovou pelo menos um campo: {violacoes}")
+
 
 class RelatorioEmosH2TestCase(unittest.TestCase):
     """Smoke test do gerador de relatório — nunca recalcula, só
