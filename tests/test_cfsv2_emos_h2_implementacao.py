@@ -1922,6 +1922,29 @@ class ComDadosReaisTestCase(unittest.TestCase):
                       'target_mes', 'n_treino_emos')
     EPS_DIFF_REL = 1e-12
 
+    @staticmethod
+    def _verificar_ausencias_numericas(nova_ok, publicado_ok, campos):
+        """RN-2J — item 2 explícito: exige valor FINITO (nunca NaN, Inf
+        ou -Inf) nos dois lados, para TODO campo numérico e TODA linha
+        avaliável, sem excluir nenhuma linha silenciosamente. Chamada
+        ANTES de qualquer cálculo de diferença — se algum campo tiver
+        um valor ausente/não finito que antes só seria removido pelo
+        `mask` (nunca reportado), isso agora é uma falha explícita e
+        nomeada. Extraída como função livre para ser exercitada por um
+        controle negativo sintético (`test_l`), sem depender dos dados
+        reais."""
+        ausencias = []
+        for campo in campos:
+            a_v = nova_ok[campo].to_numpy(dtype=float)
+            b_v = publicado_ok[campo].to_numpy(dtype=float)
+            nao_finito_novo = ~np.isfinite(a_v)
+            nao_finito_pub = ~np.isfinite(b_v)
+            if nao_finito_novo.any():
+                ausencias.append((campo, 'novo', nova_ok.loc[nao_finito_novo, 'init_date'].tolist()))
+            if nao_finito_pub.any():
+                ausencias.append((campo, 'publicado', publicado_ok.loc[nao_finito_pub, 'init_date'].tolist()))
+        return ausencias
+
     def test_k_regressao_contra_csv_publicado_com_regra_de_equivalencia_corrigida(self):
         """RN-2I, item 2 — versão mínima, PERMANENTE e reproduzível da
         comparação histórica feita via scripts de scratch nas rodadas
@@ -1929,15 +1952,23 @@ class ComDadosReaisTestCase(unittest.TestCase):
         carregadores reais de dados (`executar_emos_h2`, via `setUp`
         desta classe, nunca reimplementado), reproduz a baseline já
         publicada e compara os 21 campos numéricos (grupo físico-mm +
-        grupo adimensional) e os campos estruturais contra
-        `data/cfsv2_calibracao_2c3d/emos_h2_expanding.csv` usando a
-        regra de equivalência CORRIGIDA e formalizada em
+        grupo adimensional) + `prob_zero` (22 no total) e os campos
+        estruturais contra `data/cfsv2_calibracao_2c3d/emos_h2_expanding.csv`
+        usando a regra de equivalência CORRIGIDA e formalizada em
         `docs/rn2h-escala-interna-emos-h2.md` (seção 8): E (nunca OU)
         entre diferença absoluta e relativa — nunca pré-registrada
         antes dos experimentos que a motivaram, documentada aqui como
         a regra já corrigida. Critérios fixos, nunca ajustados para
         fazer este teste passar. Só LEITURA do CSV publicado — nunca
-        escreve nele."""
+        escreve nele.
+
+        RN-2J — item 2 explícito: antes da comparação, exige os 22
+        campos finitos nas 95 linhas dos DOIS lados (nunca NaN/Inf/
+        -Inf) — uma ausência NOVA (presente no publicado, faltando no
+        resultado novo, ou vice-versa) é reprovação explícita, nunca
+        descartada em silêncio pelo `mask` que a versão anterior usava
+        direto no cálculo de diferença (ver `test_l` para o controle
+        negativo que comprova essa rejeição)."""
         publicado = pd.read_csv(emos.CAMINHO_TABELA_EXPANDING)
         publicado_ok = publicado[publicado['status_emos'] == emos.STATUS_OK] \
             .sort_values('init_date').reset_index(drop=True)
@@ -1958,26 +1989,33 @@ class ComDadosReaisTestCase(unittest.TestCase):
         self.assertEqual(divergencias_exatas, [],
                           f"campos categóricos/estruturais exigem igualdade exata: {divergencias_exatas}")
 
+        campos_numericos = self.GRUPO_FISICO_MM + self.GRUPO_ADIMENSIONAL + ('prob_zero',)
+        ausencias = self._verificar_ausencias_numericas(nova_ok, publicado_ok, campos_numericos)
+        self.assertEqual(ausencias, [],
+                          f"valor ausente/não finito (NaN/Inf) num campo numérico que deveria estar "
+                          f"preenchido nas 95 linhas avaliáveis — nunca descartado em silêncio: {ausencias}")
+
         violacoes = []
         pior_por_campo = {}
-        for campo in self.GRUPO_FISICO_MM + self.GRUPO_ADIMENSIONAL + ('prob_zero',):
+        for campo in campos_numericos:
             a_v = nova_ok[campo].to_numpy(dtype=float)
             b_v = publicado_ok[campo].to_numpy(dtype=float)
-            mask = ~(np.isnan(a_v) | np.isnan(b_v))
-            diff_abs = np.abs(a_v[mask] - b_v[mask])
-            diff_rel = diff_abs / np.maximum(np.abs(b_v[mask]), self.EPS_DIFF_REL)
+            # a verificação de ausências acima já garante que os dois
+            # lados são 100% finitos aqui — nenhuma linha é excluída
+            # deste cálculo.
+            diff_abs = np.abs(a_v - b_v)
+            diff_rel = diff_abs / np.maximum(np.abs(b_v), self.EPS_DIFF_REL)
             if campo in self.GRUPO_FISICO_MM:
                 viol = (diff_abs >= 0.01) & (diff_rel >= 1e-4)
             elif campo in self.GRUPO_ADIMENSIONAL:
                 viol = (diff_abs >= 1e-4) & (diff_rel >= 1e-4)
             else:  # prob_zero — limiar operacional (0,01 ponto percentual), nunca o estrito original
                 viol = diff_abs >= 1e-4
-            datas = nova_ok.loc[mask, 'init_date'].to_numpy()
+            datas = nova_ok['init_date'].to_numpy()
             if viol.any():
                 violacoes.append((campo, datas[viol].tolist(), diff_abs[viol].tolist()))
-            if len(diff_abs):
-                i = int(np.argmax(diff_abs))
-                pior_por_campo[campo] = (str(datas[i]), float(diff_abs[i]), float(diff_rel[i]))
+            i = int(np.argmax(diff_abs))
+            pior_por_campo[campo] = (str(datas[i]), float(diff_abs[i]), float(diff_rel[i]))
 
         print('[RN-2I/item2] pior diff_abs por campo, sempre mostrado (linha, diff_abs, diff_rel):')
         for campo, (dt, da, dr) in pior_por_campo.items():
@@ -1985,6 +2023,41 @@ class ComDadosReaisTestCase(unittest.TestCase):
 
         self.assertEqual(violacoes, [],
                           f"regra de equivalência corrigida reprovou pelo menos um campo: {violacoes}")
+
+    def test_l_controle_negativo_ausencia_numerica_introduzida_e_rejeitada(self):
+        """RN-2J — item 2: controle negativo pequeno, determinístico e
+        exclusivamente em memória (nunca toca o CSV histórico nem roda
+        o pipeline real) — comprova que `_verificar_ausencias_numericas`
+        de fato rejeita uma ausência numérica introduzida artificialmente,
+        nos dois lados possíveis (novo e publicado), e que um par sem
+        nenhuma ausência passa limpo."""
+        base = pd.DataFrame({
+            'init_date': ['2020-01', '2020-02', '2020-03'],
+            'a': [1.0, 2.0, 3.0],
+            'b': [10.0, 20.0, 30.0],
+        })
+
+        # (1) par idêntico, sem ausências — não deve reportar nada
+        nenhuma = ComDadosReaisTestCase._verificar_ausencias_numericas(base.copy(), base.copy(), ('a', 'b'))
+        self.assertEqual(nenhuma, [])
+
+        # (2) NaN introduzido no lado NOVO
+        novo_com_nan = base.copy()
+        novo_com_nan.loc[1, 'a'] = np.nan
+        resultado = ComDadosReaisTestCase._verificar_ausencias_numericas(novo_com_nan, base.copy(), ('a', 'b'))
+        self.assertEqual(resultado, [('a', 'novo', ['2020-02'])])
+
+        # (3) Inf introduzido no lado PUBLICADO
+        publicado_com_inf = base.copy()
+        publicado_com_inf.loc[2, 'b'] = np.inf
+        resultado = ComDadosReaisTestCase._verificar_ausencias_numericas(base.copy(), publicado_com_inf, ('a', 'b'))
+        self.assertEqual(resultado, [('b', 'publicado', ['2020-03'])])
+
+        # (4) -Inf também é rejeitado (não só NaN/+Inf)
+        novo_com_neg_inf = base.copy()
+        novo_com_neg_inf.loc[0, 'b'] = -np.inf
+        resultado = ComDadosReaisTestCase._verificar_ausencias_numericas(novo_com_neg_inf, base.copy(), ('a', 'b'))
+        self.assertEqual(resultado, [('b', 'novo', ['2020-01'])])
 
 
 class RelatorioEmosH2TestCase(unittest.TestCase):

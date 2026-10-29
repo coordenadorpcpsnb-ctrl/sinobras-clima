@@ -142,14 +142,28 @@ consome (`fun`, `jac`, `x`, `success`, `status`, `message`, `nit`,
 `nfev`). `res.x`/`success`/`status`/`message`/`nit`/`nfev` não precisam de
 normalização (são adimensionais em `K` ou já pertencem ao espaço original
 de θ). **Nenhum outro campo do `OptimizeResult` é tocado ou verificado.**
-Em particular, `res.hess_inv` (a aproximação da inversa do Hessiano que o
-L-BFGS-B mantém internamente) continua representando a curvatura do
-problema ESCALADO (`Hess(F)=K·Hess(f)` ⟹ `hess_inv(F)=hess_inv(f)/K`) —
-se algum código vier a ler `res.hess_inv` diretamente no futuro (nenhum
-lê hoje; confirmado por busca em todo `scripts/` e `tests/`), ele estará
-fora de escala por um fator `K=10000` em relação às unidades originais,
-e precisaria de uma divisão por `K` equivalente à de `fun`/`jac`,
-hoje inexistente. Registrado como risco residual explícito (seção 7).
+Em particular, `res.hess_inv` continua representando a curvatura do
+problema ESCALADO — e **a direção da conversão não é a mesma de
+`fun`/`jac`** (correção RN-2J: a versão anterior deste documento
+invertia o sinal do expoente). Para Hessianas EXATAS, `F=K·f` implica
+`Hess(F)=K·Hess(f)`, logo `hess_inv(F)=[Hess(F)]⁻¹=(1/K)·[Hess(f)]⁻¹`
+— ou seja, `hess_inv(f) = K·hess_inv(F)` (multiplicar por `K`, nunca
+dividir, para ir da escala interna de volta à original). Mesmo essa
+correção tem uma ressalva importante: `res.hess_inv` do L-BFGS-B
+**não é o Hessiano exato** — é `LbfgsInvHessProduct`, uma aproximação
+de memória limitada construída a partir da sequência de passos/
+gradientes observados AO LONGO da trajetória de otimização sobre o
+problema escalado (seção 5 já documenta que essa trajetória, não só o
+ponto final, muda com a escala). Não há garantia de que multiplicar
+essa aproximação por `K` reproduza a aproximação que uma otimização
+NÃO escalada teria construído (trajetória diferente, possivelmente
+número diferente de atualizações L-BFGS). Por isso este documento não
+recomenda nenhuma transformação escalar simples como correção
+confiável de `res.hess_inv` — apenas registra a identidade válida para
+o caso exato, como contexto. Nenhum código lê `res.hess_inv` hoje
+(confirmado por busca em todo `scripts/` e `tests/`) — esta é uma
+correção puramente documental (RN-2J), sem efeito em nenhum resultado
+publicado. Registrado como risco residual explícito (seção 7).
 
 ## 5. Mínimo matemático vs. trajetória numérica
 
@@ -205,11 +219,39 @@ numpy 2.4.6, scipy 1.17.1, Python 3.11.17, Ubuntu 24.04.5 LTS
 Ou seja: **duas CPUs AMD distintas já testadas** (EPYC 7763 na RN-2C/D/F
 via PR #61; EPYC 9V74 nesta execução da RN-2H via PR #62) — mas o
 OpenBLAS escolheu automaticamente o kernel **Haswell nas duas**, pelas
-mesmas regras de detecção de instrução. **Ainda não há validação em
-nenhum kernel numérico genuinamente diferente (ex.: SkylakeX/AVX-512 ou
-outra arquitetura Intel)** — a melhoria de K=10000 continua confirmada
-só sob o kernel Haswell. Ver item de validação em ambiente distinto no
-relatório RN-2I.
+mesmas regras de detecção de instrução, ainda sem validação em kernel
+genuinamente diferente neste momento.
+
+**Atualização (RN-2J) — segunda execução de CI da PR #62 (RN-2I, push
+do commit `1f1a71f`), run `40874014924`:**
+
+```
+model name : AMD EPYC 9V45 96-Core Processor
+{'user_api': 'blas', 'internal_api': 'openblas', 'prefix': 'libscipy_openblas',
+ 'version': '0.3.31.188.0', 'threading_layer': 'pthreads',
+ 'architecture': 'SkylakeX', 'num_threads': 4}
+numpy 2.4.6, scipy 1.17.1, Python 3.11.17, Ubuntu 24.04.5 LTS
+(runner hospedado GitHub, ubuntu-24.04, Azure eastus2)
+```
+
+Desta vez o OpenBLAS escolheu **SkylakeX**, não Haswell — a primeira
+execução de CI deste trabalho sob um kernel genuinamente diferente,
+com as MESMAS versões de numpy/scipy/Python do run anterior (2.4.6/
+1.17.1/3.11.17), isolando melhor o fator "kernel" do fator "versão de
+biblioteca" do que a validação local (que variava os dois ao mesmo
+tempo). A suíte completa passou (1690/1690) e `test_k` (95 avaliações
+reais) reportou zero violações neste ambiente também — detalhes no
+relatório RN-2I. **Isso não é, ainda assim, um experimento desenhado
+para isolar causalidade** (foi a alocação do runner do GitHub, não uma
+escolha deliberada de forçar um kernel) — mantém-se a mesma cautela já
+registrada na seção 5/2 contra atribuir a um fator específico (kernel
+OpenBLAS, versão de biblioteca, ou a interação entre eles) a causa do
+comportamento diferente do submodelo `d0` observado entre os dois
+ambientes (ver seção 7). Com isso, 2 das 3 execuções completas em
+runners reais exigidas pelo critério pré-registrado em
+`docs/enso-ci-emos-h2-proposta-robustez-numerica.md` (seção 8) já
+cobrem dois kernels diferentes — falta só a 3ª execução para satisfazer
+esse critério literalmente.
 
 ## 7. Riscos residuais
 
@@ -263,12 +305,19 @@ Investigação direta confirmou:
   — decisão científica separada, não tomada aqui, e que precisaria de
   aprovação e revisão própria.
 
-**Campos do `OptimizeResult` fora do escopo da normalização (RN-2I):**
+**Campos do `OptimizeResult` fora do escopo da normalização (RN-2I/RN-2J):**
 como detalhado na seção 4, só `fun`/`jac` são normalizados de volta à
 escala original. `res.hess_inv` (quando presente) permanece na escala
-INTERNA (`K=10000`×) e não é lido por nenhum código hoje — mas é um
-risco residual explícito para qualquer uso futuro desse campo (ex.:
-diagnóstico de incerteza/Hessiana) que não reaplique a correção `/K`.
+INTERNA e não é lido por nenhum código hoje — risco residual explícito
+para qualquer uso futuro (ex.: diagnóstico de incerteza/Hessiana). A
+correção, para Hessianas EXATAS, é multiplicar por `K` (não dividir —
+ver seção 4, correção RN-2J a um erro de direção da versão anterior
+deste documento), mas `res.hess_inv` é uma aproximação de memória
+limitada (`LbfgsInvHessProduct`) dependente da trajetória de
+otimização sobre o problema JÁ escalado — não há garantia de que essa
+transformação escalar simples a recupere corretamente. Nenhuma
+transformação é recomendada como confiável; o campo simplesmente não
+deve ser lido sem essa ressalva.
 
 **Submodelo D0 especificamente:** nos dois fixtures degenerados de teste
 reaproveitados desta rodada (série B de `IndependenciaD0TestCase` e a de
@@ -278,6 +327,13 @@ reaproveitados desta rodada (série B de `IndependenciaD0TestCase` e a de
 aprovado, nunca uma solução pior. Nas 95 avaliações reais, `success_d0`
 bateu exatamente com o publicado em todas as linhas — este comportamento
 também não se manifestou em dado real até aqui.
+
+**Atualização (RN-2J), confirmando o padrão nos dois kernels de CI já
+testados:** no run `40760367806` (Haswell), o teste D (fixture
+problemático) retornou `d0` com `success=True`; no run `40874014924`
+(SkylakeX, seção 6), `success=False`/ABNORMAL-benigno — o MESMO padrão
+já observado localmente (Intel/SkylakeX). Nenhum teste fixa um valor
+de `success` por este motivo exato, e os dois ambientes de CI passaram.
 
 ## 8. Resultado da comparação histórica (95 avaliações reais)
 
