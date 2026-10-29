@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read   # leitura padrão do checkout; a escrita usa o token da App (Fase ENSO-APP), nunca este GITHUB_TOKEN
   pages:    write
   id-token: write
 
@@ -33,6 +33,7 @@ jobs:
         uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false   # sem credencial de escrita durante o processamento (Fase ENSO-APP)
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v5.6.0
@@ -84,11 +85,62 @@ jobs:
             echo "alterado=false" >> $GITHUB_OUTPUT || \
             echo "alterado=true"  >> $GITHUB_OUTPUT
 
+      # Mintado só aqui — depois de todo o processamento (fetch, índices,
+      # SARIMAX, relatório) e só quando há algo a commitar — nunca antes,
+      # para não gastar a validade de 1h do token durante o processamento
+      # científico (Fase ENSO-APP, requisito técnico 2).
+      - name: Gerar token de instalação da App
+        id: app-token
+        if: steps.diff.outputs.alterado == 'true'
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.SINOBRAS_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SINOBRAS_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: sinobras-clima
+          permission-contents: write
+
+      # ID numérico da conta bot via API (não é output da action — ver
+      # teste aprovado, run 39992875756) — necessário para a identidade
+      # de commit no padrão <id>+<slug>[bot]@users.noreply.github.com.
+      - name: Resolver identidade da conta bot da App
+        id: identidade
+        if: steps.diff.outputs.alterado == 'true'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -eo pipefail
+          resposta="$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer ${APP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${APP_SLUG}%5Bbot%5D")" \
+            || { echo "::error::Falha ao consultar /users/${APP_SLUG}[bot] — ver corpo da resposta acima."; exit 1; }
+          bot_id=$(echo "$resposta" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "bot_id=$bot_id" >> "$GITHUB_OUTPUT"
+
       - name: Commit dos dados atualizados
         if: steps.diff.outputs.alterado == 'true'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BOT_ID: ${{ steps.identidade.outputs.bot_id }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          set -eo pipefail
+
+          # Credencial temporária só para este passo — removida mesmo se
+          # pull/commit/push falhar (Fase ENSO-APP, requisito técnico 6).
+          cleanup() {
+            git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          HEADER_VALUE="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          echo "::add-mask::${HEADER_VALUE}"
+          git config --local http.https://github.com/.extraheader "${HEADER_VALUE}"
+
+          git config user.name  "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
           DATA=$(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT')
           MES_ANT=$(TZ='America/Araguaina' date -d '1 month ago' +'%m/%Y')
           git add docs/index.html docs/relatorio-executivo.docx data/
@@ -99,7 +151,13 @@ jobs:
           - SARIMAX x XGBoost comparados e melhor selecionado
           - Cenários e BH recalculados
           - Relatório executivo regerado"
-          git push
+          # Outro workflow do grupo de concorrência "pages" pode ter
+          # commitado entre o checkout e aqui — rebase antes de empurrar,
+          # com falha explícita se o rebase não resolver sozinho.
+          git pull --rebase origin "${GITHUB_REF_NAME}" \
+            || { echo "::error::git pull --rebase falhou — não publicando um commit potencialmente não persistido."; exit 1; }
+          git push \
+            || { echo "::error::git push falhou após o rebase — ver logs acima."; exit 1; }
 
       - name: Preparar para GitHub Pages
         uses: actions/upload-pages-artifact@v3.0.1
