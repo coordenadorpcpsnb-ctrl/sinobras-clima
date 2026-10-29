@@ -68,6 +68,24 @@ BOUNDS_D0 = [(None, None), (None, None), (GAMMA_C_LO, GAMMA_C_HI)]
 # Protocolo, seção 16.2 — configuração fixada, mesma para todas as datas/modelos.
 OPCOES_OTIMIZADOR = {'maxiter': 2000, 'ftol': 1e-10, 'gtol': 1e-6}
 
+# RN-2D a RN-2H — escala NUMÉRICA interna da otimização (nunca científica,
+# ver docs/rn2h-escala-interna-emos-h2.md): o CRPS real desta série fica
+# entre 1e-4 e 1e2 mm. O passo de diferença finita do scipy é absoluto no
+# espaço de theta (~1,49e-8), e o critério `ftol` do L-BFGS-B usa
+# max(|f_k|,|f_{k+1}|,1) — quando |f|<<1 esse termo é dominado pela
+# constante 1, fazendo `ftol` funcionar como um limiar ABSOLUTO em
+# unidades originais em vez de relativo, e provocando a parada prematura
+# documentada em RN-2C/RN-2D (solução com 38,99% de melhoria disponível
+# ainda aceita como "convergida"). Multiplicar o objetivo por K traz |f|
+# para a faixa de 1-10, onde max(...,1) passa a ser dominado por |f|,
+# tornando `ftol` genuinamente relativo. `gtol` é reescalado na mesma
+# proporção para preservar seu significado no espaço original (RN-2F/
+# RN-2G); `ftol`/`maxiter` nunca mudam. Existe SÓ dentro da otimização —
+# `_aplicar_escala_interna` sempre normaliza `fun`/`jac` de volta à escala
+# original antes de devolver; nenhum resultado publicado é multiplicado
+# por K.
+K_ESCALA_INTERNA_OTIMIZACAO = 10000.0
+
 STATUS_OK = 'ok'
 STATUS_WARMUP = 'warmup_amostra_insuficiente'
 STATUS_PAR_INVALIDO = 'par_emos_invalido_para_linha_avaliada'
@@ -256,18 +274,38 @@ def _objetivo_d0(theta_d0, clim_obs_arr, anom_arr, erro_sd_arr, y_arr):
     return float(np.mean(crps))
 
 
-def ajustar_emos_completo(clim_obs_arr, anom_arr, erro_sd_arr, spread_rel_arr, y_arr):
-    res = minimize(_objetivo_completo, THETA0_COMPLETO,
-                    args=(clim_obs_arr, anom_arr, erro_sd_arr, spread_rel_arr, y_arr),
-                    method='L-BFGS-B', bounds=BOUNDS_COMPLETO, options=OPCOES_OTIMIZADOR)
+def _aplicar_escala_interna(objetivo_fn, theta0, args, bounds):
+    """RN-2D a RN-2H — minimiza `K*objetivo_fn` em vez de `objetivo_fn`
+    (`gtol` reescalado na mesma proporção; `ftol`/`maxiter`/`theta0`/
+    `bounds` inalterados) e devolve o `OptimizeResult` com `fun`/`jac`
+    JÁ normalizados de volta à escala ORIGINAL antes de retornar —
+    nunca normalizado duas vezes, nunca exposto na escala interna.
+    `x`/`success`/`status`/`message` são exatamente os do otimizador
+    sobre o problema reescalado, nunca alterados por esta função
+    (ver K_ESCALA_INTERNA_OTIMIZACAO para a justificativa matemática)."""
+    K = K_ESCALA_INTERNA_OTIMIZACAO
+
+    def _objetivo_escalado(theta, *a):
+        return K * objetivo_fn(theta, *a)
+
+    opcoes = dict(OPCOES_OTIMIZADOR)
+    opcoes['gtol'] = K * OPCOES_OTIMIZADOR['gtol']
+    res = minimize(_objetivo_escalado, theta0, args=args,
+                    method='L-BFGS-B', bounds=bounds, options=opcoes)
+    res.fun = float(res.fun) / K
+    res.jac = np.asarray(res.jac) / K
     return res
+
+
+def ajustar_emos_completo(clim_obs_arr, anom_arr, erro_sd_arr, spread_rel_arr, y_arr):
+    return _aplicar_escala_interna(
+        _objetivo_completo, THETA0_COMPLETO,
+        (clim_obs_arr, anom_arr, erro_sd_arr, spread_rel_arr, y_arr), BOUNDS_COMPLETO)
 
 
 def ajustar_emos_d0(clim_obs_arr, anom_arr, erro_sd_arr, y_arr):
-    res = minimize(_objetivo_d0, THETA0_D0,
-                    args=(clim_obs_arr, anom_arr, erro_sd_arr, y_arr),
-                    method='L-BFGS-B', bounds=BOUNDS_D0, options=OPCOES_OTIMIZADOR)
-    return res
+    return _aplicar_escala_interna(
+        _objetivo_d0, THETA0_D0, (clim_obs_arr, anom_arr, erro_sd_arr, y_arr), BOUNDS_D0)
 
 
 def _sanidade_completo(theta, erro_sd_arr, spread_rel_arr, crps_final):
