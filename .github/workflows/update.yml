@@ -10,10 +10,19 @@ on:
         required: false
         default: 'Atualização manual'
 
-# Evita colisão com o workflow de publicação
+# Evita colisão com o workflow de publicação. `queue: max` (ENSO-PAGES
+# Fase 2) evita que uma 2ª execução pendente deste grupo seja descartada
+# pelo comportamento padrão do GitHub Actions (1 execução ativa + só 1
+# pendente, com substituição silenciosa de uma pendente por outra mais
+# nova) — eleva o limite para até 100 pendentes, processadas em sequência.
+# A ordem de processamento segue quando cada execução começou a esperar,
+# não necessariamente a ordem de disparo (comportamento documentado do
+# GitHub, não testado sob carga real neste repositório). Mesma chave nos
+# três workflows do grupo `pages` (ver indices_semanal.yml/publicar.yml).
 concurrency:
   group: pages
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
@@ -33,6 +42,12 @@ jobs:
         uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
+
+      # Referência para decidir a publicação mais abaixo (passo "Verificar
+      # necessidade de publicação") — mesmo padrão de indices_semanal.yml.
+      - name: Capturar SHA inicial
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Configurar Python 3.11
         uses: actions/setup-python@v5.6.0
@@ -99,15 +114,62 @@ jobs:
           - SARIMAX x XGBoost comparados e melhor selecionado
           - Cenários e BH recalculados
           - Relatório executivo regerado"
+          # Outro workflow do mesmo grupo de concorrência (indices_semanal.yml,
+          # ou este mesmo workflow via disparo manual) pode ter commitado
+          # entre o checkout e aqui — rebase antes de empurrar (ENSO-PAGES
+          # Fase 2; mesmo padrão já validado em produção em
+          # indices_semanal.yml). Conflito aqui interrompe o job com falha
+          # visível (sem `|| true`/continue-on-error) — nunca descarta
+          # alteração silenciosamente.
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
 
+      # Passo INCONDICIONAL — garante que a decisão de publicar (abaixo)
+      # considere o HEAD final. Se o commit acima rodou, isso só repete o
+      # rebase (sem conflito possível: nada novo a replay desde o passo
+      # anterior). Se o commit NÃO rodou (sem `alterado`), este é o único
+      # ponto que busca mudanças remotas desta execução — não é um no-op
+      # quando outro workflow do mesmo grupo (ex.: indices_semanal.yml)
+      # publicou em `docs/` entre o checkout e aqui: sem commit local
+      # pendente, é um fast-forward simples, nunca um rebase com conflito.
+      # Mesmo padrão de indices_semanal.yml.
+      - name: Sincronizar com a main antes de decidir a publicação
+        run: git pull --rebase origin "${GITHUB_REF_NAME}"
+
+      # Sinal correto para o deploy — distinto de `steps.diff.outputs.
+      # alterado` (que é sobre docs/+data/, calculado ANTES do rebase, e
+      # serve só para decidir SE HÁ ALGO A COMMITAR). Compara o SHA do
+      # checkout contra o HEAD final só em `docs/`: não publica quando só
+      # `data/` mudou (ex.: índices novos sem efeito perceptível no
+      # dashboard) nem deixa de publicar uma mudança em `docs/` trazida
+      # pelo rebase de outro workflow do mesmo grupo. Cobre tanto
+      # docs/index.html quanto docs/relatorio-executivo.docx (ambos sob
+      # `docs/`) — uma mudança só no relatório executivo também publica.
+      #
+      # Limitação registrada, não eliminada (ENSO-PAGES Fase 2, revisão
+      # externa): ainda existe uma janela de corrida entre esta checagem e
+      # o deploy abaixo — um push concorrente que chegue exatamente nesse
+      # intervalo não é refletido neste deploy. Mitigação: com
+      # `queue: max` (acima), a próxima execução enfileirada do grupo
+      # `pages` roda sua própria sincronização/checagem contra o estado
+      # então mais recente e publica o que faltou — não é atomicidade,
+      # é convergência pela execução seguinte.
+      - name: Verificar necessidade de publicação
+        id: publicar_diff
+        run: |
+          git diff --quiet "${{ steps.base.outputs.sha }}" -- docs/ && \
+            echo "mudou=false" >> "$GITHUB_OUTPUT" || \
+            echo "mudou=true"  >> "$GITHUB_OUTPUT"
+
       - name: Preparar para GitHub Pages
+        if: steps.publicar_diff.outputs.mudou == 'true'
         uses: actions/upload-pages-artifact@v3.0.1
         with:
           path: docs/
 
       - name: Publicar no GitHub Pages
         id: deploy
+        if: steps.publicar_diff.outputs.mudou == 'true'
         uses: actions/deploy-pages@v4.0.5
 
       - name: Sumário
@@ -118,5 +180,15 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Data** | $(TZ='America/Araguaina' date +'%d/%m/%Y %H:%M BRT') |" >> $GITHUB_STEP_SUMMARY
           echo "| **Mês incorporado** | $(TZ='America/Araguaina' date -d '1 month ago' +'%m/%Y') |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Alterações** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
-          echo "🌐 **Dashboard:** ${{ steps.deploy.outputs.page_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "| **Alterações (commit)** | ${{ steps.diff.outputs.alterado }} |" >> $GITHUB_STEP_SUMMARY
+          case "${{ steps.deploy.outcome }}" in
+            success)
+              echo "| **Publicação (Pages)** | ✅ publicado — ${{ steps.deploy.outputs.page_url }} |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            skipped|"")
+              echo "| **Publicação (Pages)** | ⏭️ pulada — docs/ sem alteração nesta execução (steps.publicar_diff.outputs.mudou=${{ steps.publicar_diff.outputs.mudou }}) |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            *)
+              echo "| **Publicação (Pages)** | ❌ reprovada — havia alteração em docs/ mas o deploy falhou |" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac

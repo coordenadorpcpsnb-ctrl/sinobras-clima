@@ -15,10 +15,14 @@ permissions:
   pages:    write
   id-token: write
 
-# Evita que este workflow e o do dia 21 tentem publicar ao mesmo tempo
+# Evita que este workflow e o do dia 21 tentem publicar ao mesmo tempo.
+# `queue: max` (ENSO-PAGES Fase 2) eleva o limite de pendentes deste
+# grupo de 1 (padrão) para até 100 — ver comentário equivalente em
+# update.yml/indices_semanal.yml.
 concurrency:
   group: pages
   cancel-in-progress: false
+  queue: max
 
 jobs:
   publicar:
@@ -31,6 +35,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2
+
+      # ENSO-PAGES Fase 2: este workflow só empacota docs/ como está no
+      # commit — nunca recalcula SARIMAX/XGBoost nem reexecuta o pipeline
+      # científico. Mas ele publica qualquer push/merge que toque
+      # `docs/**`, incluindo uma edição manual direta de docs/index.html
+      # que nunca passou pela barreira de verificar_dashboard.py (essa
+      # barreira só roda em update.yml/indices_semanal.yml, antes do
+      # commit). Reexecutá-la aqui, sobre o conteúdo já committed, é uma
+      # checagem de integridade estrutural (eixos, séries alinhadas, BH,
+      # Monitor ENSO, trimestres do Comparativo, plausibilidade física,
+      # rótulos RONI/ONI — itens 1-8, 10-11 do script), não uma validação
+      # científica nem um recálculo: nenhum modelo é reajustado, só o
+      # HTML/dados já presentes no repositório são lidos e conferidos.
+      # `--pular-continuidade-serie-subst`: mesmo motivo de
+      # indices_semanal.yml — este workflow também nunca chama
+      # fetch_monthly_data.py, então o item 9 (continuidade do mês
+      # corrente em data/serie_subst.csv) reprovaria por um motivo que
+      # este workflow não pode corrigir, na maioria dos dias do mês.
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verificar integridade do dashboard antes de publicar
+        run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
 
       - name: Preparar artefato do Pages
         uses: actions/upload-pages-artifact@v3.0.1

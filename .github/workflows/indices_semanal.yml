@@ -63,10 +63,14 @@ on:
         default: 'Checagem manual de índices'
 
 # Compartilha o grupo de concorrência do Pages com update.yml/publicar.yml
-# (CLAUDE.md armadilha 5) — evita publicação colidindo.
+# (CLAUDE.md armadilha 5) — evita publicação colidindo. `queue: max`
+# (ENSO-PAGES Fase 2) eleva o limite de execuções pendentes deste grupo
+# de 1 (padrão, com substituição silenciosa da pendente anterior) para
+# até 100, enfileiradas — ver comentário equivalente em update.yml.
 concurrency:
   group: pages
   cancel-in-progress: false
+  queue: max
 
 # Commita/empurra E publica o Pages diretamente (Fase ENSO-PUB) — o
 # push aqui usa o GITHUB_TOKEN padrão, que não dispara publicar.yml por
