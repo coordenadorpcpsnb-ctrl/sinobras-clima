@@ -136,6 +136,27 @@ jobs:
       - name: Sincronizar com a main antes de decidir a publicação
         run: git pull --rebase origin "${GITHUB_REF_NAME}"
 
+      # ENSO-PAGES Fase 2B (revisão externa de segurança): pequeno
+      # controle de revalidação — NÃO reexecuta o pipeline climático
+      # (fetch/índices/SARIMAX não rodam de novo), só relê docs/+data/
+      # já no disco. Motivo: o rebase acima (no commit condicional ou
+      # na sincronização incondicional) pode incorporar docs/index.html
+      # de OUTRO workflow do mesmo grupo — indices_semanal.yml também
+      # escreve em docs/index.html (seção Monitor ENSO) — sem conflito
+      # textual. Quando isso acontece, o estado final de docs/ é uma
+      # combinação que nunca passou pela barreira como um todo: só o
+      # docs/index.html que ESTE job gerou isoladamente (passo
+      # "Verificar integridade do dashboard", antes do commit) foi
+      # validado. Revalidar aqui, de novo, sobre o estado final —
+      # barato (roda em segundos) e já é o mesmo verificador usado em
+      # produção. Falha aqui interrompe o job ANTES do deploy (mesma
+      # regra padrão do GitHub Actions: nenhum passo seguinte sem
+      # `if: always()` roda) — não desfaz um commit/push já feito (fora
+      # do escopo de um controle mínimo, que não reescreve histórico),
+      # mas garante que o Pages não publica o resultado.
+      - name: Revalidar integridade após sincronização
+        run: python scripts/verificar_dashboard.py
+
       # Sinal correto para o deploy — distinto de `steps.diff.outputs.
       # alterado` (que é sobre docs/+data/, calculado ANTES do rebase, e
       # serve só para decidir SE HÁ ALGO A COMMITAR). Compara o SHA do

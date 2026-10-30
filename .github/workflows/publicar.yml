@@ -33,8 +33,26 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
-      - name: Checkout
+      # ENSO-PAGES Fase 2B (revisão externa de segurança): `ref: main`
+      # explícito — sem isso, actions/checkout usa o SHA fixado no
+      # evento que disparou esta execução. Como os três workflows do
+      # grupo `pages` agora enfileiram (queue: max, Fase 2) em vez de
+      # descartar pendentes, o tempo entre o push e este job de fato
+      # rodar pode crescer; sem `ref: main`, este checkout ficaria
+      # preso ao estado de quando o push ocorreu, não ao main atual no
+      # momento em que o job roda.
+      - name: Checkout da main atual
         uses: actions/checkout@v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # Referência para a revalidação pré-deploy, mais abaixo.
+      - name: Capturar SHA publicável inicial
+        id: base
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "docs/ neste checkout corresponde ao HEAD $(git rev-parse HEAD) de origin/main no momento do checkout."
 
       # ENSO-PAGES Fase 2: este workflow só empacota docs/ como está no
       # commit — nunca recalcula SARIMAX/XGBoost nem reexecuta o pipeline
@@ -72,6 +90,42 @@ jobs:
         with:
           path: docs/
 
+      # ENSO-PAGES Fase 2B: imediatamente antes do deploy, busca
+      # origin/main de novo e compara a árvore de docs/ já validada e
+      # empacotada (HEAD, capturado no passo "Capturar SHA publicável
+      # inicial") contra o docs/ do main atual. Escopado a `-- docs/`
+      # (não ao SHA geral) para não confundir um commit que só mudou
+      # heartbeat/data/ com uma mudança real em docs/ — ver CLAUDE.md
+      # armadilha 9 e o próprio heartbeat de indices_semanal.yml.
+      #
+      # Se docs/ avançou nesse intervalo (outro workflow do grupo
+      # publicou, ou um push humano chegou), o artefato que acabamos de
+      # preparar já é de um docs/ que não é mais o mais recente —
+      # publicá-lo seria publicar um estado obsoleto. Falha visível,
+      # sem deploy: a próxima execução enfileirada do grupo `pages`
+      # (queue: max, Fase 2) vai fazer checkout do main então atual,
+      # revalidar e publicar — nenhuma intervenção manual é necessária
+      # na maioria dos casos. Se `git fetch` falhar (rede, API), também
+      # falha visivelmente: nunca presume que o checkout está
+      # atualizado só porque não conseguiu confirmar o contrário.
+      #
+      # Limitação reconhecida, não eliminada: ainda existe uma janela
+      # de corrida entre ESTA checagem e o `deploy-pages` abaixo — não é
+      # uma garantia de atomicidade, é uma redução da janela (de "entre
+      # o evento e o deploy" para "entre esta checagem e o deploy").
+      - name: Revalidar referência remota antes do deploy
+        run: |
+          if ! git fetch origin main; then
+            echo "::error::Não foi possível buscar origin/main para a revalidação pré-deploy — não presumo que o checkout ($( git rev-parse HEAD )) ainda está atualizado. Abortando sem publicar."
+            exit 1
+          fi
+          if git diff --quiet "${{ steps.base.outputs.sha }}" origin/main -- docs/; then
+            echo "docs/ ainda corresponde ao origin/main atual (origin/main=$(git rev-parse origin/main)) — seguro publicar."
+          else
+            echo "::error::main avançou em docs/ depois que este job validou/empacotou o conteúdo (checkout em ${{ steps.base.outputs.sha }}, origin/main agora em $(git rev-parse origin/main)). Publicar o artefato já preparado seria publicar um estado obsoleto de docs/. Abortando sem deploy. Recuperação: a próxima execução enfileirada do grupo 'pages' fará checkout do main atual e publicará corretamente; se nenhuma outra execução estiver pendente, dispare este workflow manualmente (workflow_dispatch)."
+            exit 1
+          fi
+
       - name: Publicar no GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4.0.5
@@ -83,5 +137,5 @@ jobs:
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Disparado por** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit publicado (HEAD do checkout)** | ${{ steps.base.outputs.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **URL** | ${{ steps.deploy.outputs.page_url }} |" >> $GITHUB_STEP_SUMMARY
