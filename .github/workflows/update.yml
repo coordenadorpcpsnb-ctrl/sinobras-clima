@@ -137,9 +137,10 @@ jobs:
       # ENSO-PAGES Fase 2C: revalida o estado pós-rebase ANTES de
       # qualquer push — não reexecuta o pipeline climático (fetch/
       # índices/SARIMAX não rodam de novo), só relê docs/+data/ já no
-      # disco (mesmo verificador usado em produção, sem a flag
-      # --pular-continuidade-serie-subst, que só existe para
-      # indices_semanal.yml). Motivo: o rebase acima pode incorporar
+      # disco, sem pular nenhuma checagem (a checagem de continuidade
+      # completa é exclusiva deste workflow; o semanal usa uma flag
+      # própria, que este arquivo não referencia). Motivo: o rebase
+      # acima pode incorporar
       # docs/index.html de OUTRO workflow do mesmo grupo —
       # indices_semanal.yml também escreve nele (seção Monitor ENSO) —
       # sem conflito textual; o resultado combinado nunca passou pela
