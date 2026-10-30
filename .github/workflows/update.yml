@@ -99,7 +99,13 @@ jobs:
             echo "alterado=false" >> $GITHUB_OUTPUT || \
             echo "alterado=true"  >> $GITHUB_OUTPUT
 
-      - name: Commit dos dados atualizados
+      # ENSO-PAGES Fase 2C (revisão externa de segurança): só cria o
+      # commit LOCAL — nunca empurra aqui. Empurrar só depois que o
+      # estado pós-rebase for revalidado (passos abaixo), para nunca
+      # enviar a `main` um resultado combinado que não passou pela
+      # barreira. `git add` nos mesmos arquivos específicos de sempre
+      # (nunca `docs/ data/` indiscriminado).
+      - name: Commit local das alterações (sem push)
         if: steps.diff.outputs.alterado == 'true'
         run: |
           git config user.name  "github-actions[bot]"
@@ -114,47 +120,56 @@ jobs:
           - SARIMAX x XGBoost comparados e melhor selecionado
           - Cenários e BH recalculados
           - Relatório executivo regerado"
-          # Outro workflow do mesmo grupo de concorrência (indices_semanal.yml,
-          # ou este mesmo workflow via disparo manual) pode ter commitado
-          # entre o checkout e aqui — rebase antes de empurrar (ENSO-PAGES
-          # Fase 2; mesmo padrão já validado em produção em
-          # indices_semanal.yml). Conflito aqui interrompe o job com falha
-          # visível (sem `|| true`/continue-on-error) — nunca descarta
-          # alteração silenciosamente.
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
 
-      # Passo INCONDICIONAL — garante que a decisão de publicar (abaixo)
-      # considere o HEAD final. Se o commit acima rodou, isso só repete o
-      # rebase (sem conflito possível: nada novo a replay desde o passo
-      # anterior). Se o commit NÃO rodou (sem `alterado`), este é o único
-      # ponto que busca mudanças remotas desta execução — não é um no-op
-      # quando outro workflow do mesmo grupo (ex.: indices_semanal.yml)
-      # publicou em `docs/` entre o checkout e aqui: sem commit local
-      # pendente, é um fast-forward simples, nunca um rebase com conflito.
-      # Mesmo padrão de indices_semanal.yml.
-      - name: Sincronizar com a main antes de decidir a publicação
+      # Passo INCONDICIONAL (roda com ou sem commit local acima) — traz
+      # qualquer `docs/`/`data/` publicado por outro workflow do mesmo
+      # grupo (ex.: indices_semanal.yml) enquanto este executava. Se
+      # houver commit local, o rebase o replica sobre o HEAD remoto
+      # atual (ainda sem push); conflito aqui interrompe o job com
+      # falha visível (sem `|| true`/continue-on-error) ANTES de
+      # qualquer tentativa de push — nunca descarta alteração
+      # silenciosamente. Se não houver commit local, é um fast-forward
+      # simples, nunca um rebase com conflito. Mesmo padrão de
+      # indices_semanal.yml.
+      - name: Sincronizar com a main (rebase)
         run: git pull --rebase origin "${GITHUB_REF_NAME}"
 
-      # ENSO-PAGES Fase 2B (revisão externa de segurança): pequeno
-      # controle de revalidação — NÃO reexecuta o pipeline climático
-      # (fetch/índices/SARIMAX não rodam de novo), só relê docs/+data/
-      # já no disco. Motivo: o rebase acima (no commit condicional ou
-      # na sincronização incondicional) pode incorporar docs/index.html
-      # de OUTRO workflow do mesmo grupo — indices_semanal.yml também
-      # escreve em docs/index.html (seção Monitor ENSO) — sem conflito
-      # textual. Quando isso acontece, o estado final de docs/ é uma
-      # combinação que nunca passou pela barreira como um todo: só o
-      # docs/index.html que ESTE job gerou isoladamente (passo
-      # "Verificar integridade do dashboard", antes do commit) foi
-      # validado. Revalidar aqui, de novo, sobre o estado final —
-      # barato (roda em segundos) e já é o mesmo verificador usado em
-      # produção. Falha aqui interrompe o job ANTES do deploy (mesma
-      # regra padrão do GitHub Actions: nenhum passo seguinte sem
-      # `if: always()` roda) — não desfaz um commit/push já feito (fora
-      # do escopo de um controle mínimo, que não reescreve histórico),
-      # mas garante que o Pages não publica o resultado.
-      - name: Revalidar integridade após sincronização
+      # ENSO-PAGES Fase 2C: revalida o estado pós-rebase ANTES de
+      # qualquer push — não reexecuta o pipeline climático (fetch/
+      # índices/SARIMAX não rodam de novo), só relê docs/+data/ já no
+      # disco (mesmo verificador usado em produção, sem a flag
+      # --pular-continuidade-serie-subst, que só existe para
+      # indices_semanal.yml). Motivo: o rebase acima pode incorporar
+      # docs/index.html de OUTRO workflow do mesmo grupo —
+      # indices_semanal.yml também escreve nele (seção Monitor ENSO) —
+      # sem conflito textual; o resultado combinado nunca passou pela
+      # barreira como um todo, só o docs/index.html que ESTE job gerou
+      # isoladamente (passo "Verificar integridade do dashboard", bem
+      # acima) foi validado. Reprovar aqui interrompe o job SEM push —
+      # o commit local, se houver, nunca sai deste runner efêmero.
+      - name: Revalidar integridade antes do push
+        run: python scripts/verificar_dashboard.py
+
+      # Só agora, com o estado pós-rebase já revalidado, o push ocorre
+      # — e só quando havia algo a commitar. Non-fast-forward aqui
+      # falha visivelmente, sem retry automático (nenhum `|| true`).
+      - name: Push (quando houver commit local)
+        if: steps.diff.outputs.alterado == 'true'
+        run: git push
+
+      # Passo INCONDICIONAL — sincroniza de novo para identificar
+      # alterações remotas chegadas DEPOIS do push acima (ex.: outra
+      # execução do mesmo grupo empurrou entre o nosso push e aqui).
+      # Sem commit local pendente neste ponto (já empurramos, se havia
+      # algo), isto é sempre um fast-forward simples, nunca um rebase
+      # com conflito.
+      - name: Sincronizar novamente antes da decisão de publicação
+        run: git pull --rebase origin "${GITHUB_REF_NAME}"
+
+      # Verificação final antes do deploy — cobre o que a sincronização
+      # acima possa ter trazido depois do nosso próprio push. Mesma
+      # barreira, mesmo custo (segundos), nenhum recálculo científico.
+      - name: Revalidar integridade antes do deploy
         run: python scripts/verificar_dashboard.py
 
       # Sinal correto para o deploy — distinto de `steps.diff.outputs.
