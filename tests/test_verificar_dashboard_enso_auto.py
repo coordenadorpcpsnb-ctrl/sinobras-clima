@@ -82,9 +82,18 @@ class DefasagemCincoCategoriasTestCase(unittest.TestCase):
         )
         saida = resultado.stdout
         # as 4 categorias de CPC_IRI._meta + a de índices oceânicos
-        # aparecem como linhas distintas no console (aviso OU ok)
+        # aparecem como linhas distintas no console (aviso OU ok).
+        # "índices oceânicos" é comparado case-insensitive porque a
+        # capitalização legítima muda com o estado: a linha de aviso
+        # (scripts/verificar_dashboard.py, item 11) começa a frase com
+        # "Índices oceânicos (D.now.nino34, ...)" quando a defasagem é
+        # >=2 meses, enquanto a linha ok() usa "...dos índices
+        # oceânicos mensais..." em minúsculo, no meio da frase — as
+        # duas formas são a mesma categoria, nenhuma suprime o aviso
+        # nem afrouxa a regra: o teste só deixa de exigir uma
+        # capitalização específica que nunca foi parte do contrato.
         self.assertIn('metadados de defasagem do CPC_IRI', saida)
-        self.assertIn('índices oceânicos', saida)
+        self.assertIn('índices oceânicos', saida.casefold())
 
     def test_b_nao_usa_data_de_hoje_como_substituta_da_emissao(self):
         """Regressão de design: a checagem de índices oceânicos nunca
