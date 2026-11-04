@@ -15,10 +15,14 @@ permissions:
   pages:    write
   id-token: write
 
-# Evita que este workflow e o do dia 21 tentem publicar ao mesmo tempo
+# Evita que este workflow e o do dia 21 tentem publicar ao mesmo tempo.
+# `queue: max` (ENSO-PAGES Fase 2) eleva o limite de pendentes deste
+# grupo de 1 (padrão) para até 100 — ver comentário equivalente em
+# update.yml/indices_semanal.yml.
 concurrency:
   group: pages
   cancel-in-progress: false
+  queue: max
 
 jobs:
   publicar:
@@ -29,13 +33,98 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
-      - name: Checkout
+      # ENSO-PAGES Fase 2B (revisão externa de segurança): `ref: main`
+      # explícito — sem isso, actions/checkout usa o SHA fixado no
+      # evento que disparou esta execução. Como os três workflows do
+      # grupo `pages` agora enfileiram (queue: max, Fase 2) em vez de
+      # descartar pendentes, o tempo entre o push e este job de fato
+      # rodar pode crescer; sem `ref: main`, este checkout ficaria
+      # preso ao estado de quando o push ocorreu, não ao main atual no
+      # momento em que o job roda.
+      - name: Checkout da main atual
         uses: actions/checkout@v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # Referência para a revalidação pré-deploy, mais abaixo.
+      - name: Capturar SHA publicável inicial
+        id: base
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "docs/ neste checkout corresponde ao HEAD $(git rev-parse HEAD) de origin/main no momento do checkout."
+
+      # ENSO-PAGES Fase 2: este workflow só empacota docs/ como está no
+      # commit — nunca recalcula SARIMAX/XGBoost nem reexecuta o pipeline
+      # científico. Mas ele publica qualquer push/merge que toque
+      # `docs/**`, incluindo uma edição manual direta de docs/index.html
+      # que nunca passou pela barreira de verificar_dashboard.py (essa
+      # barreira só roda em update.yml/indices_semanal.yml, antes do
+      # commit). Reexecutá-la aqui, sobre o conteúdo já committed, é uma
+      # checagem de integridade estrutural (eixos, séries alinhadas, BH,
+      # Monitor ENSO, trimestres do Comparativo, plausibilidade física,
+      # rótulos RONI/ONI — itens 1-8, 10-11 do script), não uma validação
+      # científica nem um recálculo: nenhum modelo é reajustado, só o
+      # HTML/dados já presentes no repositório são lidos e conferidos.
+      # `--pular-continuidade-serie-subst`: mesmo motivo de
+      # indices_semanal.yml — este workflow também nunca chama
+      # fetch_monthly_data.py, então o item 9 (continuidade do mês
+      # corrente em data/serie_subst.csv) reprovaria por um motivo que
+      # este workflow não pode corrigir, na maioria dos dias do mês.
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verificar integridade do dashboard antes de publicar
+        run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
 
       - name: Preparar artefato do Pages
         uses: actions/upload-pages-artifact@v3.0.1
         with:
           path: docs/
+
+      # ENSO-PAGES Fase 2B: imediatamente antes do deploy, busca
+      # origin/main de novo e compara a árvore de docs/ já validada e
+      # empacotada (HEAD, capturado no passo "Capturar SHA publicável
+      # inicial") contra o docs/ do main atual. Escopado a `-- docs/`
+      # (não ao SHA geral) para não confundir um commit que só mudou
+      # heartbeat/data/ com uma mudança real em docs/ — ver CLAUDE.md
+      # armadilha 9 e o próprio heartbeat de indices_semanal.yml.
+      #
+      # Se docs/ avançou nesse intervalo (outro workflow do grupo
+      # publicou, ou um push humano chegou), o artefato que acabamos de
+      # preparar já é de um docs/ que não é mais o mais recente —
+      # publicá-lo seria publicar um estado obsoleto. Falha visível,
+      # sem deploy: a próxima execução enfileirada do grupo `pages`
+      # (queue: max, Fase 2) vai fazer checkout do main então atual,
+      # revalidar e publicar — nenhuma intervenção manual é necessária
+      # na maioria dos casos. Se `git fetch` falhar (rede, API), também
+      # falha visivelmente: nunca presume que o checkout está
+      # atualizado só porque não conseguiu confirmar o contrário.
+      #
+      # Limitação reconhecida, não eliminada: ainda existe uma janela
+      # de corrida entre ESTA checagem e o `deploy-pages` abaixo — não é
+      # uma garantia de atomicidade, é uma redução da janela (de "entre
+      # o evento e o deploy" para "entre esta checagem e o deploy").
+      - name: Revalidar referência remota antes do deploy
+        run: |
+          if ! git fetch origin main; then
+            echo "::error::Não foi possível buscar origin/main para a revalidação pré-deploy — não presumo que o checkout ($( git rev-parse HEAD )) ainda está atualizado. Abortando sem publicar."
+            exit 1
+          fi
+          if git diff --quiet "${{ steps.base.outputs.sha }}" origin/main -- docs/; then
+            echo "docs/ ainda corresponde ao origin/main atual (origin/main=$(git rev-parse origin/main)) — seguro publicar."
+          else
+            echo "::error::main avançou em docs/ depois que este job validou/empacotou o conteúdo (checkout em ${{ steps.base.outputs.sha }}, origin/main agora em $(git rev-parse origin/main)). Publicar o artefato já preparado seria publicar um estado obsoleto de docs/. Abortando sem deploy. Recuperação: a próxima execução enfileirada do grupo 'pages' fará checkout do main atual e publicará corretamente; se nenhuma outra execução estiver pendente, dispare este workflow manualmente (workflow_dispatch)."
+            exit 1
+          fi
 
       - name: Publicar no GitHub Pages
         id: deploy
@@ -48,5 +137,5 @@ jobs:
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Disparado por** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit publicado (HEAD do checkout)** | ${{ steps.base.outputs.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **URL** | ${{ steps.deploy.outputs.page_url }} |" >> $GITHUB_STEP_SUMMARY

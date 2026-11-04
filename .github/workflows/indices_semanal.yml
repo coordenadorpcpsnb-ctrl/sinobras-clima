@@ -63,10 +63,14 @@ on:
         default: 'Checagem manual de índices'
 
 # Compartilha o grupo de concorrência do Pages com update.yml/publicar.yml
-# (CLAUDE.md armadilha 5) — evita publicação colidindo.
+# (CLAUDE.md armadilha 5) — evita publicação colidindo. `queue: max`
+# (ENSO-PAGES Fase 2) eleva o limite de execuções pendentes deste grupo
+# de 1 (padrão, com substituição silenciosa da pendente anterior) para
+# até 100, enfileiradas — ver comentário equivalente em update.yml.
 concurrency:
   group: pages
   cancel-in-progress: false
+  queue: max
 
 # Commita/empurra E publica o Pages diretamente (Fase ENSO-PUB) — o
 # push aqui usa o GITHUB_TOKEN padrão, que não dispara publicar.yml por
@@ -155,7 +159,13 @@ jobs:
             echo "dados=false" >> $GITHUB_OUTPUT || \
             echo "dados=true"  >> $GITHUB_OUTPUT
 
-      - name: Commit dos índices atualizados
+      # ENSO-PAGES Fase 2D (revisão externa de segurança — mesmo
+      # problema já corrigido em update.yml na Fase 2C): só cria o
+      # commit LOCAL — nunca empurra aqui. Empurrar só depois que o
+      # estado pós-rebase for revalidado (passos abaixo), para nunca
+      # enviar a `main` uma combinação (este commit + o que o rebase
+      # trouxer) que não passou pela barreira como um todo.
+      - name: Commit local dos índices (sem push)
         if: steps.diff.outputs.dados == 'true'
         run: |
           git config user.name  "github-actions[bot]"
@@ -166,11 +176,39 @@ jobs:
 
           - CPC wksst9120.for: 4 regiões (Niño1+2, Niño3, Niño3.4, Niño4)
           - CPC RONI.ascii.txt (oficial, distinto do ONI-aprox)"
-          # Outro workflow pode ter commitado entre o checkout e aqui
-          # (update.yml no dia 21, ou este mesmo workflow disparado por
-          # dois crons no mesmo dia) — rebase antes de empurrar.
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
+
+      # Passo INCONDICIONAL (roda com ou sem commit local acima) —
+      # outro workflow pode ter commitado entre o checkout e aqui
+      # (update.yml no dia 21, ou este mesmo workflow disparado por
+      # dois crons no mesmo dia). Se houver commit local, o rebase o
+      # replica sobre o HEAD remoto atual (ainda sem push); conflito
+      # aqui interrompe o job com falha visível ANTES de qualquer
+      # tentativa de push. Sem commit local, é um fast-forward simples.
+      - name: Sincronizar com a main (rebase)
+        run: git pull --rebase origin "${GITHUB_REF_NAME}"
+
+      # ENSO-PAGES Fase 2D: revalida o estado pós-rebase ANTES de
+      # qualquer push — não reexecuta update_indices.py, só relê
+      # docs/+data/ já no disco. Usa a MESMA flag da primeira barreira
+      # (--pular-continuidade-serie-subst — exclusiva da continuidade
+      # mensal de serie_subst.csv; todas as demais checagens, inclusive
+      # as de índices ENSO, continuam ativas). Motivo: o rebase acima
+      # pode incorporar docs/index.html de OUTRO workflow do mesmo
+      # grupo (ex.: update.yml) sem conflito textual — o resultado
+      # combinado nunca passou pela barreira como um todo, só o
+      # docs/index.html que ESTE job gerou isoladamente (passo
+      # "Verificar integridade do dashboard", acima) foi validado.
+      # Reprovar aqui interrompe o job SEM push — o commit local, se
+      # houver, nunca sai deste runner efêmero.
+      - name: Revalidar integridade antes do push
+        run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
+
+      # Só agora, com o estado pós-rebase já revalidado, o push ocorre
+      # — e só quando havia algo a commitar. Non-fast-forward aqui
+      # falha visivelmente, sem retry automático.
+      - name: Push dos índices (quando houver commit local)
+        if: steps.diff.outputs.dados == 'true'
+        run: git push
 
       # Passo INCONDICIONAL (fora do if: alterado) — ver CLAUDE.md
       # armadilha 9: o GitHub desliga workflow agendado depois de 60
@@ -220,6 +258,35 @@ jobs:
       # está em dia); nunca cria commit novo por si só.
       - name: Sincronizar com a main antes de decidir a publicação
         run: git pull --rebase origin "${GITHUB_REF_NAME}"
+
+      # ENSO-PAGES Fase 2D: segunda revalidação, depois da sincronização
+      # final acima — cobre o que o rebase do PRÓPRIO heartbeat (passo
+      # anterior) ou esta sincronização final possam ter trazido de
+      # outro workflow DEPOIS da revalidação pré-push já feita. Não
+      # reexecuta update_indices.py, mesma flag de sempre. Reprovar
+      # aqui interrompe o job antes do gate de publicação — sem
+      # modificar a lógica do heartbeat em si (preservado como estava).
+      #
+      # Três falhas de integridade distintas neste workflow, cada uma
+      # com efeito diferente (corrigido na revisão externa, Fase 2E —
+      # a versão anterior deste comentário afirmava, incorretamente,
+      # que a falha B só impedia o push dos índices):
+      #   A. Primeira barreira ("Verificar integridade do dashboard",
+      #      bem acima) — interrompe o job ANTES do commit local dos
+      #      índices e do heartbeat (nenhum dos dois roda).
+      #   B. Revalidação pré-push ("Revalidar integridade antes do
+      #      push") — interrompe o job antes do push dos índices. Como
+      #      nenhum passo seguinte tem `if: always()`, isso impede
+      #      TAMBÉM a execução do heartbeat e do deploy nesta mesma
+      #      execução (regra padrão do GitHub Actions: um `run:` que
+      #      falha aborta o job, nenhum passo posterior roda) — não é
+      #      um bloqueio isolado só do push.
+      #   C. Esta revalidação pré-deploy (aqui) — ocorre DEPOIS do
+      #      heartbeat já ter rodado (ou não) normalmente; impede só o
+      #      deploy desta execução. Não desfaz nenhum commit/push já
+      #      enviado antes dela (do passo de índices ou do heartbeat).
+      - name: Revalidar integridade antes do deploy
+        run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
 
       # Sinal correto para o deploy (distinto de `steps.diff.outputs.
       # dados`, que é sobre docs/index.html + data/ ANTES do rebase):
