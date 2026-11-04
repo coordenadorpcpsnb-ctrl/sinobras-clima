@@ -268,19 +268,23 @@ jobs:
       # modificar a lógica do heartbeat em si (preservado como estava).
       #
       # Três falhas de integridade distintas neste workflow, cada uma
-      # com efeito diferente:
-      #   A. Primeira barreira (antes de "Verificar alterações") — já
-      #      existia; impede até o commit local, heartbeat incluído.
-      #   B. Esta revalidação pré-push (passo acima, "Revalidar
-      #      integridade antes do push") — nova nesta fase; impede só o
-      #      push dos índices. O heartbeat ainda não rodou neste ponto
-      #      e não depende deste resultado.
-      #   C. Esta revalidação pré-deploy (aqui) — nova nesta fase;
-      #      impede só o deploy. Não é uma garantia de que uma falha
-      #      em A ou B "garanta" a execução do heartbeat — o heartbeat
-      #      roda ou não conforme seu próprio passo, que continua
-      #      interrompido normalmente se A falhar antes dele (nenhuma
-      #      mudança nessa dependência existente).
+      # com efeito diferente (corrigido na revisão externa, Fase 2E —
+      # a versão anterior deste comentário afirmava, incorretamente,
+      # que a falha B só impedia o push dos índices):
+      #   A. Primeira barreira ("Verificar integridade do dashboard",
+      #      bem acima) — interrompe o job ANTES do commit local dos
+      #      índices e do heartbeat (nenhum dos dois roda).
+      #   B. Revalidação pré-push ("Revalidar integridade antes do
+      #      push") — interrompe o job antes do push dos índices. Como
+      #      nenhum passo seguinte tem `if: always()`, isso impede
+      #      TAMBÉM a execução do heartbeat e do deploy nesta mesma
+      #      execução (regra padrão do GitHub Actions: um `run:` que
+      #      falha aborta o job, nenhum passo posterior roda) — não é
+      #      um bloqueio isolado só do push.
+      #   C. Esta revalidação pré-deploy (aqui) — ocorre DEPOIS do
+      #      heartbeat já ter rodado (ou não) normalmente; impede só o
+      #      deploy desta execução. Não desfaz nenhum commit/push já
+      #      enviado antes dela (do passo de índices ou do heartbeat).
       - name: Revalidar integridade antes do deploy
         run: python scripts/verificar_dashboard.py --pular-continuidade-serie-subst
 
