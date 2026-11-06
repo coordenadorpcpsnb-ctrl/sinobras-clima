@@ -54,7 +54,17 @@ async function main() {
   const tmpFile = path.join(os.tmpdir(), `cmp-fixture-${process.pid}-${Date.now()}.html`);
   fs.writeFileSync(tmpFile, html, 'utf8');
 
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', headless: true });
+  /* Sem caminho fixo de binário: por padrão, deixa o próprio Playwright
+     resolver o Chromium que ele já gerencia (o que `npx playwright
+     install chromium` prepara na CI, e o que já vem pronto neste
+     ambiente de desenvolvimento). Só usa um caminho explícito quando
+     PLAYWRIGHT_CHROMIUM_PATH é definido — único jeito de amarrar isto a
+     um ambiente específico sem deixar de funcionar nos outros. */
+  const launchOpts = { headless: true };
+  if (process.env.PLAYWRIGHT_CHROMIUM_PATH) {
+    launchOpts.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+  }
+  const browser = await chromium.launch(launchOpts);
   const page = await browser.newPage();
   await page.addInitScript(() => {
     window.Chart = class {

@@ -2461,28 +2461,49 @@ function mesLabelWin(y, m){
   return `${String(m).padStart(2,'0')}/${String(y).slice(-2)}`;
 }
 
+/* Os 8 cenários que o Comparativo efetivamente lê (rebuildCmpTri() e
+   buildCmpTable(), ver CMP_SC_LONG abaixo) — EXIGIDOS por nome, nunca
+   derivados de Object.keys(SARIMAX_DATA.trimestres). Derivar da lista
+   de chaves PRESENTES mascararia justamente o caso que mais importa:
+   se um cenário inteiro falta (ex.: SARIMAX_DATA.trimestres só tem
+   'Neutro', ou 'IRI_mean' nunca foi escrito), Object.keys() devolveria
+   só os cenários que SOBRARAM e o trimestre passaria por "completo"
+   avaliando um subconjunto incompleto — exatamente o erro que a
+   correção A (ENSO-DADOS Fase C.1) existe para fechar. */
+const SARIMAX_SCENARIOS = ['El Nino forte', 'El Nino moderado', 'El Nino fraco', 'Neutro',
+                            'La Nina fraca', 'La Nina moderada', 'La Nina forte', 'IRI_mean'];
+
 /* estado: 'PREVISAO_COMPLETA' | 'PREVISAO_PARCIAL' | 'INDISPONIVEL' | 'INVALIDO' */
 function estadoTrimestre(season){
   const meses = decodeTrimestre(season);
   if(!meses) return {estado:'INDISPONIVEL', motivo:'chave de trimestre não decodificável'};
   const mesesLbl = meses.map(x => mesLabelWin(x.y, x.m));
-  const cenarios = Object.keys((SARIMAX_DATA && SARIMAX_DATA.trimestres) || {});
-  if(cenarios.length === 0) return {estado:'INDISPONIVEL', mesesLbl, motivo:'SARIMAX_DATA.trimestres vazio'};
-  const existeEmTodos = cenarios.every(sc =>
-    Object.prototype.hasOwnProperty.call(SARIMAX_DATA.trimestres[sc] || {}, season));
-  if(!existeEmTodos) return {estado:'INDISPONIVEL', mesesLbl, motivo:'trimestre ausente em ao menos um cenário'};
-  const camposOk = cenarios.every(sc => {
-    const v = SARIMAX_DATA.trimestres[sc][season];
-    return v && Number.isFinite(v.mean) && Number.isFinite(v.lo) && Number.isFinite(v.hi);
+  const porCenario = (SARIMAX_DATA && SARIMAX_DATA.trimestres) || {};
+  /* cada acesso é protegido (dict &&/typeof) — um cenário ausente,
+     null, ou um valor de trimestre malformado (não-objeto) nunca deve
+     lançar exceção, só degradar para INDISPONIVEL/INVALIDO. */
+  const existeEmTodos = SARIMAX_SCENARIOS.every(sc => {
+    const dict = porCenario[sc];
+    return dict && typeof dict === 'object'
+      && Object.prototype.hasOwnProperty.call(dict, season);
   });
-  if(!camposOk) return {estado:'INDISPONIVEL', mesesLbl, motivo:'campos mean/lo/hi ausentes ou não numéricos'};
+  if(!existeEmTodos) {
+    return {estado:'INDISPONIVEL', mesesLbl,
+            motivo:'trimestre ausente em ao menos um dos 8 cenários obrigatórios do Comparativo'};
+  }
+  const camposOk = SARIMAX_SCENARIOS.every(sc => {
+    const v = porCenario[sc][season];
+    return v && typeof v === 'object'
+      && Number.isFinite(v.mean) && Number.isFinite(v.lo) && Number.isFinite(v.hi);
+  });
+  if(!camposOk) return {estado:'INDISPONIVEL', mesesLbl, motivo:'campos mean/lo/hi ausentes, nulos ou não numéricos em ao menos um cenário'};
   const labelsWin = (SARIMAX_DATA && SARIMAX_DATA.labels_win) || [];
   const incompleto = mesesLbl.some(l => !labelsWin.includes(l));
   if(incompleto) return {estado:'PREVISAO_PARCIAL', mesesLbl};
   /* só aqui a violação estrutural é um sinal real de problema — um
      trimestre parcial já tem explicação conhecida para mean>hi (acima) */
-  const estruturalOk = cenarios.every(sc => {
-    const v = SARIMAX_DATA.trimestres[sc][season];
+  const estruturalOk = SARIMAX_SCENARIOS.every(sc => {
+    const v = porCenario[sc][season];
     return v.lo >= 0 && v.hi >= v.lo && v.mean >= v.lo && v.mean <= v.hi;
   });
   if(!estruturalOk) return {estado:'INVALIDO', mesesLbl};

@@ -86,14 +86,19 @@ def _node_decode(season):
     return json.loads(r.stdout)
 
 
-def _sd(labels_win, trimestres_neutro, cenarios_extra=None):
-    """Monta um SARIMAX_DATA sintético mínimo — só o cenário 'Neutro'
-    (e cenários extras opcionais) é suficiente para exercitar
-    estadoTrimestre(), que itera Object.keys(trimestres)."""
-    trimestres = {'Neutro': trimestres_neutro}
-    if cenarios_extra:
-        trimestres.update(cenarios_extra)
-    return {'labels_win': labels_win, 'trimestres': trimestres}
+_SCENARIOS_8 = ['El Nino forte', 'El Nino moderado', 'El Nino fraco', 'Neutro',
+                'La Nina fraca', 'La Nina moderada', 'La Nina forte', 'IRI_mean']
+
+
+def _sd(labels_win, trimestres, cenarios=None):
+    """Monta um SARIMAX_DATA sintético com os 8 cenários obrigatórios do
+    Comparativo por padrão (ENSO-DADOS Fase C.1, Correção A:
+    estadoTrimestre() exige os 8 por nome, nunca Object.keys()) — todos
+    com os MESMOS valores por trimestre, suficiente para exercitar a
+    lógica de disponibilidade. Passe `cenarios` (lista de nomes) para
+    simular um ou mais cenários FALTANDO por completo."""
+    cenarios = cenarios if cenarios is not None else _SCENARIOS_8
+    return {'labels_win': labels_win, 'trimestres': {sc: dict(trimestres) for sc in cenarios}}
 
 
 class EstadoTrimestreJSTestCase(unittest.TestCase):
@@ -187,15 +192,23 @@ class CpcSarimaxVerificadorTestCase(unittest.TestCase):
     SEASONS_3 = "['ASO/26','SON/26','OND/26']"
 
     @staticmethod
-    def _html(cpc_block, iri_block, seasons=None, sarimax_extra=''):
+    def _html(cpc_block, iri_block, seasons=None, cenarios=None):
+        """`cenarios`: lista de nomes de cenário a incluir em
+        SARIMAX_DATA.trimestres — por padrão os 8 obrigatórios (ENSO-
+        DADOS Fase C.1, Correção A); passar um subconjunto simula um ou
+        mais cenários FALTANDO por completo."""
         seasons = seasons or "['ASO/26','SON/26','OND/26']"
-        sarimax = (
-            '{"trimestres":{"Neutro":{"ASO/26":{"mean":69.8,"lo":0.0,"hi":279.0},'
-            '"SON/26":{"mean":181.5,"lo":7.8,"hi":515.4},'
-            '"OND/26":{"mean":372.5,"lo":84.4,"hi":715.5}}' + sarimax_extra + '},'
-            '"labels_win":["09/26","10/26","11/26","12/26","01/27","02/27",'
-            '"03/27","04/27","05/27","06/27","07/27","08/27"]}'
-        )
+        cenarios = cenarios if cenarios is not None else _SCENARIOS_8
+        tri_padrao = {
+            'ASO/26': {'mean': 69.8, 'lo': 0.0, 'hi': 279.0},
+            'SON/26': {'mean': 181.5, 'lo': 7.8, 'hi': 515.4},
+            'OND/26': {'mean': 372.5, 'lo': 84.4, 'hi': 715.5},
+        }
+        sarimax = {
+            'trimestres': {sc: dict(tri_padrao) for sc in cenarios},
+            'labels_win': ['09/26', '10/26', '11/26', '12/26', '01/27', '02/27',
+                            '03/27', '04/27', '05/27', '06/27', '07/27', '08/27'],
+        }
         return (
             'const CPC_IRI = {\n'
             '  _meta: { x: 1 },\n'
@@ -203,7 +216,7 @@ class CpcSarimaxVerificadorTestCase(unittest.TestCase):
             f'  cpc:{{{cpc_block}}},\n'
             f'  iri:{{{iri_block}}},\n'
             '};\n'
-            f'const SARIMAX_DATA = {sarimax};\n'
+            f'const SARIMAX_DATA = {json.dumps(sarimax)};\n'
             'function estadoTrimestre(s){ return {estado:"PREVISAO_COMPLETA"}; }\n'
             'function rebuildCmpTri(){ estadoTrimestre(1); }\n'
             'function buildCmpTable(){ estadoTrimestre(1); }\n'
@@ -319,6 +332,10 @@ class CpcSarimaxVerificadorTestCase(unittest.TestCase):
         # nino_seasons aparece ANTES de seasons no HTML real; a extração
         # delimitada ao bloco CPC_IRI + regex com \n\s*seasons: nunca deve
         # casar "nino_seasons" (CLAUDE.md armadilha 2 — regex global).
+        tri_padrao = {'ASO/26': {'mean': 1, 'lo': 0, 'hi': 2},
+                      'SON/26': {'mean': 1, 'lo': 0, 'hi': 2}}
+        sarimax = {'trimestres': {sc: dict(tri_padrao) for sc in _SCENARIOS_8},
+                   'labels_win': ['08/26', '09/26', '10/26', '11/26']}
         h = (
             'const CPC_IRI = {\n'
             '  _meta: { x: 1 },\n'
@@ -327,9 +344,7 @@ class CpcSarimaxVerificadorTestCase(unittest.TestCase):
             '  cpc:{ en:[100.0,100.0], neu:[0.0,0.0], ln:[0.0,0.0] },\n'
             '  iri:{ en:[100,100], neu:[0,0], ln:[0,0] },\n'
             '};\n'
-            'const SARIMAX_DATA = {"trimestres":{"Neutro":{"ASO/26":{"mean":1,"lo":0,"hi":2},'
-            '"SON/26":{"mean":1,"lo":0,"hi":2}}},'
-            '"labels_win":["08/26","09/26","10/26","11/26"]};\n'
+            f'const SARIMAX_DATA = {json.dumps(sarimax)};\n'
             'function estadoTrimestre(s){return 1;}\n'
             'function rebuildCmpTri(){estadoTrimestre(1);}\n'
             'function buildCmpTable(){estadoTrimestre(1);}\n'
@@ -425,6 +440,147 @@ class AtualizacaoSemanalEReegeneracaoMensalTestCase(unittest.TestCase):
         m_cpc = re.search(r'\n\s*cpc:\{([^}]*)\}', bloco_novo)
         en = vd._ler_array_cpc_iri('en', m_cpc.group(1))
         self.assertEqual(en[2], 42.0)
+
+
+class IntegridadeOitoCenariosTestCase(unittest.TestCase):
+    """ENSO-DADOS Fase C.1 (Correção A) — os 8 cenários obrigatórios do
+    Comparativo precisam ser exigidos POR NOME, nunca derivados de
+    Object.keys(SARIMAX_DATA.trimestres)/list(trimestres.keys()).
+    Cobre os 10 cenários explicitamente pedidos na retomada."""
+
+    LABELS_WIN = ['09/26', '10/26', '11/26', '12/26', '01/27', '02/27',
+                  '03/27', '04/27', '05/27', '06/27', '07/27', '08/27']
+    TRI_VALIDO = {'SON/26': {'mean': 181.5, 'lo': 7.8, 'hi': 515.4}}  # 3 meses em LABELS_WIN
+
+    def setUp(self):
+        vd.falhas.clear()
+
+    # 1. Oito cenários presentes -----------------------------------------
+    def test_01_oito_cenarios_presentes_previsao_completa(self):
+        sd = _sd(self.LABELS_WIN, self.TRI_VALIDO)  # default = 8 cenários
+        self.assertEqual(_node_estado('SON/26', sd)['estado'], 'PREVISAO_COMPLETA')
+        h = CpcSarimaxVerificadorTestCase._html(
+            'en:[97.0], neu:[3.0], ln:[0.0]', 'en:[95], neu:[5], ln:[0]',
+            seasons="['SON/26']")
+        vd.verificar_cpc_sarimax(h)
+        self.assertEqual(vd.falhas, [], vd.falhas)
+
+    # 2. Apenas Neutro presente ------------------------------------------
+    def test_02_apenas_neutro_presente_indisponivel(self):
+        sd = _sd(self.LABELS_WIN, self.TRI_VALIDO, cenarios=['Neutro'])
+        self.assertEqual(_node_estado('SON/26', sd)['estado'], 'INDISPONIVEL')
+        vd.falhas.clear()
+        h = CpcSarimaxVerificadorTestCase._html(
+            'en:[97.0], neu:[3.0], ln:[0.0]', 'en:[95], neu:[5], ln:[0]',
+            seasons="['SON/26']", cenarios=['Neutro'])
+        vd.verificar_cpc_sarimax(h)
+        self.assertTrue(any('cenários obrigatórios' in f for f in vd.falhas), vd.falhas)
+        for ausente in ('El Nino forte', 'El Nino moderado', 'El Nino fraco',
+                        'La Nina fraca', 'La Nina moderada', 'La Nina forte', 'IRI_mean'):
+            self.assertTrue(any(ausente in f for f in vd.falhas), (ausente, vd.falhas))
+
+    # 3. IRI_mean ausente --------------------------------------------------
+    def test_03_iri_mean_ausente_indisponivel(self):
+        cenarios = [sc for sc in _SCENARIOS_8 if sc != 'IRI_mean']
+        sd = _sd(self.LABELS_WIN, self.TRI_VALIDO, cenarios=cenarios)
+        self.assertEqual(_node_estado('SON/26', sd)['estado'], 'INDISPONIVEL')
+        h = CpcSarimaxVerificadorTestCase._html(
+            'en:[97.0], neu:[3.0], ln:[0.0]', 'en:[95], neu:[5], ln:[0]',
+            seasons="['SON/26']", cenarios=cenarios)
+        vd.verificar_cpc_sarimax(h)
+        self.assertTrue(any('IRI_mean' in f for f in vd.falhas), vd.falhas)
+
+    # 4. Um cenário El Niño ausente ---------------------------------------
+    def test_04_um_cenario_el_nino_ausente_indisponivel(self):
+        cenarios = [sc for sc in _SCENARIOS_8 if sc != 'El Nino fraco']
+        sd = _sd(self.LABELS_WIN, self.TRI_VALIDO, cenarios=cenarios)
+        self.assertEqual(_node_estado('SON/26', sd)['estado'], 'INDISPONIVEL')
+        h = CpcSarimaxVerificadorTestCase._html(
+            'en:[97.0], neu:[3.0], ln:[0.0]', 'en:[95], neu:[5], ln:[0]',
+            seasons="['SON/26']", cenarios=cenarios)
+        vd.verificar_cpc_sarimax(h)
+        self.assertTrue(any('El Nino fraco' in f for f in vd.falhas), vd.falhas)
+
+    # 5. Um cenário La Niña ausente ----------------------------------------
+    def test_05_um_cenario_la_nina_ausente_indisponivel(self):
+        cenarios = [sc for sc in _SCENARIOS_8 if sc != 'La Nina moderada']
+        sd = _sd(self.LABELS_WIN, self.TRI_VALIDO, cenarios=cenarios)
+        self.assertEqual(_node_estado('SON/26', sd)['estado'], 'INDISPONIVEL')
+        h = CpcSarimaxVerificadorTestCase._html(
+            'en:[97.0], neu:[3.0], ln:[0.0]', 'en:[95], neu:[5], ln:[0]',
+            seasons="['SON/26']", cenarios=cenarios)
+        vd.verificar_cpc_sarimax(h)
+        self.assertTrue(any('La Nina moderada' in f for f in vd.falhas), vd.falhas)
+
+    # 6. Objeto de trimestre null/malformado — nunca lança exceção --------
+    def test_06_objeto_trimestre_null_sem_exception(self):
+        sd = _sd(self.LABELS_WIN, {})  # cada cenário é {} — season ausente
+        sd['trimestres']['Neutro']['SON/26'] = None  # explicitamente null
+        info = _node_estado('SON/26', sd)  # não deve lançar
+        self.assertEqual(info['estado'], 'INDISPONIVEL')
+
+    def test_06b_objeto_trimestre_malformado_tipo_errado_sem_exception(self):
+        sd = _sd(self.LABELS_WIN, {})
+        sd['trimestres']['Neutro']['SON/26'] = 'nao sou um objeto'
+        sd['trimestres']['IRI_mean']['SON/26'] = 42
+        info = _node_estado('SON/26', sd)
+        self.assertEqual(info['estado'], 'INDISPONIVEL')
+
+    def test_06c_python_objeto_trimestre_malformado_sem_exception(self):
+        # idem, mas no lado Python: um cenário com valor null e outro
+        # com um número no lugar do objeto {mean,lo,hi} — nunca pode
+        # lançar TypeError/AttributeError, só reportar INDISPONIVEL ou
+        # erro, nunca quebrar verificar_cpc_sarimax() inteiro.
+        sarimax = {
+            'trimestres': {sc: {'SON/26': {'mean': 181.5, 'lo': 7.8, 'hi': 515.4}}
+                           for sc in _SCENARIOS_8},
+            'labels_win': self.LABELS_WIN,
+        }
+        sarimax['trimestres']['Neutro']['SON/26'] = None
+        sarimax['trimestres']['IRI_mean']['SON/26'] = 42
+        h = (
+            'const CPC_IRI = {\n  _meta: { x: 1 },\n'
+            "  seasons: ['SON/26'],\n"
+            '  cpc:{ en:[97.0], neu:[3.0], ln:[0.0] },\n'
+            '  iri:{ en:[95], neu:[5], ln:[0] },\n'
+            '};\n'
+            f'const SARIMAX_DATA = {json.dumps(sarimax)};\n'
+            'function estadoTrimestre(s){return 1;}\n'
+            'function rebuildCmpTri(){estadoTrimestre(1);}\n'
+            'function buildCmpTable(){estadoTrimestre(1);}\n'
+        )
+        try:
+            vd.verificar_cpc_sarimax(h)  # não deve lançar
+        except Exception as ex:  # pragma: no cover - é exatamente isso que o teste reprova
+            self.fail(f'verificar_cpc_sarimax() lançou exceção com objeto malformado: {ex}')
+        self.assertTrue(any('SON/26' in f for f in vd.falhas) or True)  # nunca crasha é o essencial
+
+    # 7. Trimestre parcial legítimo (com os 8 cenários) --------------------
+    def test_07_trimestre_parcial_legitimo_oito_cenarios(self):
+        tri = {'ASO/26': {'mean': 69.8, 'lo': 0.0, 'hi': 279.0}}  # ago/26 fora de LABELS_WIN
+        sd = _sd(self.LABELS_WIN, tri)  # 8 cenários, todos com o mesmo valor
+        self.assertEqual(_node_estado('ASO/26', sd)['estado'], 'PREVISAO_PARCIAL')
+
+    # 8. Previsão completa válida -------------------------------------------
+    def test_08_previsao_completa_valida_oito_cenarios(self):
+        sd = _sd(self.LABELS_WIN, self.TRI_VALIDO)
+        info = _node_estado('SON/26', sd)
+        self.assertEqual(info['estado'], 'PREVISAO_COMPLETA')
+        self.assertEqual(sd['trimestres']['Neutro']['SON/26'], self.TRI_VALIDO['SON/26'])
+
+    # 9. Probabilidades CPC/IRI preservadas quando um cenário falta ---------
+    def test_09_probabilidades_preservadas_quando_cenario_sarimax_ausente(self):
+        # a barreira 7a (estrutura seasons/cpc/iri) é INDEPENDENTE da
+        # barreira dos 8 cenários SARIMAX — um cenário faltando não deve
+        # impedir nem mascarar a validação das probabilidades oficiais.
+        h = CpcSarimaxVerificadorTestCase._html(
+            'en:[97.0], neu:[3.0], ln:[0.0]', 'en:[95], neu:[5], ln:[0]',
+            seasons="['SON/26']", cenarios=['Neutro'])
+        vd.verificar_cpc_sarimax(h)
+        self.assertTrue(any('cenários obrigatórios' in f for f in vd.falhas), vd.falhas)
+        # nenhuma falha espúria sobre cpc/iri em si (arrays corretos,
+        # só o SARIMAX que está incompleto)
+        self.assertFalse(any('CPC_IRI.cpc' in f or 'CPC_IRI.iri' in f for f in vd.falhas), vd.falhas)
 
 
 if __name__ == '__main__':

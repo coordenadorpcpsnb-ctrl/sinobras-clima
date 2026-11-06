@@ -147,6 +147,17 @@ def checar_continuidade(serie, ate=None):
 
 _TRI_SEQ = ['JFM', 'FMA', 'MAM', 'AMJ', 'MJJ', 'JJA', 'JAS', 'ASO', 'SON', 'OND', 'NDJ', 'DJF']
 
+# Os 8 cenários que o Comparativo efetivamente lê (docs/index.html,
+# rebuildCmpTri()/buildCmpTable(), mesma constante SARIMAX_SCENARIOS do
+# JS) — EXIGIDOS por nome, nunca derivados de list(trimestres.keys()).
+# Derivar da lista de chaves PRESENTES mascararia justamente o caso que
+# mais importa (ENSO-DADOS Fase C.1, Correção A): se um cenário inteiro
+# falta (ex.: só 'Neutro' existe, ou 'IRI_mean' nunca foi escrito),
+# list(trimestres.keys()) devolveria só os cenários que sobraram, e o
+# trimestre passaria "completo" avaliando um subconjunto incompleto.
+_SARIMAX_SCENARIOS = ['El Nino forte', 'El Nino moderado', 'El Nino fraco', 'Neutro',
+                       'La Nina fraca', 'La Nina moderada', 'La Nina forte', 'IRI_mean']
+
 
 def _decode_trimestre(season):
     """
@@ -338,28 +349,57 @@ def verificar_cpc_sarimax(h):
     except Exception as ex:
         erro(f'SARIMAX_DATA malformado: {ex}')
         return
-    cenarios = list(tri_por_cenario.keys())
-    if not cenarios or not labels_win:
+    if not isinstance(tri_por_cenario, dict) or not labels_win:
         erro('SARIMAX_DATA malformado: trimestres ou labels_win vazio')
         return
+
+    # Correção A (ENSO-DADOS Fase C.1) — BLOQUEANTE: os 8 cenários são
+    # exigidos por nome. Um cenário inteiro ausente invalida a avaliação
+    # de disponibilidade regional para TODOS os trimestres (o JS também
+    # nunca classificaria nenhum como completo nesse caso — ver
+    # SARIMAX_SCENARIOS em docs/index.html) — interrompe aqui, analisar
+    # trimestre a trimestre sobre uma base incompleta não teria sentido.
+    cenarios_ausentes = [sc for sc in _SARIMAX_SCENARIOS if sc not in tri_por_cenario]
+    if cenarios_ausentes:
+        erro('SARIMAX_DATA.trimestres sem os cenários obrigatórios do Comparativo: '
+             + ', '.join(cenarios_ausentes) + ' — nenhum trimestre pode ser avaliado '
+             'como previsão regional completa sem os 8 cenários')
+        return
+    cenarios = _SARIMAX_SCENARIOS
+
+    def _trimestre_de(sc, s):
+        """Acesso defensivo a tri_por_cenario[sc][s] — nunca lança
+        mesmo com cenário/trimestre malformado (não-dict, null, tipo
+        errado); devolve None quando não dá pra extrair um objeto
+        válido, para o chamador decidir sem try/except espalhado."""
+        dict_sc = tri_por_cenario.get(sc)
+        if not isinstance(dict_sc, dict):
+            return None
+        v = dict_sc.get(s)
+        return v if isinstance(v, dict) else None
+
+    def _campo_numerico(v, campo):
+        x = v.get(campo) if isinstance(v, dict) else None
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
 
     indisponiveis, parciais, invalidos = [], [], []
     for s in pedidos:
         meses = _decode_trimestre(s)  # já validado acima, nunca None aqui
-        existe_em_todos = all(s in tri_por_cenario.get(sc, {}) for sc in cenarios)
+        objetos = {sc: _trimestre_de(sc, s) for sc in cenarios}
+        existe_em_todos = all(objetos[sc] is not None for sc in cenarios)
         if not existe_em_todos:
             indisponiveis.append(s)
             continue
         campos_ok = all(
-            isinstance(tri_por_cenario[sc][s].get('mean'), (int, float))
-            and isinstance(tri_por_cenario[sc][s].get('lo'), (int, float))
-            and isinstance(tri_por_cenario[sc][s].get('hi'), (int, float))
+            _campo_numerico(objetos[sc], 'mean')
+            and _campo_numerico(objetos[sc], 'lo')
+            and _campo_numerico(objetos[sc], 'hi')
             for sc in cenarios
         )
         if not campos_ok:
             erro(f'CPC_IRI.seasons "{s}" existe em SARIMAX_DATA.trimestres mas com campos '
-                 f'mean/lo/hi ausentes ou não numéricos em ao menos um cenário — risco de '
-                 f'exceção JS')
+                 f'mean/lo/hi ausentes, nulos ou não numéricos em ao menos um cenário — '
+                 f'risco de exceção JS')
             invalidos.append(s)
             continue
         meses_lbl = [f'{m:02d}/{str(y)[2:]}' for y, m in meses]
@@ -369,9 +409,9 @@ def verificar_cpc_sarimax(h):
         # candidato a PREVISAO_COMPLETA — só aqui violação estrutural é
         # bloqueante: não há preenchimento climatológico que a explique.
         estrutural_ok = all(
-            tri_por_cenario[sc][s]['lo'] >= 0
-            and tri_por_cenario[sc][s]['hi'] >= tri_por_cenario[sc][s]['lo']
-            and tri_por_cenario[sc][s]['lo'] <= tri_por_cenario[sc][s]['mean'] <= tri_por_cenario[sc][s]['hi']
+            objetos[sc]['lo'] >= 0
+            and objetos[sc]['hi'] >= objetos[sc]['lo']
+            and objetos[sc]['lo'] <= objetos[sc]['mean'] <= objetos[sc]['hi']
             for sc in cenarios
         )
         if not estrutural_ok:
