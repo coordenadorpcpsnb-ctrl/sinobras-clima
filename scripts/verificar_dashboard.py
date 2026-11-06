@@ -145,6 +145,257 @@ def checar_continuidade(serie, ate=None):
     return lacunas
 
 
+_TRI_SEQ = ['JFM', 'FMA', 'MAM', 'AMJ', 'MJJ', 'JJA', 'JAS', 'ASO', 'SON', 'OND', 'NDJ', 'DJF']
+
+
+def _decode_trimestre(season):
+    """
+    Porta Python de decodeTrimestre() (docs/index.html) — mesma
+    convenção de scripts/update_dashboard.py::_tri_nome() (ano do mês
+    CENTRAL, virada dez→jan por wraparound). Os 12 códigos trimestrais
+    do CPC (JFM..DJF) são uma bijeção com o mês inicial (1-12): nunca
+    ambíguos mesmo com letras repetidas (J/M/A), pois a sequência de 3
+    letras consecutivas já identifica o mês inicial de forma única.
+    Retorna lista de 3 (ano, mês) ou None se a chave não for
+    decodificável (nem 'SSS/AA' nem uma sigla trimestral reconhecida).
+    """
+    m = re.match(r'^([A-Za-z]{3})/(\d{2})$', (season or '').strip())
+    if not m:
+        return None
+    try:
+        i = _TRI_SEQ.index(m.group(1).upper())
+    except ValueError:
+        return None
+    mes_ini = i + 1
+    mes_cen = 1 if mes_ini == 12 else mes_ini + 1
+    ano_cen = 2000 + int(m.group(2))
+    ano_ini = ano_cen - 1 if mes_cen == 1 else ano_cen
+    meses, y, mo = [], ano_ini, mes_ini
+    for _ in range(3):
+        meses.append((y, mo))
+        mo += 1
+        if mo > 12:
+            mo, y = 1, y + 1
+    return meses
+
+
+def _ler_array_cpc_iri(nome_campo, texto_bloco):
+    """
+    Lê um array JS tipo 'en:[1.0,null,2.0]' de dentro de um bloco já
+    delimitado (ex.: o conteúdo de `cpc:{...}` ou `iri:{...}`). Cada
+    item vira float, ou None para o literal 'null' do JS, ou a própria
+    string crua quando não é nem float nem 'null' (deixa o chamador
+    decidir se isso é erro — nunca lança aqui). Retorna None se o campo
+    não existir no bloco.
+    """
+    m = re.search(rf'{nome_campo}:\s*\[([^\]]*)\]', texto_bloco)
+    if not m:
+        return None
+    crus = [v.strip() for v in m.group(1).split(',')] if m.group(1).strip() else []
+    out = []
+    for v in crus:
+        if v == 'null':
+            out.append(None)
+        else:
+            try:
+                out.append(float(v))
+            except ValueError:
+                out.append(v)
+    return out
+
+
+def verificar_cpc_sarimax(h):
+    """
+    Item 7 — compatibilidade CPC_IRI.seasons × SARIMAX_DATA (ENSO-DADOS
+    Fase C). Dividido em 3 barreiras:
+
+    7a (BLOQUEANTE) — integridade ESTRUTURAL de CPC_IRI, delimitada ao
+    bloco `const CPC_IRI = {...};` (nunca regex global — CLAUDE.md
+    armadilha 2; evita também casar "nino_seasons" por substring de
+    "seasons", já que `nino_seasons` é outro array trimestral, não
+    relacionado a esta checagem): bloco ausente/ilegível; `seasons`
+    ausente/vazio/inválido/duplicado; arrays `cpc`/`iri` ausentes;
+    comprimento diferente de `seasons`; valor não numérico e diferente
+    de `null`; valor fora de 0-100.
+
+    7b (INFORMATIVO) — cobertura regional (SARIMAX_DATA): a existência
+    da chave do trimestre NÃO comprova previsão regional completa —
+    scripts/update_dashboard.py preenche com climatologia os meses de
+    um trimestre que caem fora de `SARIMAX_DATA.labels_win` (contribuem
+    para `mean` mas com lo=hi=0 nesse mês), então um trimestre parcial
+    pode legitimamente ter mean > hi sem ser corrupção de dado (caso
+    real observado: ASO/27, cenário Neutro, mean=161.7 > hi=115.1 — só
+    ago/27 está em labels_win). Por isso cobertura incompleta nunca é
+    erro aqui, só aviso — a aba Comparativo (docs/index.html,
+    estadoTrimestre()) já trata isso sem quebrar.
+
+    7c (BLOQUEANTE) — o que ainda pode gerar exceção JS nos caminhos
+    efetivamente exibidos: SARIMAX_DATA malformado; campos mean/lo/hi
+    ausentes/não numéricos num trimestre que EXISTE; a função
+    estadoTrimestre() (e seu uso em rebuildCmpTri()/buildCmpTable())
+    ausente do HTML — sem ela, os avisos de 7b deixam de ser
+    informativos e voltam a ser risco real de quebra; e valor
+    estruturalmente inválido (lo/mean/hi) num trimestre cujos 3 meses
+    estão TODOS em labels_win — aí, e só aí, não há explicação de
+    preenchimento climatológico, então é bloqueante.
+
+    Comprimentos iguais entre seasons/cpc/iri NÃO comprovam associação
+    temporal correta (só integridade estrutural) — nunca afirmado como
+    tal nas mensagens desta função.
+
+    Extraída para função própria para poder ser testada direto, sem
+    precisar rodar main() inteiro contra um docs/index.html real (mesmo
+    motivo de checar_continuidade()).
+    """
+    ini_cpc = h.find('const CPC_IRI = {')
+    fim_cpc = h.find('\n};', ini_cpc) + 3 if ini_cpc >= 0 else -1
+    bloco_cpc = h[ini_cpc:fim_cpc] if ini_cpc >= 0 and fim_cpc > ini_cpc + 3 else ''
+
+    if not bloco_cpc:
+        erro('const CPC_IRI não encontrado ou ilegível no HTML')
+        return
+
+    m_seasons = re.search(r'\n\s*seasons:\s*\[([^\]]*)\]', bloco_cpc)
+    pedidos = ([v.strip().strip("'\"") for v in m_seasons.group(1).split(',') if v.strip()]
+               if m_seasons else [])
+
+    if not pedidos:
+        erro('CPC_IRI.seasons ausente, vazio ou ilegível')
+        return
+    if len(set(pedidos)) != len(pedidos):
+        dup = sorted({x for x in pedidos if pedidos.count(x) > 1})
+        erro('CPC_IRI.seasons com trimestre(s) duplicado(s): ' + ', '.join(dup))
+        return
+    invalidos_fmt = [s for s in pedidos if _decode_trimestre(s) is None]
+    if invalidos_fmt:
+        erro('CPC_IRI.seasons com trimestre(s) em formato inválido (não decodificável): '
+             + ', '.join(invalidos_fmt))
+        return
+
+    # 7a — arrays cpc/iri: presença, comprimento, tipo, faixa 0-100
+    m_cpc_blk = re.search(r'\n\s*cpc:\{([^}]*)\}', bloco_cpc)
+    m_iri_blk = re.search(r'\n\s*iri:\{([^}]*)\}', bloco_cpc)
+    arrays_ok = True
+    for nome_grupo, m_blk in (('cpc', m_cpc_blk), ('iri', m_iri_blk)):
+        if not m_blk:
+            erro(f'CPC_IRI.{nome_grupo} ausente')
+            arrays_ok = False
+            continue
+        for campo in ('en', 'neu', 'ln'):
+            arr = _ler_array_cpc_iri(campo, m_blk.group(1))
+            if arr is None:
+                erro(f'CPC_IRI.{nome_grupo}.{campo} ausente')
+                arrays_ok = False
+                continue
+            if len(arr) != len(pedidos):
+                erro(f'CPC_IRI.{nome_grupo}.{campo} com comprimento {len(arr)} '
+                     f'≠ seasons ({len(pedidos)}) — risco de probabilidade no trimestre errado')
+                arrays_ok = False
+            nao_numericos = [v for v in arr if v is not None and not isinstance(v, float)]
+            if nao_numericos:
+                erro(f'CPC_IRI.{nome_grupo}.{campo} com valor não numérico e diferente de '
+                     f'null: {nao_numericos}')
+                arrays_ok = False
+            fora_de_faixa = [v for v in arr if isinstance(v, float) and not (0 <= v <= 100)]
+            if fora_de_faixa:
+                erro(f'CPC_IRI.{nome_grupo}.{campo} com valor fora do intervalo 0-100: '
+                     f'{fora_de_faixa}')
+                arrays_ok = False
+    if arrays_ok:
+        ok(f'CPC_IRI.seasons/cpc/iri estruturalmente consistentes ({len(pedidos)} '
+           f'trimestres, sem duplicados, arrays com mesmo comprimento — isso NÃO garante '
+           f'associação temporal correta, só integridade estrutural)')
+
+    # 7c.1 — a correção JS precisa estar presente, senão 7b (abaixo) é só
+    # um aviso sobre um risco que na verdade segue sem proteção nenhuma.
+    guarda_presente = 'function estadoTrimestre' in h
+    if not guarda_presente:
+        erro('função estadoTrimestre() não encontrada no HTML — sem ela, '
+             'rebuildCmpTri()/buildCmpTable() podem voltar a acessar SARIMAX_DATA sem '
+             'proteção e quebrar a aba Comparativo com trimestre parcial/indisponível')
+    else:
+        for nome_fn in ('rebuildCmpTri', 'buildCmpTable'):
+            ini_fn = h.find(f'function {nome_fn}(')
+            fim_fn = h.find('\nfunction ', ini_fn + 1) if ini_fn >= 0 else -1
+            corpo = h[ini_fn:fim_fn if fim_fn > ini_fn else ini_fn + 4000] if ini_fn >= 0 else None
+            if corpo is None:
+                erro(f'{nome_fn}() não encontrada no HTML')
+            elif 'estadoTrimestre(' not in corpo:
+                erro(f'{nome_fn}() não usa estadoTrimestre() — guarda de disponibilidade '
+                     f'regional pode ter sido removida/contornada, risco de exceção JS com '
+                     f'trimestre parcial/indisponível')
+
+    # 7b/7c.2 — cobertura regional (SARIMAX_DATA)
+    msd = re.search(r'const SARIMAX_DATA\s*=\s*(\{.*?\});\n', h, re.DOTALL)
+    if not msd:
+        erro('const SARIMAX_DATA não encontrado — não é possível avaliar cobertura '
+             'regional (7c)')
+        return
+    try:
+        sd = json.loads(msd.group(1))
+        tri_por_cenario = sd['trimestres']
+        labels_win = set(sd['labels_win'])
+    except Exception as ex:
+        erro(f'SARIMAX_DATA malformado: {ex}')
+        return
+    cenarios = list(tri_por_cenario.keys())
+    if not cenarios or not labels_win:
+        erro('SARIMAX_DATA malformado: trimestres ou labels_win vazio')
+        return
+
+    indisponiveis, parciais, invalidos = [], [], []
+    for s in pedidos:
+        meses = _decode_trimestre(s)  # já validado acima, nunca None aqui
+        existe_em_todos = all(s in tri_por_cenario.get(sc, {}) for sc in cenarios)
+        if not existe_em_todos:
+            indisponiveis.append(s)
+            continue
+        campos_ok = all(
+            isinstance(tri_por_cenario[sc][s].get('mean'), (int, float))
+            and isinstance(tri_por_cenario[sc][s].get('lo'), (int, float))
+            and isinstance(tri_por_cenario[sc][s].get('hi'), (int, float))
+            for sc in cenarios
+        )
+        if not campos_ok:
+            erro(f'CPC_IRI.seasons "{s}" existe em SARIMAX_DATA.trimestres mas com campos '
+                 f'mean/lo/hi ausentes ou não numéricos em ao menos um cenário — risco de '
+                 f'exceção JS')
+            invalidos.append(s)
+            continue
+        meses_lbl = [f'{m:02d}/{str(y)[2:]}' for y, m in meses]
+        if any(lbl not in labels_win for lbl in meses_lbl):
+            parciais.append(s)
+            continue
+        # candidato a PREVISAO_COMPLETA — só aqui violação estrutural é
+        # bloqueante: não há preenchimento climatológico que a explique.
+        estrutural_ok = all(
+            tri_por_cenario[sc][s]['lo'] >= 0
+            and tri_por_cenario[sc][s]['hi'] >= tri_por_cenario[sc][s]['lo']
+            and tri_por_cenario[sc][s]['lo'] <= tri_por_cenario[sc][s]['mean'] <= tri_por_cenario[sc][s]['hi']
+            for sc in cenarios
+        )
+        if not estrutural_ok:
+            erro(f'CPC_IRI.seasons "{s}" classificado como previsão regional completa '
+                 f'(todos os 3 meses em labels_win) mas com valores estruturalmente '
+                 f'inválidos (lo/mean/hi) em ao menos um cenário — não explicado por '
+                 f'preenchimento climatológico')
+            invalidos.append(s)
+
+    if indisponiveis:
+        print('  ⚠ trimestre(s) de CPC_IRI.seasons sem previsão regional SARIMAX '
+              '(ausentes de SARIMAX_DATA.trimestres): ' + ', '.join(indisponiveis))
+    if parciais:
+        print('  ⚠ trimestre(s) de CPC_IRI.seasons com previsão regional PARCIAL (ao '
+              'menos um mês fora de labels_win, preenchido com climatologia): '
+              + ', '.join(parciais))
+    if not indisponiveis and not parciais and not invalidos:
+        ok(f'trimestres do Comparativo com cobertura regional completa e '
+           f'estruturalmente válida ({len(pedidos)} seasons)')
+    elif not invalidos and guarda_presente:
+        ok('cobertura regional parcial/indisponível tratada (ver avisos acima) — '
+           'nenhuma inconsistência estrutural bloqueante')
+
+
 def solve_bh(prec, etp, cad=CAD, tol=1e-3, it=200):
     arm = cad
     for _ in range(it):
@@ -296,23 +547,8 @@ def main(pular_continuidade_serie_subst=False):
             ok(f'Monitor ENSO consistente ({n_lbl} meses)')
 
     # ── 7. trimestres do Comparativo (CPC/IRI x SARIMAX) ────────────────
-    # CPC_IRI.seasons é curado manualmente; se pedir um trimestre que o
-    # SARIMAX_DATA não tem, o JS lança erro e a aba Comparativo não renderiza.
-    msd = re.search(r'const SARIMAX_DATA\s*=\s*(\{.*?\});\n', h, re.DOTALL)
-    mse = re.search(r'seasons:\s*\[([^\]]+)\]', h)
-    if msd and mse:
-        try:
-            sd = json.loads(msd.group(1))
-            disp = set(next(iter(sd['trimestres'].values())).keys())
-            pedidos = [v.strip().strip("'\"") for v in mse.group(1).split(',')]
-            faltando = [x for x in pedidos if x not in disp]
-            if faltando:
-                erro('CPC_IRI.seasons pede trimestres ausentes no SARIMAX_DATA: '
-                     + ', '.join(faltando) + ' — a aba Comparativo vai quebrar')
-            else:
-                ok(f'trimestres do Comparativo completos ({len(pedidos)} seasons)')
-        except Exception as ex:
-            erro(f'não foi possível validar SARIMAX_DATA: {ex}')
+    # 7a/7b/7c — ver docstring de verificar_cpc_sarimax() (ENSO-DADOS Fase C).
+    verificar_cpc_sarimax(h)
 
     # ── 8. plausibilidade física dos índices ENSO ───────────────────────
     # nino34/oni/tsa são anomalias (°C) — nunca ultrapassam ~3°C em módulo.

@@ -353,6 +353,9 @@
   .row-spaced { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .section-title { font-size: 13px; font-weight: 700; }
   .note { font-size: 11.5px; color: var(--txt3); margin-top: 8px; line-height: 1.5; }
+  .cmp-empty-state { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+                      text-align: center; padding: 24px; color: var(--txt3); font-size: 12.5px;
+                      background: var(--panel); border-radius: var(--radius-sm); }
   .mt8 { margin-top: 8px; }
   .mt14 { margin-top: 14px; }
   .mt20 { margin-top: 20px; }
@@ -712,8 +715,10 @@
       <!-- 4. Comparativo trimestral de precipitação: todos os cenários vs IRI -->
       <div class="card" style="margin-bottom:14px">
         <div class="card-title" style="margin-bottom:10px">Precipitação trimestral projetada (mm) — todos os cenários SARIMAX vs trajetória IRI</div>
-        <div class="ch-wrap h380"><canvas id="c-cmp-tri"></canvas></div>
-        <div class="note mt8">Cada trimestre = soma de 3 meses. Trajetória IRI (laranja) usa a média multimodelo de jun/2026 como entradaX forçado com a média multimodelo do IRI como Niño 3.4 de entrada. Intervalo cinza = IC 95% do cenário neutro.</div>
+        <div class="ch-wrap h380"><canvas id="c-cmp-tri"></canvas>
+          <div id="cmp-tri-empty" class="cmp-empty-state">Nenhum trimestre de <code>CPC_IRI.seasons</code> tem previsão regional completa no horizonte mensal atual (todos estão parciais — preenchidos em parte por climatologia — ou indisponíveis no SARIMAX_DATA vigente). As probabilidades oficiais CPC/IRI continuam na tabela completa abaixo.</div>
+        </div>
+        <div class="note mt8">Cada trimestre = soma de 3 meses. Exibidos apenas os trimestres com previsão regional SARIMAX completa (todos os 3 meses dentro do horizonte mensal vigente) — ver tabela completa abaixo para os demais. Trajetória IRI (laranja) usa a média multimodelo de jun/2026 como entradaX forçado com a média multimodelo do IRI como Niño 3.4 de entrada. Intervalo cinza = IC 95% do cenário neutro.</div>
       </div>
 
       <!-- 5. Tabela detalhada CPC × IRI × SARIMAX -->
@@ -2416,6 +2421,74 @@ function updateCmpCharts(){
   buildCmpTable();
 }
 
+/* ══ Disponibilidade regional por trimestre (ENSO-DADOS Fase C) ══════
+   A existência da chave em SARIMAX_DATA.trimestres NÃO comprova previsão
+   regional COMPLETA: update_dashboard.py preenche com climatologia os
+   meses de um trimestre que caem fora do horizonte mensal
+   (SARIMAX_DATA.labels_win) — esse(s) mês(es) contribuem para `mean`
+   mas com lo=hi=0, então um trimestre parcial pode legitimamente ter
+   mean > hi sem ser corrupção de dado (ex. real: ASO/27, cenário
+   Neutro, mean=161.7 > hi=115.1 — só ago/27 está em labels_win).
+   `hasOwnProperty(trimestre)` sozinho não é suficiente.
+
+   Decodifica a chave 'SSS/AA' nos 3 meses que ela representa, na MESMA
+   convenção de scripts/update_dashboard.py::_tri_nome() (ano do mês
+   CENTRAL, virada dez→jan tratada por wraparound) — os 12 códigos
+   trimestrais do CPC (JFM..DJF) são uma bijeção com o mês inicial
+   (1-12), nunca ambíguos mesmo com letras repetidas (J/M/A). */
+const TRI_SEQ = ['JFM','FMA','MAM','AMJ','MJJ','JJA','JAS','ASO','SON','OND','NDJ','DJF'];
+
+function decodeTrimestre(season){
+  const m = /^([A-Za-z]{3})\/(\d{2})$/.exec(String(season||'').trim());
+  if(!m) return null;
+  const i = TRI_SEQ.indexOf(m[1].toUpperCase());
+  if(i < 0) return null;
+  const mesInicial = i + 1;
+  const mesCentral  = mesInicial === 12 ? 1 : mesInicial + 1;
+  const anoCentral  = 2000 + parseInt(m[2], 10);
+  const anoInicial  = mesCentral === 1 ? anoCentral - 1 : anoCentral;
+  const meses = [];
+  let y = anoInicial, mo = mesInicial;
+  for(let k = 0; k < 3; k++){
+    meses.push({y, m: mo});
+    mo += 1;
+    if(mo > 12){ mo = 1; y += 1; }
+  }
+  return meses;
+}
+
+function mesLabelWin(y, m){
+  return `${String(m).padStart(2,'0')}/${String(y).slice(-2)}`;
+}
+
+/* estado: 'PREVISAO_COMPLETA' | 'PREVISAO_PARCIAL' | 'INDISPONIVEL' | 'INVALIDO' */
+function estadoTrimestre(season){
+  const meses = decodeTrimestre(season);
+  if(!meses) return {estado:'INDISPONIVEL', motivo:'chave de trimestre não decodificável'};
+  const mesesLbl = meses.map(x => mesLabelWin(x.y, x.m));
+  const cenarios = Object.keys((SARIMAX_DATA && SARIMAX_DATA.trimestres) || {});
+  if(cenarios.length === 0) return {estado:'INDISPONIVEL', mesesLbl, motivo:'SARIMAX_DATA.trimestres vazio'};
+  const existeEmTodos = cenarios.every(sc =>
+    Object.prototype.hasOwnProperty.call(SARIMAX_DATA.trimestres[sc] || {}, season));
+  if(!existeEmTodos) return {estado:'INDISPONIVEL', mesesLbl, motivo:'trimestre ausente em ao menos um cenário'};
+  const camposOk = cenarios.every(sc => {
+    const v = SARIMAX_DATA.trimestres[sc][season];
+    return v && Number.isFinite(v.mean) && Number.isFinite(v.lo) && Number.isFinite(v.hi);
+  });
+  if(!camposOk) return {estado:'INDISPONIVEL', mesesLbl, motivo:'campos mean/lo/hi ausentes ou não numéricos'};
+  const labelsWin = (SARIMAX_DATA && SARIMAX_DATA.labels_win) || [];
+  const incompleto = mesesLbl.some(l => !labelsWin.includes(l));
+  if(incompleto) return {estado:'PREVISAO_PARCIAL', mesesLbl};
+  /* só aqui a violação estrutural é um sinal real de problema — um
+     trimestre parcial já tem explicação conhecida para mean>hi (acima) */
+  const estruturalOk = cenarios.every(sc => {
+    const v = SARIMAX_DATA.trimestres[sc][season];
+    return v.lo >= 0 && v.hi >= v.lo && v.mean >= v.lo && v.mean <= v.hi;
+  });
+  if(!estruturalOk) return {estado:'INVALIDO', mesesLbl};
+  return {estado:'PREVISAO_COMPLETA', mesesLbl};
+}
+
 function buildComparativo(){
   buildCmpChips();
 
@@ -2526,9 +2599,24 @@ function rebuildCmpPrecMon(){
 
 function rebuildCmpTri(){
   destroyChart('cmp-tri');
-  const seasons = CPC_IRI.seasons;
+  /* só entram no gráfico os trimestres com PREVISAO_COMPLETA — filtrar a
+     ÚNICA fonte (seasons) evita o erro de rotação de arrays já alinhados
+     (CLAUDE.md armadilha 1): todo .map() abaixo deriva deste mesmo array
+     filtrado, nunca de um índice separado, então não há deslocamento
+     posicional entre labels e datasets. CPC_IRI.seasons em si nunca é
+     alterado — isto é só a lista usada para ESTE gráfico. */
+  const seasons = CPC_IRI.seasons.filter(s => estadoTrimestre(s).estado === 'PREVISAO_COMPLETA');
+  const canvasEl = document.getElementById('c-cmp-tri');
+  const emptyEl  = document.getElementById('cmp-tri-empty');
+  if(seasons.length === 0){
+    if(canvasEl) canvasEl.style.display = 'none';
+    if(emptyEl)  emptyEl.style.display = 'flex';
+    return;
+  }
+  if(canvasEl) canvasEl.style.display = '';
+  if(emptyEl)  emptyEl.style.display = 'none';
   const sc  = activeCmpSc;
-  const ctx4 = document.getElementById('c-cmp-tri').getContext('2d');
+  const ctx4 = canvasEl.getContext('2d');
   const neutIcLo = seasons.map(s=>SARIMAX_DATA.trimestres['Neutro'][s].lo);
   const neutIcHi = seasons.map(s=>SARIMAX_DATA.trimestres['Neutro'][s].hi);
   charts['cmp-tri'] = new Chart(ctx4,{type:'bar',data:{labels:seasons,datasets:[
@@ -2573,27 +2661,46 @@ function buildCmpTable(){
      Renderizar como "—" em vez do literal "null%" que o template
      produzia antes para qualquer trimestre sem valor (ex. ASO/26). */
   const fmtPct = v => v==null ? '—' : `${v}%`;
+  /* colunas SARIMAX/delta: "mm" já embutido em fmtMm/deltaCell — nunca
+     concatenar " mm" de novo no template (evita "— mm" duplicado). */
+  const fmtMm = v => v==null ? '—' : `${v} mm`;
+  const ROTULO_INDISP = {
+    PREVISAO_PARCIAL: 'parcial (clim.)',
+    INDISPONIVEL:     'indisponível',
+    INVALIDO:         'dado inválido',
+  };
   CPC_IRI.seasons.forEach((s,i)=>{
     const cp=CPC_IRI.cpc, ir=CPC_IRI.iri;
-    const enf  = Math.round(SARIMAX_DATA.trimestres['El Nino forte'][s].mean);
-    const enm  = Math.round(SARIMAX_DATA.trimestres['El Nino moderado'][s].mean);
-    const iri_v= Math.round(SARIMAX_DATA.trimestres['IRI_mean'][s].mean);
-    const neu_v= Math.round(SARIMAX_DATA.trimestres['Neutro'][s].mean);
-    const delta = iri_v - enm;
-    const deltaStr = delta >= 0
-      ? `<span style="color:var(--euc)">+${delta}</span>`
-      : `<span style="color:var(--alert)">${delta}</span>`;
+    /* probabilidades CPC/IRI são preservadas sempre, independente da
+       cobertura regional — só as colunas derivadas do SARIMAX dependem
+       de PREVISAO_COMPLETA. */
+    const info = estadoTrimestre(s);
+    const completa = info.estado === 'PREVISAO_COMPLETA';
+    const enf   = completa ? Math.round(SARIMAX_DATA.trimestres['El Nino forte'][s].mean)    : null;
+    const enm   = completa ? Math.round(SARIMAX_DATA.trimestres['El Nino moderado'][s].mean) : null;
+    const iri_v = completa ? Math.round(SARIMAX_DATA.trimestres['IRI_mean'][s].mean)         : null;
+    const neu_v = completa ? Math.round(SARIMAX_DATA.trimestres['Neutro'][s].mean)           : null;
+    let deltaCell;
+    if(completa){
+      const delta = iri_v - enm;
+      const cor = delta >= 0 ? 'var(--euc)' : 'var(--alert)';
+      const sinal = delta >= 0 ? '+' : '';
+      deltaCell = `<span style="color:${cor}">${sinal}${delta} mm</span>`;
+    } else {
+      const rotulo = ROTULO_INDISP[info.estado] || 'indisponível';
+      deltaCell = `<span style="color:var(--txt3)" title="Sem previsão regional SARIMAX completa para este trimestre (${rotulo})">— (${rotulo})</span>`;
+    }
     tbody.innerHTML += `<tr>
       <td style="font-weight:500">${s}</td>
       <td style="color:#d47070;text-align:center">${fmtPct(cp.en[i])}</td>
       <td style="color:#e09050;text-align:center">${fmtPct(ir.en[i])}</td>
       <td style="color:#90a090;text-align:center">${fmtPct(cp.neu[i])}</td>
       <td style="color:#a0b8a0;text-align:center">${fmtPct(ir.neu[i])}</td>
-      <td style="color:#4a9fd4;text-align:center">${enf} mm</td>
-      <td style="color:#4a9fd4;text-align:center">${enm} mm</td>
-      <td style="color:#52a870;text-align:center;font-weight:500">${iri_v} mm</td>
-      <td style="color:#5aa070;text-align:center">${neu_v} mm</td>
-      <td style="text-align:center">${deltaStr} mm</td>
+      <td style="color:#4a9fd4;text-align:center">${fmtMm(enf)}</td>
+      <td style="color:#4a9fd4;text-align:center">${fmtMm(enm)}</td>
+      <td style="color:#52a870;text-align:center;font-weight:500">${fmtMm(iri_v)}</td>
+      <td style="color:#5aa070;text-align:center">${fmtMm(neu_v)}</td>
+      <td style="text-align:center">${deltaCell}</td>
     </tr>`;
   });
 }
