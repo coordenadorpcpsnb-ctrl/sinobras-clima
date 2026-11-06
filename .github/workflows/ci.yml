@@ -98,6 +98,26 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ENSO-DADOS Fase C.1 (Correção B): tests.test_cpc_sarimax_render
+      # abre docs/index.html real num Chromium headless (via Playwright)
+      # para confirmar que a aba Comparativo não lança erro JS com
+      # trimestre parcial/indisponível — sem Node+Playwright+Chromium
+      # aqui, esse teste (CI=true) falha explicitamente em vez de ser
+      # pulado em silêncio (ver tests/test_cpc_sarimax_render.py).
+      # Versão do Playwright pinada para reprodutibilidade; `--with-deps`
+      # instala as bibliotecas de sistema que o Chromium headless
+      # precisa num runner limpo (sem isso, chromium.launch() falha por
+      # biblioteca compartilhada ausente, não por falta do binário).
+      - name: Configurar Node.js (para os testes de renderização Playwright)
+        uses: actions/setup-node@v4.1.0
+        with:
+          node-version: '20'
+
+      - name: Instalar Playwright + Chromium
+        run: |
+          npm install playwright@1.49.1
+          npx playwright install --with-deps chromium
+
       - name: Testes de integridade do dashboard e comparação CPC×IRI
         run: |
           python -m unittest -v \
@@ -105,7 +125,9 @@ jobs:
             tests.test_verificar_dashboard_enso_auto \
             tests.test_enso_iri_set2026 \
             tests.test_gerar_relatorio \
-            tests.test_regressao_cientifica_enso_ci
+            tests.test_regressao_cientifica_enso_ci \
+            tests.test_cpc_sarimax_disponibilidade \
+            tests.test_cpc_sarimax_render
 
       # ── Continuidade de serie_subst.csv: NUNCA pular a flag
       # indiscriminadamente (pedido explícito da Fase ENSO-CI).
