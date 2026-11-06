@@ -103,22 +103,6 @@ def _sarimax_8(labels_win, trimestres_por_chave, cenarios=None):
     }
 
 
-# Bug PRÉ-EXISTENTE e fora do escopo autorizado desta correção (ENSO-DADOS
-# Fase C só autoriza docs/index.html, scripts/verificar_dashboard.py e
-# testes — não "outras alterações" não relacionadas a CPC_IRI×SARIMAX):
-# `document.getElementById('btn-download-template-full')` (linha ~2728)
-# referencia um id que NÃO existe em nenhum elemento do HTML — confirmado
-# já presente, idêntico, em origin/main ANTES desta branch. Dispara em
-# QUALQUER carregamento da página, independente de fixture ou aba — nunca
-# causado por este fix. Filtrado aqui com justificativa, não corrigido
-# (fora do escopo autorizado; reportado no relatório final desta fase).
-_ERRO_PRE_EXISTENTE_FORA_DE_ESCOPO = "Cannot read properties of null (reading 'addEventListener')"
-
-
-def _erros_do_fix(page_errors):
-    return [e for e in page_errors if _ERRO_PRE_EXISTENTE_FORA_DE_ESCOPO not in e]
-
-
 def _run(fixture):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         json.dump(fixture, f)
@@ -182,10 +166,11 @@ class ComparativoRenderTestCase(unittest.TestCase):
         # (Math.round(181.5) = 182, igual ao JS real do dashboard)
         self.assertIn('182 mm', html)
 
-        # cenário 17: nenhum erro JS no navegador para este fixture
-        # (exceto o bug pré-existente/fora de escopo documentado acima)
+        # cenário 17: nenhum erro JS no navegador para este fixture — o
+        # bug pré-existente do listener órfão (btn-download-template-full)
+        # foi corrigido separadamente (ENSO-UI); nenhum filtro necessário.
         self.assertEqual(out['consoleErrors'], [])
-        self.assertEqual(_erros_do_fix(out['pageErrors']), [])
+        self.assertEqual(out['pageErrors'], [])
 
     def test_12_nenhum_trimestre_completo_estado_vazio_sem_erro_js(self):
         sd = _sarimax_8(['01/27'], {   # nada do horizonte real cai aqui
@@ -203,7 +188,7 @@ class ComparativoRenderTestCase(unittest.TestCase):
         self.assertTrue(out['emptyStateVisible'], 'estado vazio deveria estar visível')
         self.assertFalse(out['canvasVisible'], 'canvas do gráfico deveria estar oculto')
         self.assertEqual(out['consoleErrors'], [])
-        self.assertEqual(_erros_do_fix(out['pageErrors']), [])
+        self.assertEqual(out['pageErrors'], [])
         # a probabilidade oficial continua na tabela mesmo com o gráfico vazio
         self.assertIn('100%', out['tbodyHTML'])
 
@@ -232,7 +217,7 @@ class ComparativoRenderTestCase(unittest.TestCase):
         for proibido in ('NaN', 'undefined', 'null%', 'mm mm', 'mm%'):
             self.assertNotIn(proibido, html, f'texto proibido "{proibido}" encontrado na tabela')
         self.assertEqual(out['consoleErrors'], [])
-        self.assertEqual(_erros_do_fix(out['pageErrors']), [])
+        self.assertEqual(out['pageErrors'], [])
 
     def _run_ok(self, fixture):
         try:

@@ -2746,9 +2746,13 @@ setTimeout(()=>{ buildFcCharts(); buildClimaCharts(); }, 0);
 
 
 
-document.getElementById('btn-download-template-full').addEventListener('click', ()=>{
-  downloadCSV(buildTemplateCSV(true), 'template_estacao_5anos.csv');
-});
+/* ENSO-UI: listener órfão removido — o botão #btn-download-template-full
+   não existe mais na marcação e buildTemplateCSV() nem chega a existir
+   neste arquivo; era uma instrução de nível superior (fora de qualquer
+   listener), então o TypeError que ela lançava interrompia TODO o
+   restante deste bloco <script>, inclusive initPersistence() (nunca
+   chamada) e a atualização dos rótulos [data-periodo] (nunca
+   executada) — nenhuma funcionalidade ativa dependia disto. */
 
 function downloadCSV(content, filename){
   const blob = new Blob([content], {type:'text/csv;charset=utf-8;'});
