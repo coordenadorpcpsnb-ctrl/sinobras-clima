@@ -5,12 +5,118 @@ Compartilhado por fetch_monthly_data.py e update_dashboard.py — não
 duplicar esta função nos dois scripts.
 """
 
+import math
 import urllib.request, json, calendar
+from datetime import datetime
+
 import pandas as pd
 
 # Centroide das 34 fazendas Sinobras — Norte do Tocantins
 FAZENDAS_LAT = -7.80
 FAZENDAS_LON = -47.95
+
+
+def _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim):
+    """Lista (ano,mes) de ano_ini/mes_ini até ano_fim/mes_fim, inclusive."""
+    meses, y, m = [], ano_ini, mes_ini
+    while (y, m) <= (ano_fim, mes_fim):
+        meses.append((y, m))
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return meses
+
+
+def _validar_e_agregar_dias_openmeteo(tempos, valores, ano_ini, mes_ini, ano_fim, mes_fim):
+    """
+    Mesma disciplina de `_chirps.py::_validar_e_agregar_dias` — um mês
+    só entra no resultado quando TODOS os dias do calendário têm
+    exatamente uma data válida com valor numérico finito e não
+    negativo. `daily.time` já vem como string ISO 'YYYY-MM-DD' (sem
+    ambiguidade de formato, ao contrário de `date` no ClimateSERV) no
+    fuso pedido na própria URL (America/Sao_Paulo) — não há conversão
+    de fuso a fazer aqui, o dia calendário já é o dia correto.
+
+    Nunca converte `None`/valor ausente em zero: só uma observação
+    numérica real (incluindo 0.0 legítimo) conta como dia coberto.
+
+    Uma data que não pode ser interpretada (`time` não é uma string
+    'YYYY-MM-DD' válida) não permite saber a qual mês o registro
+    pertenceria — poderia ser qualquer um dos meses da janela
+    solicitada (`ano_ini, mes_ini` a `ano_fim, mes_fim`). Por isso,
+    tratamento conservador: invalida TODOS os meses da janela, não só
+    os que já têm dias válidos acumulados (o mesmo registro poderia
+    pertencer a um mês ainda não visto).
+
+    Retorna DataFrame [ano, mes, prec] (sem a coluna 'fonte').
+    """
+    por_mes = {}            # (ano,mes) -> {dia: prec_valido}
+    meses_invalidados = set()
+    descartados_sem_identificacao = 0
+
+    for t_str, v in zip(tempos, valores):
+        try:
+            dt = datetime.strptime(str(t_str), '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            descartados_sem_identificacao += 1
+            continue
+
+        chave = (dt.year, dt.month)
+
+        if v is None:
+            meses_invalidados.add(chave)
+            print(f"  ⚠ Open-Meteo: {dt.isoformat()} sem observação "
+                  f"(precipitation_sum ausente/None) — mês invalidado, "
+                  f"fallback será tentado")
+            continue
+        try:
+            v_f = float(v)
+        except (TypeError, ValueError):
+            meses_invalidados.add(chave)
+            print(f"  ⚠ Open-Meteo: {dt.isoformat()} valor não numérico "
+                  f"({v!r}) — mês invalidado, fallback será tentado")
+            continue
+        if not math.isfinite(v_f):
+            meses_invalidados.add(chave)
+            print(f"  ⚠ Open-Meteo: {dt.isoformat()} valor não finito "
+                  f"(NaN/±inf: {v_f}) — mês invalidado, fallback será tentado")
+            continue
+        if v_f < 0:
+            meses_invalidados.add(chave)
+            print(f"  ⚠ Open-Meteo: {dt.isoformat()} valor negativo "
+                  f"(fisicamente inválido: {v_f}) — mês invalidado, "
+                  f"fallback será tentado")
+            continue
+
+        dias_do_mes = por_mes.setdefault(chave, {})
+        if dt.day in dias_do_mes:
+            meses_invalidados.add(chave)
+            print(f"  ⚠ Open-Meteo: {dt.isoformat()} duplicado — mês "
+                  f"invalidado, fallback será tentado")
+            continue
+        dias_do_mes[dt.day] = v_f
+
+    if descartados_sem_identificacao:
+        janela = _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim)
+        meses_invalidados.update(janela)
+        print(f"  ⚠ Open-Meteo: {descartados_sem_identificacao} data(s) sem identificação "
+              f"confiável (time não interpretável) — não é possível descartá-la(s) com "
+              f"segurança; TODOS os meses da janela solicitada ({mes_ini:02d}/{ano_ini} a "
+              f"{mes_fim:02d}/{ano_fim}) ficam indisponíveis nesta fonte, fallback será tentado")
+
+    linhas = []
+    for (ano, mes), dias_validos in por_mes.items():
+        if (ano, mes) in meses_invalidados:
+            continue
+        n_dias_mes = calendar.monthrange(ano, mes)[1]
+        if len(dias_validos) != n_dias_mes:
+            print(f"  ⚠ Open-Meteo: {mes:02d}/{ano} com cobertura incompleta "
+                  f"({len(dias_validos)}/{n_dias_mes} dias) — mês não aceito, "
+                  f"fallback será tentado")
+            continue
+        linhas.append({'ano': ano, 'mes': mes, 'prec': round(sum(dias_validos.values()), 1)})
+
+    return pd.DataFrame(linhas, columns=['ano', 'mes', 'prec'])
 
 
 def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
@@ -19,6 +125,13 @@ def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
     Pede o intervalo inteiro numa única requisição e agrupa por mês —
     várias chamadas em sequência para meses individuais esbarram no
     rate limit (HTTP 429) da API.
+
+    Valida cobertura diária completa (ver
+    `_validar_e_agregar_dias_openmeteo`) antes de aceitar qualquer
+    mês — um mês com dia ausente, duplicado ou valor
+    ausente/inválido/negativo simplesmente não aparece no resultado,
+    nunca é aceito com um total parcial ou com ausência convertida
+    em zero.
     """
     ultimo_dia = calendar.monthrange(ano_fim, mes_fim)[1]
     url = (
@@ -28,22 +141,23 @@ def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
         f"&end_date={ano_fim}-{mes_fim:02d}-{ultimo_dia:02d}"
         f"&daily=precipitation_sum&timezone=America%2FSao_Paulo"
     )
+    vazio = pd.DataFrame(columns=["ano", "mes", "prec", "fonte"])
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "sinobras-clima/1.0 (github-actions)"})
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read())
-        df = pd.DataFrame({
-            "data": pd.to_datetime(data["daily"]["time"]),
-            "prec": pd.to_numeric(pd.Series(data["daily"]["precipitation_sum"]),
-                                  errors="coerce").fillna(0),
-        })
-        df["ano"] = df["data"].dt.year
-        df["mes"] = df["data"].dt.month
-        mensal = df.groupby(["ano", "mes"])["prec"].sum().reset_index()
-        mensal["prec"]  = mensal["prec"].round(1)
+
+        tempos = data["daily"]["time"]
+        valores = data["daily"]["precipitation_sum"]
+        if len(tempos) != len(valores):
+            print(f"  ⚠ Open-Meteo: quantidade de datas ({len(tempos)}) difere da "
+                  f"quantidade de valores ({len(valores)}) — resposta rejeitada")
+            return vazio
+
+        mensal = _validar_e_agregar_dias_openmeteo(tempos, valores, ano_ini, mes_ini, ano_fim, mes_fim)
         mensal["fonte"] = "OpenMeteo-ERA5"
         return mensal
     except Exception as e:
         print(f"  ⚠ Open-Meteo indisponível: {e}")
-        return pd.DataFrame(columns=["ano", "mes", "prec", "fonte"])
+        return vazio

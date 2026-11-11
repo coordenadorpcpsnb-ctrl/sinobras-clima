@@ -8,11 +8,28 @@ viés desprezível contra as estações Sinobras (razão mediana 0,998 no
 período 1981-2025), contra 0,88 do Open-Meteo ERA5-Land. Julho é
 exceção conhecida em ambas as fontes — não tratado à parte (ver
 armadilha 7 para a justificativa).
+
+ENSO-COBERTURA (verificação real controlada, 06/2024, dataset 0/
+Average, mesma geometria de produção): o ClimateSERV devolve, em
+`result['data']` (caminho `memory_object`, sem nenhuma transformação
+da biblioteca — confirmado lendo climateserv==1.0.8 até o retorno),
+um registro por dia do mês pedido com `year`/`month`/`day` (inteiros
+separados — a identificação mais simples e segura possível),
+`date` (string confirmada no formato MM/DD/YYYY — ambíguo na
+documentação oficial, mas desambiguado aqui por triangulação direta
+com `day`) e `epochTime` (inteiro, confirmado sempre à meia-noite
+UTC na amostra real). `_validar_e_agregar_dias()` usa year/month/day
+como fonte primária de identificação do dia e usa date/epochTime
+só como confirmação cruzada — nunca como fonte primária, porque o
+formato/fuso desses dois campos não é garantido pela documentação
+oficial para todo dataset/geometria, só para a amostra verificada.
 """
 
+import math
 import time
 import tempfile
 import urllib.request
+from datetime import date as _date, datetime as _datetime, timezone as _timezone
 from pathlib import Path
 from calendar import monthrange
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -47,17 +64,226 @@ def _geometria_ponto(lat, lon, delta=0.01):
             [lon-delta, lat+delta]]
 
 
-def _buscar_prec_chirps_geom(ini, fim, geom, rotulo='CHIRPS'):
+def _dia_valido_no_calendario(ano, mes, dia):
+    """True se `dia` é um dia real de `mes`/`ano` (cobre fev. bissexto
+    e não bissexto, e meses de 28-31 dias) — nunca lança exceção."""
+    try:
+        return 1 <= dia <= monthrange(ano, mes)[1]
+    except Exception:
+        return False
+
+
+def _parse_date_mdy(date_str):
+    """Interpreta `date` no formato MM/DD/YYYY — confirmado por
+    verificação real controlada contra o ClimateSERV (06/2024, mesma
+    geometria de produção; ver cabeçalho do módulo). Retorna None se
+    não for parseável nesse formato exato ou se os componentes não
+    formarem uma data real — nunca lança exceção, nunca tenta outros
+    formatos (a amostra real não deixou ambiguidade para este
+    dataset/geometria; se outro produto do serviço um dia usar outro
+    formato, isso precisa ser verificado de novo, não assumido)."""
+    try:
+        m, d, y = (int(x) for x in str(date_str).split('/'))
+        return _date(y, m, d)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _parse_epoch_utc_date(epoch_val):
+    """Interpreta `epochTime` como segundos UTC desde a época Unix e
+    devolve a data (dia calendário) correspondente. Confirmado pela
+    mesma verificação real: os 30 registros de 06/2024 caem todos
+    exatamente em 00:00:00 UTC. Retorna None se não for interpretável
+    — nunca lança exceção."""
+    try:
+        return _datetime.fromtimestamp(int(epoch_val), tz=_timezone.utc).date()
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
+def _validar_registro_diario(r):
+    """
+    Valida UM registro diário bruto do ClimateSERV. Retorna
+    (ano, mes, dia, prec) se o registro for aceito, ou
+    (None, None, None, motivo) se for rejeitado.
+
+    Identificação do dia: `year`/`month`/`day` (inteiros separados,
+    confirmados presentes na amostra real) são a fonte PRIMÁRIA —
+    nunca `date` (string, formato só confirmado para esta amostra) nem
+    `epochTime` (fuso só confirmado para esta amostra) isoladamente.
+    Quando `date`/`epochTime` estão presentes, são usados só como
+    CONFIRMAÇÃO cruzada contra year/month/day: uma divergência entre
+    eles invalida o registro (nunca escolhe arbitrariamente qual
+    campo "está certo").
+
+    Nunca converte ausência em zero: `value.avg` None/ausente é
+    rejeitado, nunca torna-se 0.0. Nunca aceita NaN/infinito/negativo
+    (precipitação negativa é fisicamente impossível). Zero real
+    (`avg == 0.0`, campo presente e válido) é sempre aceito.
+    """
+    if not isinstance(r, dict):
+        return None, None, None, 'registro não é um dict'
+
+    ano, mes, dia = r.get('year'), r.get('month'), r.get('day')
+    if not (isinstance(ano, int) and isinstance(mes, int) and isinstance(dia, int)):
+        return None, None, None, 'year/month/day ausente(s) ou não inteiro(s)'
+    if not (1 <= mes <= 12):
+        return None, None, None, f'mês fora do calendário: {mes}'
+    if not _dia_valido_no_calendario(ano, mes, dia):
+        return None, None, None, f'dia fora do calendário de {mes:02d}/{ano}: {dia}'
+
+    dia_calendario = _date(ano, mes, dia)
+
+    if 'date' in r and r['date'] is not None:
+        data_lida = _parse_date_mdy(r['date'])
+        if data_lida is None or data_lida != dia_calendario:
+            return None, None, None, (
+                f"'date' ({r['date']!r}) inconsistente com year/month/day "
+                f"({dia_calendario.isoformat()})")
+
+    if 'epochTime' in r and r['epochTime'] is not None:
+        data_epoch = _parse_epoch_utc_date(r['epochTime'])
+        if data_epoch is None or data_epoch != dia_calendario:
+            return None, None, None, (
+                f"'epochTime' ({r['epochTime']!r}) inconsistente com year/month/day "
+                f"({dia_calendario.isoformat()})")
+
+    valor = r.get('value')
+    avg = valor.get('avg') if isinstance(valor, dict) else None
+    if avg is None:
+        return None, None, None, 'avg ausente/None — sem observação real nesse dia'
+    try:
+        avg_f = float(avg)
+    except (TypeError, ValueError):
+        return None, None, None, f'avg não numérico: {avg!r}'
+    if not math.isfinite(avg_f):
+        return None, None, None, f'avg não finito (NaN/±inf): {avg!r}'
+    if avg_f < 0:
+        return None, None, None, f'avg negativo (fisicamente inválido): {avg_f}'
+
+    return ano, mes, dia, avg_f
+
+
+def _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim):
+    """Lista (ano,mes) de ano_ini/mes_ini até ano_fim/mes_fim, inclusive."""
+    meses, y, m = [], ano_ini, mes_ini
+    while (y, m) <= (ano_fim, mes_fim):
+        meses.append((y, m))
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return meses
+
+
+def _validar_e_agregar_dias(registros, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='CHIRPS'):
+    """
+    Valida cada registro diário bruto e só aceita um mês (ano,mes) na
+    agregação final quando TODOS os dias do calendário desse mês têm
+    exatamente um registro válido — nenhum faltando, nenhum
+    duplicado, nenhuma inconsistência temporal, nenhum valor
+    ausente/inválido. Um mês que falhe qualquer critério fica
+    simplesmente FORA do resultado (mesma semântica já documentada
+    para "mês ainda não publicado") — nunca entra com um total
+    calculado sobre dias insuficientes, nem com registros
+    problemáticos descartados em silêncio para depois declarar
+    cobertura completa.
+
+    Registro com mês identificável (year/month presentes e válidos,
+    mesmo que day/date/epochTime/value tenham o problema) invalida
+    SÓ aquele mês.
+
+    Registro SEM identificação temporal confiável (year/month
+    ausentes ou não inteiros — não dá para saber a qual mês
+    pertenceria) recebe tratamento CONSERVADOR: nunca presumimos que
+    ele seja irrelevante só porque não conseguimos lê-lo. Como pode
+    pertencer a QUALQUER mês da janela efetivamente solicitada nesta
+    chamada (`ano_ini`/`mes_ini` a `ano_fim`/`mes_fim`), todos os
+    meses dessa janela são invalidados — não só os que já têm
+    registros válidos acumulados. Isso é deliberadamente mais
+    cauteloso que invalidar só os meses "vistos": um mês da janela
+    que ainda nem tivesse nenhum registro processado também fica de
+    fora, porque o registro não identificável poderia ser dele.
+    Efeito prático em janelas de vários meses (ex.: os blocos de
+    ~10 anos de backfill_chirps_historico.py): um único registro
+    corrompido/sem identificação em qualquer ponto da resposta
+    invalida a janela PEDIDA inteira nesta chamada — aceito como
+    o preço da cautela (nunca aceitar dado que pode estar mal
+    atribuído), nunca de volta ao histórico já persistido (esta
+    função só decide o que ENTRA no resultado desta chamada).
+
+    Retorna DataFrame [ano, mes, prec] (sem a coluna 'fonte' — quem
+    chama decide/sobrescreve, como já fazia antes desta correção).
+    """
+    por_mes = {}            # (ano,mes) -> {dia: prec_valido}
+    meses_invalidados = set()
+    descartados_sem_identificacao = 0
+
+    for r in registros:
+        ano, mes, dia, avg_ou_motivo = _validar_registro_diario(r)
+
+        if ano is None:
+            motivo = avg_ou_motivo
+            ano_r = r.get('year') if isinstance(r, dict) else None
+            mes_r = r.get('month') if isinstance(r, dict) else None
+            if isinstance(ano_r, int) and isinstance(mes_r, int) and 1 <= mes_r <= 12:
+                meses_invalidados.add((ano_r, mes_r))
+                print(f"  ⚠ CHIRPS ({rotulo}): registro de {mes_r:02d}/{ano_r} "
+                      f"rejeitado ({motivo}) — mês invalidado, fallback será tentado")
+            else:
+                descartados_sem_identificacao += 1
+            continue
+
+        chave = (ano, mes)
+        dias_do_mes = por_mes.setdefault(chave, {})
+        if dia in dias_do_mes:
+            meses_invalidados.add(chave)
+            print(f"  ⚠ CHIRPS ({rotulo}): dia {dia:02d}/{mes:02d}/{ano} duplicado "
+                  f"— mês invalidado, fallback será tentado")
+            continue
+        dias_do_mes[dia] = avg_ou_motivo
+
+    if descartados_sem_identificacao:
+        janela = _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim)
+        meses_invalidados.update(janela)
+        print(f"  ⚠ CHIRPS ({rotulo}): {descartados_sem_identificacao} registro(s) sem "
+              f"year/month identificável — não é possível descartá-lo(s) com segurança; "
+              f"TODOS os meses da janela solicitada ({mes_ini:02d}/{ano_ini} a "
+              f"{mes_fim:02d}/{ano_fim}) ficam indisponíveis nesta fonte, fallback será tentado")
+
+    linhas = []
+    for (ano, mes), dias_validos in por_mes.items():
+        if (ano, mes) in meses_invalidados:
+            continue
+        n_dias_mes = monthrange(ano, mes)[1]
+        if len(dias_validos) != n_dias_mes:
+            print(f"  ⚠ CHIRPS ({rotulo}): {mes:02d}/{ano} com cobertura incompleta "
+                  f"({len(dias_validos)}/{n_dias_mes} dias válidos) — mês não aceito, "
+                  f"fallback será tentado")
+            continue
+        linhas.append({'ano': ano, 'mes': mes, 'prec': round(sum(dias_validos.values()), 1)})
+
+    return pd.DataFrame(linhas, columns=['ano', 'mes', 'prec'])
+
+
+def _buscar_prec_chirps_geom(ini, fim, geom, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='CHIRPS'):
     """
     Núcleo comum: uma chamada ao ClimateSERV para um anel de polígono
     já pronto (`geom`, lista de [lon,lat]), com timeout limitado e
-    tratamento de resposta malformada. Usada tanto pelo ponto único
+    validação de cobertura temporal diária antes de aceitar qualquer
+    mês (ver `_validar_e_agregar_dias`). Usada tanto pelo ponto único
     (buscar_prec_chirps) quanto pela busca por grupo geográfico
     (buscar_prec_chirps_zonal) — não duplicar essa lógica.
 
+    `ano_ini, mes_ini, ano_fim, mes_fim` são os limites da janela
+    solicitada nesta chamada (não necessariamente os mesmos de `ini`/
+    `fim`, que já vêm formatados como string) — repassados a
+    `_validar_e_agregar_dias` para a invalidação conservadora de janela
+    inteira quando um registro não tiver year/month identificável.
+
     Retorna DataFrame [ano, mes, prec, fonte]. Meses sem publicação
-    ainda (CHIRPS tem alguns meses de defasagem) simplesmente não
-    aparecem no resultado — não vêm como zero.
+    ainda, ou com cobertura diária incompleta/duplicada/inconsistente,
+    simplesmente não aparecem no resultado — nunca vêm como zero nem
+    como um total calculado sobre dias insuficientes.
     """
     def _chamar():
         return api.request_data(0, 'Average', ini, fim, geom, '', '', 'memory_object')
@@ -88,30 +314,11 @@ def _buscar_prec_chirps_geom(ini, fim, geom, rotulo='CHIRPS'):
         print(f"  ⚠ CHIRPS ({rotulo}) indisponível: resposta vazia ou sem dados")
         return vazio
 
-    # Resposta malformada (chaves faltando, tipo inesperado) não pode
-    # derrubar o pipeline inteiro — vira fallback, como qualquer outra
-    # falha do CHIRPS.
+    # Resposta malformada de um jeito que a validação não previu (ex.:
+    # result['data'] não é uma lista) não pode derrubar o pipeline
+    # inteiro — vira fallback, como qualquer outra falha do CHIRPS.
     try:
-        # Achado de auditoria (5ª rodada, ajuste final, 2026; ver
-        # docs/nmme-fase2c2-auditoria-chirps-sinobras.md e
-        # tests/test_chirps_extracao_sintetica.py) — CONFIRMADO, não
-        # corrigido aqui (correção de comportamento de produção exige
-        # apresentação prévia de impacto, fora do escopo desta
-        # auditoria): `(r.get('value') or {}).get('avg') or 0.0` trata
-        # um dia SEM DADO (avg ausente ou None) EXATAMENTE como um dia
-        # de chuva real ZERO — as duas situações produzem o mesmo
-        # valor, sem nenhum sinal de qual ocorreu. Viola o princípio já
-        # aplicado a TSA/PDO em CLAUDE.md armadilha 6 ("0.0 é uma
-        # afirmação, não um vazio"). Some-se a isso: a agregação abaixo
-        # não exige cobertura mínima de dias no mês, e dias omitidos
-        # inteiramente da resposta (nem sequer como None) também não
-        # contam — dois modos distintos de incompletude silenciosa.
-        df = pd.DataFrame([{
-            'ano': r['year'], 'mes': r['month'],
-            'prec': (r.get('value') or {}).get('avg') or 0.0,
-        } for r in result['data']])
-        mensal = df.groupby(['ano', 'mes'])['prec'].sum().reset_index()
-        mensal['prec']  = mensal['prec'].round(1)
+        mensal = _validar_e_agregar_dias(result['data'], ano_ini, mes_ini, ano_fim, mes_fim, rotulo=rotulo)
         mensal['fonte'] = 'CHIRPS'
         return mensal
     except Exception as e:
@@ -134,7 +341,7 @@ def buscar_prec_chirps(ano_ini, mes_ini, ano_fim, mes_fim):
     ini = f'{mes_ini:02d}/01/{ano_ini}'
     fim = f'{mes_fim:02d}/{ultimo_dia:02d}/{ano_fim}'
     geom = _geometria_ponto(FAZENDAS_LAT, FAZENDAS_LON)
-    return _buscar_prec_chirps_geom(ini, fim, geom, rotulo='ponto único')
+    return _buscar_prec_chirps_geom(ini, fim, geom, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='ponto único')
 
 
 def buscar_prec_chirps_zonal(ano_ini, mes_ini, ano_fim, mes_fim):
@@ -162,7 +369,7 @@ def buscar_prec_chirps_zonal(ano_ini, mes_ini, ano_fim, mes_fim):
     if erro_pct:
         print(f"  ℹ CHIRPS zonal: anel simplificado, erro de área {erro_pct:.2f}%")
 
-    resultado = _buscar_prec_chirps_geom(ini, fim, anel, rotulo='envelope fazendas')
+    resultado = _buscar_prec_chirps_geom(ini, fim, anel, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='envelope fazendas')
     if not resultado.empty:
         resultado['fonte'] = 'CHIRPS-zonal'
     return resultado

@@ -541,12 +541,47 @@ class NuncaModificaPipelineOperacionalTestCase(unittest.TestCase):
         self.assertNotIn('import _chirps\n', codigo)
         self.assertNotIn('from _chirps import', codigo)
 
-    def test_b_chirps_py_nao_foi_modificado_por_esta_tarefa(self):
-        """Confirma que a versão de scripts/_chirps.py neste checkout
-        ainda contém o comentário de auditoria da rodada anterior
-        (Fase 2C.2, ajuste final) — sinal de que não foi tocado aqui."""
-        codigo = (ROOT / 'scripts' / '_chirps.py').read_text()
-        self.assertIn('Achado de auditoria', codigo)
+    def test_b_chirps_py_mantem_contrato_operacional_independente_do_v3(self):
+        """Substitui a verificação textual frágil (comentário literal,
+        que quebra a cada edição legítima de _chirps.py) por uma
+        verificação de CONTRATO e separação arquitetural:
+
+        1. As funções públicas do pipeline operacional (v2) continuam
+           existindo com a mesma assinatura esperada pelos chamadores
+           reais (fetch_monthly_data.py, update_dashboard.py).
+        2. buscar_prec_chirps() de fato invoca o caminho operacional
+           real (climateserv.api.request_data), não um stub.
+        3. _chirps.py não importa nem referencia _chirps_v3 — nenhuma
+           dependência cruzada nova entre os dois pipelines.
+
+        Isso é estável sob qualquer edição legítima de _chirps.py
+        (como a correção de cobertura temporal desta fase) e só falha
+        se a independência real entre v2 e v3 for violada."""
+        import importlib
+        import inspect
+
+        chirps_v2 = importlib.import_module('_chirps')
+
+        for nome in ('buscar_prec_chirps', 'buscar_prec_chirps_zonal'):
+            fn = getattr(chirps_v2, nome, None)
+            self.assertIsNotNone(fn, f"{nome} deixou de existir em _chirps.py")
+            self.assertEqual(
+                list(inspect.signature(fn).parameters),
+                ['ano_ini', 'mes_ini', 'ano_fim', 'mes_fim'],
+                f"{nome} mudou de assinatura — consumidores reais dependem dela")
+
+        self.assertTrue(callable(getattr(chirps_v2, 'buscar_prec_chc_preliminar_zonal', None)))
+
+        chamou = []
+        with patch.object(chirps_v2.api, 'request_data',
+                           side_effect=lambda *a, **k: (chamou.append(1), {'data': []})[1]):
+            chirps_v2.buscar_prec_chirps(2024, 1, 2024, 1)
+        self.assertTrue(chamou, "buscar_prec_chirps() deixou de usar "
+                                 "climateserv.api.request_data como caminho operacional real")
+
+        codigo_v2 = (ROOT / 'scripts' / '_chirps.py').read_text()
+        self.assertNotIn('import _chirps_v3', codigo_v2)
+        self.assertNotIn('from _chirps_v3 import', codigo_v2)
 
     def test_c_nunca_baixa_o_raster_inteiro_para_disco(self):
         """Só HEAD (identificação) + /vsicurl/ (range-request via

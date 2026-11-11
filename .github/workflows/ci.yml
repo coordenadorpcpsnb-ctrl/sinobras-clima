@@ -61,7 +61,8 @@ jobs:
           python -m unittest -v \
             tests.test_update_indices \
             tests.test_update_indices_enso_auto \
-            tests.test_fetch_fallback
+            tests.test_fetch_fallback \
+            tests.test_cobertura_temporal_precipitacao
 
       - name: Sumário
         if: always()
