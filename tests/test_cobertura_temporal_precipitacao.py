@@ -177,6 +177,34 @@ class OpenMeteoCoberturaCompletaTestCase(unittest.TestCase):
         self.assertEqual(resultado[(2024, 6)], round(2.0 * 30, 1))
         self.assertNotIn((2024, 7), resultado, "julho com 30/31 dias não deve aparecer")
 
+    def test_data_sem_identificacao_invalida_a_janela_solicitada(self):
+        """`time` com uma string não interpretável como 'YYYY-MM-DD'
+        (análogo ao registro CHIRPS sem year/month) não permite saber
+        a qual mês pertenceria — tratamento conservador: TODA a janela
+        solicitada (aqui, um único mês) fica indisponível, mesmo que
+        o mês em si seja 100% completo e correto."""
+        payload = _openmeteo_payload(2024, 6, 5.0)
+        payload['daily']['time'].append('data-invalida')
+        payload['daily']['precipitation_sum'].append(999.0)
+        df = self._rodar(payload, 2024, 6)
+        self.assertTrue(df.empty, "mês deveria ficar indisponível, não aceito "
+                                   "com total parcial")
+
+    def test_data_sem_identificacao_invalida_todos_os_meses_da_janela_multipla(self):
+        """Mesmo cenário, mas pedido abrangendo 2 meses completos
+        (junho e julho) com uma data não interpretável misturada na
+        resposta — como ela poderia pertencer a qualquer um dos meses
+        pedidos, a invalidação atinge os 2, não só aquele onde ela
+        apareceria na lista."""
+        junho = _openmeteo_payload(2024, 6, 2.0)
+        julho = _openmeteo_payload(2024, 7, 3.0)
+        tempos = junho['daily']['time'] + julho['daily']['time'] + ['data-invalida']
+        valores = junho['daily']['precipitation_sum'] + julho['daily']['precipitation_sum'] + [999.0]
+        payload = {'daily': {'time': tempos, 'precipitation_sum': valores}}
+        df = self._rodar(payload, 2024, 6, 2024, 7)
+        self.assertTrue(df.empty, "data sem identificação deve invalidar TODOS os "
+                                   "meses da janela solicitada")
+
 
 # ══════════════════════════════════════════════════════════════════
 # Integração ponta a ponta: cascata CHIRPS → CHC-Preliminar → Open-Meteo

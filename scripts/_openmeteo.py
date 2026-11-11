@@ -16,7 +16,18 @@ FAZENDAS_LAT = -7.80
 FAZENDAS_LON = -47.95
 
 
-def _validar_e_agregar_dias_openmeteo(tempos, valores):
+def _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim):
+    """Lista (ano,mes) de ano_ini/mes_ini até ano_fim/mes_fim, inclusive."""
+    meses, y, m = [], ano_ini, mes_ini
+    while (y, m) <= (ano_fim, mes_fim):
+        meses.append((y, m))
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return meses
+
+
+def _validar_e_agregar_dias_openmeteo(tempos, valores, ano_ini, mes_ini, ano_fim, mes_fim):
     """
     Mesma disciplina de `_chirps.py::_validar_e_agregar_dias` — um mês
     só entra no resultado quando TODOS os dias do calendário têm
@@ -28,6 +39,14 @@ def _validar_e_agregar_dias_openmeteo(tempos, valores):
 
     Nunca converte `None`/valor ausente em zero: só uma observação
     numérica real (incluindo 0.0 legítimo) conta como dia coberto.
+
+    Uma data que não pode ser interpretada (`time` não é uma string
+    'YYYY-MM-DD' válida) não permite saber a qual mês o registro
+    pertenceria — poderia ser qualquer um dos meses da janela
+    solicitada (`ano_ini, mes_ini` a `ano_fim, mes_fim`). Por isso,
+    tratamento conservador: invalida TODOS os meses da janela, não só
+    os que já têm dias válidos acumulados (o mesmo registro poderia
+    pertencer a um mês ainda não visto).
 
     Retorna DataFrame [ano, mes, prec] (sem a coluna 'fonte').
     """
@@ -78,8 +97,12 @@ def _validar_e_agregar_dias_openmeteo(tempos, valores):
         dias_do_mes[dt.day] = v_f
 
     if descartados_sem_identificacao:
-        print(f"  ⚠ Open-Meteo: {descartados_sem_identificacao} data(s) inválida(s) "
-              f"descartada(s), sem afetar nenhum mês específico")
+        janela = _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim)
+        meses_invalidados.update(janela)
+        print(f"  ⚠ Open-Meteo: {descartados_sem_identificacao} data(s) sem identificação "
+              f"confiável (time não interpretável) — não é possível descartá-la(s) com "
+              f"segurança; TODOS os meses da janela solicitada ({mes_ini:02d}/{ano_ini} a "
+              f"{mes_fim:02d}/{ano_fim}) ficam indisponíveis nesta fonte, fallback será tentado")
 
     linhas = []
     for (ano, mes), dias_validos in por_mes.items():
@@ -132,7 +155,7 @@ def buscar_prec_openmeteo(ano_ini, mes_ini, ano_fim, mes_fim):
                   f"quantidade de valores ({len(valores)}) — resposta rejeitada")
             return vazio
 
-        mensal = _validar_e_agregar_dias_openmeteo(tempos, valores)
+        mensal = _validar_e_agregar_dias_openmeteo(tempos, valores, ano_ini, mes_ini, ano_fim, mes_fim)
         mensal["fonte"] = "OpenMeteo-ERA5"
         return mensal
     except Exception as e:

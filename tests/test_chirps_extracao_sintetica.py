@@ -275,18 +275,40 @@ class CoberturaDiariaCompletaExigidaTestCase(unittest.TestCase):
             df = _chirps.buscar_prec_chirps(2024, 6, 2024, 6)
         self.assertTrue(df.empty)
 
-    def test_registro_sem_year_month_identificavel_nao_afeta_mes_valido(self):
+    def test_registro_sem_year_month_identificavel_invalida_a_janela_solicitada(self):
         """Um registro sem year/month (não dá para saber a qual mês
-        pertenceria) é descartado sem invalidar nenhum mês específico
-        — tratamento conservador documentado em
-        _chirps.py::_validar_e_agregar_dias. O mês real continua
-        sendo aceito normalmente."""
+        pertenceria, dentre os da janela solicitada) é tratado de
+        forma conservadora: NÃO se presume que ele seja irrelevante.
+        Como poderia pertencer a qualquer mês da janela pedida, TODA a
+        janela solicitada nesta chamada fica indisponível nesta fonte
+        — mesmo um mês, de resto, 100% completo — acionando o
+        fallback (CHIRPS-Preliminar → Open-Meteo) em vez de aceitar um
+        total potencialmente incompleto. Ver
+        _chirps.py::_validar_e_agregar_dias / _meses_da_janela."""
         dias = _mes_completo(2024, 6, 5.0)
         dias.append({'value': {'avg': 999.0}})   # sem year/month/day
         with patch.object(_chirps.api, 'request_data', return_value=_resposta_com_dias(dias)):
             df = _chirps.buscar_prec_chirps(2024, 6, 2024, 6)
-        self.assertEqual(len(df), 1)
-        self.assertEqual(df.iloc[0]['prec'], round(5.0 * 30, 1))
+        self.assertTrue(df.empty, "mês deveria ficar indisponível, não aceito "
+                                   "com total parcial")
+
+    def test_registro_sem_year_month_identificavel_invalida_todos_os_meses_da_janela_multipla(self):
+        """Mesmo cenário, mas pedido abrangendo 3 meses (junho a
+        agosto): junho e agosto são 100% completos, só o registro sem
+        year/month está misturado na resposta. Como ele poderia
+        pertencer a QUALQUER um dos 3 meses pedidos — inclusive um que
+        já tenha dias válidos acumulados — a invalidação atinge os 3,
+        não só "o mês onde o registro apareceu" (não há como saber
+        qual seria, já que ele não tem year/month)."""
+        junho = _mes_completo(2024, 6, 2.0)
+        agosto = _mes_completo(2024, 8, 4.0)
+        sem_identificacao = [{'value': {'avg': 999.0}}]   # sem year/month/day
+        todos = junho + agosto + sem_identificacao
+        with patch.object(_chirps.api, 'request_data', return_value=_resposta_com_dias(todos)):
+            df = _chirps.buscar_prec_chirps(2024, 6, 2024, 8)
+        self.assertTrue(df.empty, "registro sem identificação temporal deve invalidar "
+                                   "TODOS os meses da janela solicitada, não só os que já "
+                                   "tinham dias válidos acumulados")
 
     def test_intervalo_com_varios_meses_alguns_completos_outros_nao(self):
         """Pedido de 3 meses: junho completo, julho com 1 dia faltando,

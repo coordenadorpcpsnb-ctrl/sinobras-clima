@@ -164,7 +164,18 @@ def _validar_registro_diario(r):
     return ano, mes, dia, avg_f
 
 
-def _validar_e_agregar_dias(registros, rotulo='CHIRPS'):
+def _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim):
+    """Lista (ano,mes) de ano_ini/mes_ini até ano_fim/mes_fim, inclusive."""
+    meses, y, m = [], ano_ini, mes_ini
+    while (y, m) <= (ano_fim, mes_fim):
+        meses.append((y, m))
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return meses
+
+
+def _validar_e_agregar_dias(registros, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='CHIRPS'):
     """
     Valida cada registro diário bruto e só aceita um mês (ano,mes) na
     agregação final quando TODOS os dias do calendário desse mês têm
@@ -177,11 +188,28 @@ def _validar_e_agregar_dias(registros, rotulo='CHIRPS'):
     problemáticos descartados em silêncio para depois declarar
     cobertura completa.
 
-    Registros sem year/month identificável (não dá para saber a qual
-    mês pertenceriam) são tratamento conservador: DESCARTADOS da
-    agregação sem invalidar nenhum mês específico — não sabemos qual
-    mês penalizar, então nenhum é penalizado por eles; são só
-    reportados via log, nunca silenciados por completo.
+    Registro com mês identificável (year/month presentes e válidos,
+    mesmo que day/date/epochTime/value tenham o problema) invalida
+    SÓ aquele mês.
+
+    Registro SEM identificação temporal confiável (year/month
+    ausentes ou não inteiros — não dá para saber a qual mês
+    pertenceria) recebe tratamento CONSERVADOR: nunca presumimos que
+    ele seja irrelevante só porque não conseguimos lê-lo. Como pode
+    pertencer a QUALQUER mês da janela efetivamente solicitada nesta
+    chamada (`ano_ini`/`mes_ini` a `ano_fim`/`mes_fim`), todos os
+    meses dessa janela são invalidados — não só os que já têm
+    registros válidos acumulados. Isso é deliberadamente mais
+    cauteloso que invalidar só os meses "vistos": um mês da janela
+    que ainda nem tivesse nenhum registro processado também fica de
+    fora, porque o registro não identificável poderia ser dele.
+    Efeito prático em janelas de vários meses (ex.: os blocos de
+    ~10 anos de backfill_chirps_historico.py): um único registro
+    corrompido/sem identificação em qualquer ponto da resposta
+    invalida a janela PEDIDA inteira nesta chamada — aceito como
+    o preço da cautela (nunca aceitar dado que pode estar mal
+    atribuído), nunca de volta ao histórico já persistido (esta
+    função só decide o que ENTRA no resultado desta chamada).
 
     Retorna DataFrame [ano, mes, prec] (sem a coluna 'fonte' — quem
     chama decide/sobrescreve, como já fazia antes desta correção).
@@ -215,8 +243,12 @@ def _validar_e_agregar_dias(registros, rotulo='CHIRPS'):
         dias_do_mes[dia] = avg_ou_motivo
 
     if descartados_sem_identificacao:
-        print(f"  ⚠ CHIRPS ({rotulo}): {descartados_sem_identificacao} registro(s) "
-              f"sem year/month identificável — descartado(s) sem afetar nenhum mês específico")
+        janela = _meses_da_janela(ano_ini, mes_ini, ano_fim, mes_fim)
+        meses_invalidados.update(janela)
+        print(f"  ⚠ CHIRPS ({rotulo}): {descartados_sem_identificacao} registro(s) sem "
+              f"year/month identificável — não é possível descartá-lo(s) com segurança; "
+              f"TODOS os meses da janela solicitada ({mes_ini:02d}/{ano_ini} a "
+              f"{mes_fim:02d}/{ano_fim}) ficam indisponíveis nesta fonte, fallback será tentado")
 
     linhas = []
     for (ano, mes), dias_validos in por_mes.items():
@@ -233,7 +265,7 @@ def _validar_e_agregar_dias(registros, rotulo='CHIRPS'):
     return pd.DataFrame(linhas, columns=['ano', 'mes', 'prec'])
 
 
-def _buscar_prec_chirps_geom(ini, fim, geom, rotulo='CHIRPS'):
+def _buscar_prec_chirps_geom(ini, fim, geom, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='CHIRPS'):
     """
     Núcleo comum: uma chamada ao ClimateSERV para um anel de polígono
     já pronto (`geom`, lista de [lon,lat]), com timeout limitado e
@@ -241,6 +273,12 @@ def _buscar_prec_chirps_geom(ini, fim, geom, rotulo='CHIRPS'):
     mês (ver `_validar_e_agregar_dias`). Usada tanto pelo ponto único
     (buscar_prec_chirps) quanto pela busca por grupo geográfico
     (buscar_prec_chirps_zonal) — não duplicar essa lógica.
+
+    `ano_ini, mes_ini, ano_fim, mes_fim` são os limites da janela
+    solicitada nesta chamada (não necessariamente os mesmos de `ini`/
+    `fim`, que já vêm formatados como string) — repassados a
+    `_validar_e_agregar_dias` para a invalidação conservadora de janela
+    inteira quando um registro não tiver year/month identificável.
 
     Retorna DataFrame [ano, mes, prec, fonte]. Meses sem publicação
     ainda, ou com cobertura diária incompleta/duplicada/inconsistente,
@@ -280,7 +318,7 @@ def _buscar_prec_chirps_geom(ini, fim, geom, rotulo='CHIRPS'):
     # result['data'] não é uma lista) não pode derrubar o pipeline
     # inteiro — vira fallback, como qualquer outra falha do CHIRPS.
     try:
-        mensal = _validar_e_agregar_dias(result['data'], rotulo=rotulo)
+        mensal = _validar_e_agregar_dias(result['data'], ano_ini, mes_ini, ano_fim, mes_fim, rotulo=rotulo)
         mensal['fonte'] = 'CHIRPS'
         return mensal
     except Exception as e:
@@ -303,7 +341,7 @@ def buscar_prec_chirps(ano_ini, mes_ini, ano_fim, mes_fim):
     ini = f'{mes_ini:02d}/01/{ano_ini}'
     fim = f'{mes_fim:02d}/{ultimo_dia:02d}/{ano_fim}'
     geom = _geometria_ponto(FAZENDAS_LAT, FAZENDAS_LON)
-    return _buscar_prec_chirps_geom(ini, fim, geom, rotulo='ponto único')
+    return _buscar_prec_chirps_geom(ini, fim, geom, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='ponto único')
 
 
 def buscar_prec_chirps_zonal(ano_ini, mes_ini, ano_fim, mes_fim):
@@ -331,7 +369,7 @@ def buscar_prec_chirps_zonal(ano_ini, mes_ini, ano_fim, mes_fim):
     if erro_pct:
         print(f"  ℹ CHIRPS zonal: anel simplificado, erro de área {erro_pct:.2f}%")
 
-    resultado = _buscar_prec_chirps_geom(ini, fim, anel, rotulo='envelope fazendas')
+    resultado = _buscar_prec_chirps_geom(ini, fim, anel, ano_ini, mes_ini, ano_fim, mes_fim, rotulo='envelope fazendas')
     if not resultado.empty:
         resultado['fonte'] = 'CHIRPS-zonal'
     return resultado
