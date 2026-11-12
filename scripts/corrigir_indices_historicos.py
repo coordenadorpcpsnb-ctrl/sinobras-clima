@@ -11,10 +11,11 @@ serie_subst.csv no ciclo de 21/11 — esse lag vem de jul/ago já
 gravados em serie_subst.csv. Por isso o plano cobre as duas pontas.
 
 Uso:
-    python scripts/corrigir_indices_historicos.py               # dry-run (padrão)
-    python scripts/corrigir_indices_historicos.py --dry-run     # idem, explícito
-    python scripts/corrigir_indices_historicos.py --aplicar     # escreve de fato
-    python scripts/corrigir_indices_historicos.py --rollback    # restaura do .bak mais recente
+    python scripts/corrigir_indices_historicos.py                  # dry-run (padrão)
+    python scripts/corrigir_indices_historicos.py --dry-run        # idem, explícito
+    python scripts/corrigir_indices_historicos.py --aplicar        # escreve de fato
+    python scripts/corrigir_indices_historicos.py --rollback       # reverte a última transação concluída
+    python scripts/corrigir_indices_historicos.py --recuperar-falha  # recupera uma transação INCOMPLETA
 
 Design (pedidos explícitos da revisão externa):
   - PLANO é uma lista FECHADA de células — o script só sabe iterar
@@ -33,17 +34,25 @@ Design (pedidos explícitos da revisão externa):
     indisponível), a célula de outubro é removida do plano por
     precaução e sinalizada para revisão manual — nunca aplicada às
     cegas.
-  - Backup .bak timestamped antes de qualquer escrita real; rollback
-    verifica hash SHA-256 contra o backup.
-  - Escrita e proveniência são preparadas e validadas ANTES de
-    qualquer substituição real do arquivo em disco — se a validação
-    falhar para qualquer um dos dois, nenhum dos dois é escrito
-    (nunca um arquivo atualizado sem o outro).
+  - Fase ENSO-INTEGRIDADE 3A.3 (recuperação pós-falha): os dois CSVs
+    E a proveniência são preparados e validados em memória ANTES de
+    qualquer substituição real; backup de TODOS os três (proveniência
+    só se já existia — a ausência prévia é registrada, não perdida)
+    antes de qualquer escrita; substituição real registrada passo a
+    passo num manifesto, nunca apagado se a transação falhar no meio
+    — `recuperar_falha()` usa esse manifesto para restaurar o conjunto
+    completo e é idempotente (no-op se não houver transação pendente).
+    `rollback()` agora também restaura (ou remove, se nunca existiu) a
+    proveniência, usando o manifesto da última transação concluída.
+    Cada os.replace() individual é atômico; o CONJUNTO dos três
+    arquivos nunca é tratado como se fosse — é exatamente por isso que
+    o manifesto e a recuperação existem.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import shutil
 import sys
 import urllib.request
@@ -66,6 +75,107 @@ SUBST_PATH = ROOT / 'data' / 'serie_subst.csv'
 
 COLUNA_POR_ARQUIVO = {'master_monthly.csv': ('year', 'month'),
                       'serie_subst.csv': ('ano', 'mes')}
+
+# ══════════════════════════════════════════════════════════════════
+# Recuperação pós-falha (Fase ENSO-INTEGRIDADE 3A.3) — manifesto
+# ══════════════════════════════════════════════════════════════════
+# IMPORTANTE: cada os.replace() individual (um por arquivo) É atômico
+# na mesma partição — mas isso NÃO torna a operação como um todo
+# atômica entre os três arquivos (master_monthly.csv, serie_subst.csv
+# e a proveniência). Se o processo morrer entre duas substituições, o
+# conjunto fica num estado intermediário real no disco. O manifesto
+# abaixo não finge que essa janela não existe: ele registra, passo a
+# passo, o que já foi de fato substituído, para que uma falha deixe
+# rastro verificável e recuperável — nunca um estado "ou tudo ou
+# nada" automático (isso exigiria um mecanismo transacional que este
+# projeto não tem e não finge ter).
+MANIFESTO_NOME = '.corrigir_indices_historicos.ativo.json'
+
+
+def _manifesto_path(caminhos):
+    return Path(caminhos['master_monthly.csv']).parent / MANIFESTO_NOME
+
+
+def _ler_manifesto(caminhos):
+    p = _manifesto_path(caminhos)
+    if not p.exists():
+        return None
+    return json.loads(p.read_text(encoding='utf-8'))
+
+
+def _escrever_manifesto(caminhos, dados):
+    p = _manifesto_path(caminhos)
+    p.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def _remover_manifesto(caminhos):
+    p = _manifesto_path(caminhos)
+    if p.exists():
+        p.unlink()
+
+
+def _arquivar_manifesto_concluido(caminhos, dados):
+    """Em vez de apagar o manifesto de uma transação concluída com
+    sucesso, arquiva-o com nome timestamped — histórico necessário
+    para que um rollback() manual, feito bem depois, ainda saiba se a
+    proveniência existia antes daquela correção (sem isso, perder o
+    manifesto perde a única forma confiável de saber se deve restaurar
+    ou simplesmente apagar a proveniência numa reversão manual)."""
+    ativo = _manifesto_path(caminhos)
+    ts = dados['concluido_em'].replace(':', '-')
+    historico = ativo.with_name(f'.corrigir_indices_historicos.{ts}.concluido.json')
+    historico.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding='utf-8')
+    if ativo.exists():
+        ativo.unlink()
+    return historico
+
+
+def _historico_mais_recente(caminhos):
+    base = _manifesto_path(caminhos).parent
+    candidatos = sorted(base.glob('.corrigir_indices_historicos.*.concluido.json'))
+    if not candidatos:
+        return None
+    return json.loads(candidatos[-1].read_text(encoding='utf-8'))
+
+
+def _substituir(tmp, destino):
+    """Ponto único de substituição real (os.replace via Path.replace)
+    — isolado numa função própria só para que testes de injeção de
+    falha possam patchear exatamente este choke point, sem precisar
+    mockar Path.replace globalmente (o que afetaria código não
+    relacionado)."""
+    tmp.replace(destino)
+
+
+def _restaurar_pelo_manifesto(manifesto, caminhos):
+    """
+    Restaura o conjunto completo (os CSVs tocados + a proveniência) a
+    partir dos backups registrados em `manifesto`, verificando hash
+    após cada restauração. Usado tanto pela recuperação pós-falha
+    (manifesto ainda ativo) quanto pelo rollback manual (manifesto
+    arquivado de uma transação já concluída). Preserva a distinção
+    entre "proveniência não existia antes" (remove, nunca deixa um
+    arquivo criado por esta ferramenta sobrar após a reversão) e
+    "proveniência existia com outro conteúdo" (restaura do backup).
+    """
+    resultado = {}
+    for arquivo, info in manifesto['arquivos'].items():
+        caminho = Path(info['caminho'])
+        if arquivo == '_proveniencia' and not info.get('existia_antes', True):
+            if caminho.exists():
+                caminho.unlink()
+            resultado[arquivo] = {'restaurado': True, 'acao': 'removido (não existia antes da transação)'}
+            continue
+        backup = info.get('backup')
+        if not backup or not Path(backup).exists():
+            resultado[arquivo] = {'restaurado': False, 'motivo': 'backup ausente ou não encontrado'}
+            continue
+        shutil.copy2(backup, caminho)
+        hash_depois = sha256_arquivo(caminho)
+        resultado[arquivo] = {'restaurado': hash_depois == info.get('hash_antes'),
+                               'backup_usado': str(backup), 'hash_esperado': info.get('hash_antes'),
+                               'hash_obtido': hash_depois}
+    return resultado
 
 # ══════════════════════════════════════════════════════════════════
 # Plano fechado — Fase 2 revisada / Fase 3A
@@ -242,20 +352,57 @@ def aplicar(plano, caminhos=None, confirmar_outubro_mensagem=None):
     aponta para os arquivos REAIS do repositório — em teste, SEMPRE
     sobrescrever com cópias isoladas em tmpdir.
 
-    Passos (nessa ordem, nunca escreve o arquivo real antes de validar
-    tudo): avaliar cada célula -> abortar tudo se qualquer uma for
-    'inesperado' ou 'linha_ausente' -> para cada arquivo tocado,
-    backup .bak -> escrever em .tmp -> validar .tmp por texto (só a(s)
-    coluna(s) certa(s) mudou(aram)) -> só then os.replace -> registrar
-    proveniência -> checar consistência final.
+    Passos, nesta ordem — nenhum arquivo REAL é tocado antes de TODO o
+    conteúdo novo (dos dois CSVs e da proveniência) estar preparado e
+    validado em memória:
+      1. avaliar cada célula -> abortar tudo se qualquer uma for
+         'inesperado' ou 'linha_ausente' (nenhum arquivo tocado).
+      2. se não há pendentes -> idempotente, nenhum arquivo tocado.
+      3. se já existe um manifesto de transação incompleta (uma
+         chamada anterior falhou no meio) -> abortar e instruir a
+         chamar recuperar_falha() primeiro — nunca tentar aplicar por
+         cima de um estado não resolvido.
+      4. preparar o texto novo dos CSVs tocados + o texto novo da
+         proveniência (via prov.preparar_lote/renderizar_texto, SEM
+         escrever nada) e validar tudo (_validar_so_coluna_alvo_mudou
+         para os CSVs); qualquer falha aqui não deixa rastro em disco.
+      5. backup de TODOS os arquivos tocados (os dois CSVs SEMPRE; a
+         proveniência só se já existia — a ausência prévia é
+         registrada explicitamente no manifesto, nunca perdida) ANTES
+         de qualquer substituição real; grava o manifesto com o que
+         foi preparado.
+      6. substituir os arquivos reais, um a um, atualizando o
+         manifesto a cada substituição concluída — uma falha aqui
+         deixa o manifesto registrando exatamente o que já foi
+         substituído, nunca um estado invisível.
+      7. verificação final: hash de cada arquivo contra o esperado +
+         prov.verificar_consistencia() (com as células recém-escritas
+         marcadas como `indices_obrigatorios` — a proveniência dessas
+         células específicas É obrigatória, por serem uma escrita
+         nova do próprio mecanismo ENSO-INTEGRIDADE).
+      8. manifesto arquivado (não apagado) como histórico — necessário
+         para que um rollback() manual, feito bem depois, ainda saiba
+         se deve restaurar ou remover a proveniência.
 
-    Devolve um relatório dict; nunca deixa um arquivo parcialmente
-    escrito (se a validação falhar para qualquer arquivo, nenhum dos
-    arquivos tocados nesta chamada é substituído).
+    Nunca afirma atomicidade transacional entre os três arquivos — só
+    porque cada substituição individual (os.replace) é atômica não
+    significa que o CONJUNTO é; é exatamente por isso que o manifesto
+    e recuperar_falha() existem.
     """
     caminhos = caminhos or {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
-    prov_path = caminhos.get('_proveniencia') or (
-        Path(caminhos['master_monthly.csv']).parent / 'indices_proveniencia.csv')
+    prov_path = Path(caminhos.get('_proveniencia') or (
+        Path(caminhos['master_monthly.csv']).parent / 'indices_proveniencia.csv'))
+
+    # Checado ANTES de tudo, inclusive do caminho idempotente — uma
+    # transação incompleta anterior precisa ser resolvida mesmo que,
+    # por coincidência, todas as células do plano atual já estejam no
+    # valor novo (o que não garante que a proveniência/manifesto
+    # daquela transação tenham sido corretamente arquivados).
+    manifesto_pendente = _ler_manifesto(caminhos)
+    if manifesto_pendente is not None:
+        return {'aplicado': False, 'motivo': 'transacao_anterior_incompleta_detectada',
+                'manifesto': manifesto_pendente,
+                'acao_requerida': 'chamar recuperar_falha(caminhos) antes de tentar aplicar de novo'}
 
     avaliacoes = relatorio_dry_run(plano, caminhos)
     bloqueantes = [a for a in avaliacoes if a['status'] in ('inesperado', 'linha_ausente')]
@@ -271,70 +418,216 @@ def aplicar(plano, caminhos=None, confirmar_outubro_mensagem=None):
     for item in pendentes:
         por_arquivo.setdefault(item['arquivo'], []).append(item)
 
-    textos_antes, textos_depois, hashes_antes, backups = {}, {}, {}, {}
+    # ── Fase 1: preparar e validar TUDO em memória, nada em disco real ──
+    textos_antes, textos_depois = {}, {}
     try:
         for arquivo, itens in por_arquivo.items():
             caminho = Path(caminhos[arquivo])
             texto_antes = caminho.read_text(encoding='utf-8')
-            hashes_antes[arquivo] = hashlib.sha256(texto_antes.encode('utf-8')).hexdigest()
 
             df = pd.read_csv(caminho)
             chave_cols = COLUNA_POR_ARQUIVO[arquivo]
             for item in itens:
                 idx = _localizar_linha(df, chave_cols, item['ano'], item['mes'])
                 df.at[idx, item['coluna']] = item['valor_novo']
-
-            tmp = caminho.with_suffix(caminho.suffix + '.tmp')
-            df.to_csv(tmp, index=False)
-            texto_depois = tmp.read_text(encoding='utf-8')
+            texto_depois = df.to_csv(index=False)
             _validar_so_coluna_alvo_mudou(caminho, texto_antes, texto_depois, itens, chave_cols)
 
             textos_antes[arquivo] = texto_antes
             textos_depois[arquivo] = texto_depois
-    except Exception as e:
-        # nada foi substituído ainda (só .tmp, que descartamos) —
-        # arquivos reais permanecem intocados.
-        for arquivo in por_arquivo:
-            tmp = Path(caminhos[arquivo]).with_suffix('.csv.tmp')
-            if tmp.exists():
-                tmp.unlink()
-        return {'aplicado': False, 'motivo': f'validacao_falhou: {e}', 'avaliacoes': avaliacoes}
 
+        entradas_prov = [
+            {'arquivo': item['arquivo'], 'ano': item['ano'], 'mes': item['mes'],
+             'indice': item['coluna'], 'valor': item['valor_novo'],
+             'classificacao': item['classificacao'], 'meses_base': item['meses_base'],
+             'fonte': item['fonte'], 'metodo': item['metodo']}
+            for item in pendentes
+        ]
+        prov_existia_antes = prov_path.exists()
+        if prov_existia_antes:
+            # newline='' preserva o \r\n literal que csv.DictWriter já
+            # grava na proveniência — Path.read_text() em modo texto
+            # padrão traduziria \r\n -> \n (universal newlines),
+            # produzindo um hash DIFERENTE do hash real do arquivo
+            # (sha256_arquivo(), que lê bytes crus) e quebrando a
+            # verificação de hash depois de uma restauração.
+            with open(prov_path, 'r', newline='', encoding='utf-8') as f:
+                texto_prov_antes = f.read()
+        else:
+            texto_prov_antes = None
+        linhas_prov_novas, anteriores_prov = prov.preparar_lote(entradas_prov, caminho=prov_path)
+        texto_prov_depois = prov.renderizar_texto(linhas_prov_novas)
+    except Exception as e:
+        return {'aplicado': False, 'motivo': f'preparacao_ou_validacao_falhou: {e}',
+                'avaliacoes': avaliacoes}
+
+    # sinalizar (nunca sobrescrever em silêncio) proveniência anterior
+    # contraditória — um valor/classificação que já existia e diverge
+    # do que está sendo gravado agora.
+    contradicoes = []
+    for (arq, ano, mes, indice), anterior in anteriores_prov.items():
+        if anterior is None:
+            continue
+        novo = next(it for it in pendentes
+                    if it['arquivo'] == arq and it['ano'] == ano and it['mes'] == mes
+                    and it['coluna'] == indice)
+        valor_anterior = float(anterior['valor']) if anterior.get('valor') not in ('', None) else None
+        if (anterior.get('classificacao') != novo['classificacao']
+                or valor_anterior is None or abs(valor_anterior - novo['valor_novo']) > 1e-9):
+            contradicoes.append({'arquivo': arq, 'ano': ano, 'mes': mes, 'indice': indice,
+                                  'classificacao_anterior': anterior.get('classificacao'),
+                                  'valor_anterior': valor_anterior,
+                                  'classificacao_nova': novo['classificacao'],
+                                  'valor_novo': novo['valor_novo']})
+
+    # ── Fase 2: backup de TUDO (dois CSVs + proveniência) ANTES de
+    #            qualquer substituição real; grava o manifesto ──────────
     agora = datetime.now(timezone.utc).isoformat()
-    for arquivo, itens in por_arquivo.items():
+    sufixo_ts = agora.replace(':', '-')
+    manifesto = {'status': 'backup_concluido', 'iniciado_em': agora, 'arquivos': {}}
+    backups = {}
+    for arquivo in por_arquivo:
         caminho = Path(caminhos[arquivo])
-        backup = caminho.with_name(caminho.stem + f'.{agora.replace(":", "-")}.bak')
+        backup = caminho.with_name(caminho.stem + f'.{sufixo_ts}.bak')
         shutil.copy2(caminho, backup)
         backups[arquivo] = str(backup)
-        tmp = caminho.with_suffix(caminho.suffix + '.tmp')
-        tmp.replace(caminho)
+        manifesto['arquivos'][arquivo] = {
+            'caminho': str(caminho), 'backup': str(backup),
+            'hash_antes': hashlib.sha256(textos_antes[arquivo].encode('utf-8')).hexdigest(),
+            'hash_depois_esperado': hashlib.sha256(textos_depois[arquivo].encode('utf-8')).hexdigest(),
+            'substituido': False,
+        }
 
-    for arquivo, itens in por_arquivo.items():
-        for item in itens:
-            prov.registrar(arquivo, item['ano'], item['mes'], item['coluna'],
-                            item['valor_novo'], item['classificacao'], item['meses_base'],
-                            item['fonte'], item['metodo'], verificado_em=agora, caminho=prov_path)
+    if prov_existia_antes:
+        backup_prov = prov_path.with_name(prov_path.stem + f'.{sufixo_ts}.bak')
+        shutil.copy2(prov_path, backup_prov)
+        manifesto['arquivos']['_proveniencia'] = {
+            'caminho': str(prov_path), 'backup': str(backup_prov), 'existia_antes': True,
+            'hash_antes': hashlib.sha256(texto_prov_antes.encode('utf-8')).hexdigest(),
+            'hash_depois_esperado': hashlib.sha256(texto_prov_depois.encode('utf-8')).hexdigest(),
+            'substituido': False,
+        }
+    else:
+        manifesto['arquivos']['_proveniencia'] = {
+            'caminho': str(prov_path), 'backup': None, 'existia_antes': False,
+            'hash_antes': None,
+            'hash_depois_esperado': hashlib.sha256(texto_prov_depois.encode('utf-8')).hexdigest(),
+            'substituido': False,
+        }
+    _escrever_manifesto(caminhos, manifesto)
+
+    # ── Fase 3: substituição real, uma a uma, manifesto atualizado a
+    #            cada passo — uma falha aqui deixa rastro verificável ──
+    try:
+        for arquivo in por_arquivo:
+            caminho = Path(caminhos[arquivo])
+            tmp = caminho.with_suffix(caminho.suffix + '.tmp')
+            tmp.write_text(textos_depois[arquivo], encoding='utf-8')
+            _substituir(tmp, caminho)
+            manifesto['arquivos'][arquivo]['substituido'] = True
+            manifesto['status'] = 'aplicando'
+            _escrever_manifesto(caminhos, manifesto)
+
+        prov_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_prov = prov_path.with_suffix(prov_path.suffix + '.tmp')
+        with open(tmp_prov, 'w', newline='', encoding='utf-8') as f:
+            f.write(texto_prov_depois)
+        _substituir(tmp_prov, prov_path)
+        manifesto['arquivos']['_proveniencia']['substituido'] = True
+        _escrever_manifesto(caminhos, manifesto)
+    except Exception as e:
+        # Estado parcialmente aplicado — o manifesto (ainda em disco,
+        # NUNCA removido aqui) registra exatamente o que já foi
+        # substituído. recuperar_falha() usa esse mesmo manifesto.
+        return {'aplicado': False, 'motivo': f'escrita_falhou_estado_parcial: {e}',
+                'avaliacoes': avaliacoes, 'manifesto': manifesto,
+                'acao_requerida': 'chamar recuperar_falha(caminhos) para restaurar o estado anterior'}
+
+    # ── Fase 4: verificação final (hash + consistência) ─────────────────
+    hash_mismatch = []
+    for arquivo, info in manifesto['arquivos'].items():
+        h_real = sha256_arquivo(Path(info['caminho']))
+        if h_real != info['hash_depois_esperado']:
+            hash_mismatch.append(arquivo)
 
     divergencias = []
     for arquivo in por_arquivo:
         df_final = pd.read_csv(caminhos[arquivo])
         chave_cols = COLUNA_POR_ARQUIVO[arquivo]
+        celulas_tocadas = {(it['ano'], it['mes'], it['coluna']) for it in por_arquivo[arquivo]}
         linhas_dado = [{'ano': int(r[chave_cols[0]]), 'mes': int(r[chave_cols[1]]),
-                         'indice': 'tsa', 'valor': float(r['tsa'])}
+                         'indice': it['coluna'], 'valor': float(r[it['coluna']])}
                        for _, r in df_final.iterrows()
-                       if (int(r[chave_cols[0]]), int(r[chave_cols[1]])) in
-                          {(it['ano'], it['mes']) for it in por_arquivo[arquivo]}]
-        divergencias += prov.verificar_consistencia(arquivo, linhas_dado, prov_path)
+                       for it in por_arquivo[arquivo]
+                       if (int(r[chave_cols[0]]), int(r[chave_cols[1]])) == (it['ano'], it['mes'])]
+        obrigatorios = {(arquivo, it['ano'], it['mes'], it['coluna']) for it in por_arquivo[arquivo]}
+        divergencias += prov.verificar_consistencia(arquivo, linhas_dado, prov_path,
+                                                      indices_obrigatorios=obrigatorios)
+
+    manifesto['status'] = 'concluido'
+    manifesto['concluido_em'] = datetime.now(timezone.utc).isoformat()
+    _arquivar_manifesto_concluido(caminhos, manifesto)
 
     return {'aplicado': True, 'motivo': 'ok', 'avaliacoes': avaliacoes,
-            'backups': backups, 'hashes_antes': hashes_antes,
-            'divergencias_pos_escrita': divergencias}
+            'backups': backups, 'divergencias_pos_escrita': divergencias,
+            'hash_mismatch_pos_escrita': hash_mismatch,
+            'contradicoes_proveniencia_anterior': contradicoes}
+
+
+def recuperar_falha(caminhos=None):
+    """
+    Recuperação pós-falha: restaura o conjunto completo (os CSVs
+    tocados + a proveniência) a partir do manifesto de uma transação
+    que `aplicar()` deixou incompleta. Idempotente — se não houver
+    manifesto ativo (nenhuma transação pendente de recuperação, ou já
+    recuperada antes), devolve um no-op explícito em vez de tentar
+    adivinhar o que fazer. Nunca toca em transações já concluídas
+    (essas são responsabilidade de rollback(), não desta função).
+    """
+    caminhos = caminhos or {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
+    manifesto = _ler_manifesto(caminhos)
+    if manifesto is None:
+        return {'recuperado': False, 'motivo': 'nenhuma_transacao_incompleta_pendente'}
+
+    resultado = _restaurar_pelo_manifesto(manifesto, caminhos)
+    todos_ok = all(r.get('restaurado') for r in resultado.values())
+    if todos_ok:
+        _remover_manifesto(caminhos)
+    return {'recuperado': todos_ok, 'detalhe': resultado}
 
 
 def rollback(caminhos=None):
-    """Restaura cada arquivo a partir do .bak mais recente encontrado
-    no mesmo diretório, verificando hash após a restauração."""
+    """
+    Reversão manual (CLI `--rollback`) do conjunto completo — os dois
+    CSVs e a proveniência, não só os CSVs como antes desta fase.
+    Ordem de resolução:
+      1. Se há uma transação INCOMPLETA (manifesto ativo) -> essa é a
+         prioridade; restaura a partir dela (mesma lógica de
+         recuperar_falha()).
+      2. Senão, usa o manifesto da transação CONCLUÍDA mais recente
+         (arquivado por aplicar()) — é o que permite restaurar a
+         proveniência corretamente (inclusive remover, se ela não
+         existia antes daquela correção), não só os CSVs.
+      3. Se não houver manifesto nenhum (correção aplicada antes desta
+         fase, só com os .bak antigos) -> cai no comportamento antigo
+         (glob do .bak mais recente por CSV) e AVISA explicitamente
+         que a proveniência não pôde ser revertida por falta de
+         registro — nunca finge que foi revertida.
+    """
     caminhos = caminhos or {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
+
+    manifesto_ativo = _ler_manifesto(caminhos)
+    if manifesto_ativo is not None:
+        resultado = _restaurar_pelo_manifesto(manifesto_ativo, caminhos)
+        if all(r.get('restaurado') for r in resultado.values()):
+            _remover_manifesto(caminhos)
+        return {**resultado, '_origem': 'transacao_incompleta_recuperada'}
+
+    manifesto_historico = _historico_mais_recente(caminhos)
+    if manifesto_historico is not None:
+        resultado = _restaurar_pelo_manifesto(manifesto_historico, caminhos)
+        return {**resultado, '_origem': 'manifesto_historico'}
+
     resultado = {}
     for arquivo, caminho in caminhos.items():
         if arquivo == '_proveniencia':
@@ -350,6 +643,12 @@ def rollback(caminhos=None):
         hash_depois = sha256_arquivo(caminho)
         resultado[arquivo] = {'restaurado': hash_depois == hash_bak,
                                'backup_usado': str(mais_recente)}
+    resultado['_proveniencia'] = {
+        'restaurado': False,
+        'motivo': 'nenhum manifesto encontrado — correção aplicada antes da Fase 3A.3 '
+                   'ou sem registro; proveniência NÃO revertida automaticamente',
+    }
+    resultado['_origem'] = 'bak_sem_manifesto'
     return resultado
 
 
@@ -358,12 +657,20 @@ def _cli():
     modo = p.add_mutually_exclusive_group()
     modo.add_argument('--dry-run', action='store_true', help='(padrão) só mostra o que mudaria')
     modo.add_argument('--aplicar', action='store_true', help='escreve de fato nos arquivos reais')
-    modo.add_argument('--rollback', action='store_true', help='restaura do .bak mais recente')
+    modo.add_argument('--rollback', action='store_true',
+                       help='reverte a última transação concluída (CSVs + proveniência)')
+    modo.add_argument('--recuperar-falha', action='store_true', dest='recuperar_falha',
+                       help='recupera uma transação INCOMPLETA (aplicar() interrompido no meio)')
     p.add_argument('--sem-outubro', action='store_true',
                     help='não incluir a célula condicional de outubro/2026 no plano')
     args = p.parse_args()
 
     caminhos = {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
+
+    if args.recuperar_falha:
+        resultado = recuperar_falha(caminhos)
+        print(resultado)
+        return 0 if resultado['recuperado'] else 1
 
     if args.rollback:
         resultado = rollback(caminhos)

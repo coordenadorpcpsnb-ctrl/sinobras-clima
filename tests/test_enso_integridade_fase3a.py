@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import proveniencia_indices as prov       # noqa: E402
 import fetch_monthly_data as fmd          # noqa: E402
 import corrigir_indices_historicos as cih  # noqa: E402
+import verificar_dashboard as vd          # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -121,6 +122,112 @@ class ProveniciaIndicesTestCase(unittest.TestCase):
             [{'ano': 2026, 'mes': 9, 'indice': 'tsa', 'valor': 0.57}],
             caminho=self.caminho)
         self.assertEqual(divergencias, [])
+
+    def test_verificar_consistencia_tipo_valor_divergente(self):
+        """Fase 3A.3: a divergência agora vem com 'tipo' explícito,
+        para o chamador decidir severidade por tipo."""
+        prov.registrar('master_monthly.csv', 2026, 9, 'tsa', 0.57, 'observado',
+                        ['2026-09'], 'f', 'observacao_direta', caminho=self.caminho)
+        divergencias = prov.verificar_consistencia(
+            'master_monthly.csv',
+            [{'ano': 2026, 'mes': 9, 'indice': 'tsa', 'valor': 0.12}],
+            caminho=self.caminho)
+        self.assertEqual(len(divergencias), 1)
+        self.assertEqual(divergencias[0]['tipo'], 'valor_divergente')
+
+    def test_verificar_consistencia_registro_orfao_detectado(self):
+        """Registro de proveniência para uma chave que não aparece em
+        `linhas_dado` (ex.: a linha foi removida do CSV, ou nunca
+        existiu) é um erro de integridade — a proveniência aponta
+        para um dado que não existe."""
+        prov.registrar('master_monthly.csv', 2026, 9, 'tsa', 0.57, 'observado',
+                        ['2026-09'], 'f', 'observacao_direta', caminho=self.caminho)
+        divergencias = prov.verificar_consistencia(
+            'master_monthly.csv',
+            [{'ano': 2026, 'mes': 10, 'indice': 'tsa', 'valor': 0.12}],  # mês diferente
+            caminho=self.caminho)
+        tipos = [d['tipo'] for d in divergencias]
+        self.assertIn('registro_orfao', tipos)
+        orfao = next(d for d in divergencias if d['tipo'] == 'registro_orfao')
+        self.assertEqual((orfao['ano'], orfao['mes']), (2026, 9))
+
+    def test_verificar_consistencia_valor_invalido_no_registro(self):
+        """Um registro com classificação válida (não 'desconhecido')
+        mas valor None/NaN/infinito é um erro — deveria ter um valor
+        válido e não tem."""
+        prov.registrar('master_monthly.csv', 2026, 9, 'tsa', None, 'observado',
+                        ['2026-09'], 'f', 'observacao_direta', caminho=self.caminho)
+        divergencias = prov.verificar_consistencia(
+            'master_monthly.csv',
+            [{'ano': 2026, 'mes': 9, 'indice': 'tsa', 'valor': 0.57}],
+            caminho=self.caminho)
+        tipos = [d['tipo'] for d in divergencias]
+        self.assertIn('valor_invalido_no_registro', tipos)
+
+    def test_verificar_consistencia_chave_duplicada_detectada(self):
+        """Duplicação de chave no PRÓPRIO arquivo de proveniência
+        (corrupção externa — registrar()/preparar_lote() nunca fazem
+        isso por conta própria) é um erro de integridade."""
+        linhas = [
+            {'arquivo': 'master_monthly.csv', 'ano': 2026, 'mes': 9, 'indice': 'tsa',
+             'valor': '0.57', 'classificacao': 'observado', 'meses_base': '2026-09',
+             'fonte': 'f', 'metodo': 'observacao_direta', 'verificado_em': 'x'},
+            {'arquivo': 'master_monthly.csv', 'ano': 2026, 'mes': 9, 'indice': 'tsa',
+             'valor': '0.12', 'classificacao': 'observado', 'meses_base': '2026-09',
+             'fonte': 'f', 'metodo': 'observacao_direta', 'verificado_em': 'y'},
+        ]
+        prov._escrever(linhas, self.caminho)   # grava direto, contornando o upsert por chave
+        divergencias = prov.verificar_consistencia(
+            'master_monthly.csv',
+            [{'ano': 2026, 'mes': 9, 'indice': 'tsa', 'valor': 0.57}],
+            caminho=self.caminho)
+        tipos = [d['tipo'] for d in divergencias]
+        self.assertIn('chave_duplicada', tipos)
+
+    def test_verificar_consistencia_registro_obrigatorio_ausente_so_quando_marcado(self):
+        """Ausência pura de registro NUNCA gera divergência por si só
+        (histórico legado legítimo) — só quando a chave está
+        explicitamente em `indices_obrigatorios` (uma escrita que o
+        PRÓPRIO chamador sabe que acabou de fazer)."""
+        linha_dado = [{'ano': 2026, 'mes': 9, 'indice': 'tsa', 'valor': 0.57}]
+
+        sem_marcar = prov.verificar_consistencia('master_monthly.csv', linha_dado,
+                                                  caminho=self.caminho)
+        self.assertEqual(sem_marcar, [], "ausência pura não marcada nunca é divergência")
+
+        marcado = prov.verificar_consistencia(
+            'master_monthly.csv', linha_dado, caminho=self.caminho,
+            indices_obrigatorios={('master_monthly.csv', 2026, 9, 'tsa')})
+        tipos = [d['tipo'] for d in marcado]
+        self.assertIn('registro_obrigatorio_ausente', tipos)
+
+    def test_verificar_consistencia_zero_legitimo_nao_e_invalido(self):
+        """Um valor 0.0 real e registrado como 'observado' nunca deve
+        ser confundido com valor inválido/ausente pelo novo check de
+        NaN/infinito — 0.0 é finito e válido."""
+        prov.registrar('master_monthly.csv', 2026, 9, 'tsa', 0.0, 'observado',
+                        ['2026-09'], 'f', 'observacao_direta', caminho=self.caminho)
+        divergencias = prov.verificar_consistencia(
+            'master_monthly.csv',
+            [{'ano': 2026, 'mes': 9, 'indice': 'tsa', 'valor': 0.0}],
+            caminho=self.caminho)
+        self.assertEqual(divergencias, [], "zero legítimo não deve gerar nenhuma divergência")
+
+    def test_preparar_lote_mescla_sem_escrever_em_disco(self):
+        """preparar_lote() é puro — não deve criar nem alterar o
+        arquivo em disco; renderizar_texto() devolve o texto exato que
+        seria escrito."""
+        entradas = [
+            {'arquivo': 'master_monthly.csv', 'ano': 2026, 'mes': 9, 'indice': 'tsa',
+             'valor': 0.57, 'classificacao': 'observado', 'meses_base': ['2026-09'],
+             'fonte': 'f', 'metodo': 'observacao_direta'},
+        ]
+        linhas, anteriores = prov.preparar_lote(entradas, caminho=self.caminho)
+        self.assertFalse(self.caminho.exists(), "preparar_lote nunca deve escrever em disco")
+        self.assertEqual(len(linhas), 1)
+        self.assertIsNone(anteriores[('master_monthly.csv', 2026, 9, 'tsa')])
+        texto = prov.renderizar_texto(linhas)
+        self.assertIn('0.57', texto)
 
     def test_caminho_padrao_nao_e_capturado_na_definicao_da_funcao(self):
         """Regressão: um default `caminho=CAMINHO_PADRAO` na ASSINATURA
@@ -228,15 +335,100 @@ class EnsoIndicesFailClosedTestCase(unittest.TestCase):
         r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa', caminho=caminho_prov)
         self.assertEqual(r['classificacao'], 'desconhecido')
 
-    def test_persistencia_registra_proveniencia_persistido_com_mes_fonte(self):
+    def test_persistencia_de_observacao_real_registra_persistido_com_mes_fonte(self):
+        """Fase ENSO-INTEGRIDADE 3A.3: a persistência só é classificada
+        'persistido' quando o MÊS-FONTE tem proveniência própria
+        'observado' (ou 'persistido', numa cadeia) — testado
+        separadamente para nino34, tsa e pdo."""
+        pd.DataFrame([{'year': 2026, 'month': 8, 'nino34': 2.52,
+                       'tsa': 0.42, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        for indice, valor in (('nino34', 2.52), ('tsa', 0.42), ('pdo', -2.85)):
+            prov.registrar('master_monthly.csv', 2026, 8, indice, valor, 'observado',
+                            ['2026-08'], 'PSL (verificado ao vivo)', 'observacao_direta',
+                            caminho=caminho_prov)
+
+        enso = fmd.enso_indices(2026, 9)
+        fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
+
+        for indice in ('nino34', 'tsa', 'pdo'):
+            r = prov.consultar('serie_subst.csv', 2026, 9, indice, caminho=caminho_prov)
+            self.assertEqual(r['classificacao'], 'persistido', f'índice {indice}')
+            self.assertEqual(r['meses_base'], ['2026-08'], f'índice {indice}')
+
+    def test_persistencia_sem_proveniencia_propria_do_mes_fonte_vira_desconhecida(self):
+        """Regressão do bug corrigido na Fase 3A.3: antes, QUALQUER
+        persistência era gravada como 'persistido' incondicionalmente,
+        mesmo quando o mês-fonte (aqui, 08/2026) não tem nenhum
+        registro de proveniência próprio (dado legado, anterior a
+        esta fase) — 'persistido' nesse caso seria uma afirmação
+        inventada ('não inventar proveniência de meses históricos sem
+        metadados'). Corrigido: fica 'desconhecido'."""
         pd.DataFrame([{'year': 2026, 'month': 8, 'nino34': 2.52,
                        'tsa': 0.42, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
         enso = fmd.enso_indices(2026, 9)
         fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
         caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        for indice in ('nino34', 'tsa', 'pdo'):
+            r = prov.consultar('serie_subst.csv', 2026, 9, indice, caminho=caminho_prov)
+            self.assertEqual(r['classificacao'], 'desconhecido', f'índice {indice}')
+            self.assertEqual(r['meses_base'], [], f'índice {indice}')
+
+    def test_persistencia_de_estimativa_pdo_preserva_classificacao_estimado(self):
+        """O caso central pedido pela revisão: uma estimativa de PDO
+        (média de 3 meses) propagada por persistência NUNCA pode virar
+        'persistido' (o que implicaria derivar de uma observação
+        direta) — tem que continuar 'estimado', com os meses_base
+        ORIGINAIS da estimativa, não o mês-fonte isolado."""
+        pd.DataFrame([{'year': 2026, 'month': 8, 'nino34': 2.52,
+                       'tsa': 0.42, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        prov.registrar('master_monthly.csv', 2026, 8, 'pdo', -2.85, 'estimado',
+                        ['2026-05', '2026-06', '2026-07'], 'media_3_meses (PSL)',
+                        'media_3_meses', caminho=caminho_prov)
+
+        enso = fmd.enso_indices(2026, 9)
+        fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
+
+        r = prov.consultar('serie_subst.csv', 2026, 9, 'pdo', caminho=caminho_prov)
+        self.assertEqual(r['classificacao'], 'estimado')
+        self.assertEqual(r['meses_base'], ['2026-05', '2026-06', '2026-07'])
+
+    def test_persistencia_de_origem_desconhecida_explicita_mantem_desconhecida(self):
+        """Mês-fonte com proveniência própria EXPLICITAMENTE
+        'desconhecido' (não ausente — já consultado e marcado como tal
+        antes) continua 'desconhecido' na persistência, nunca promovido."""
+        pd.DataFrame([{'year': 2026, 'month': 8, 'nino34': 2.52,
+                       'tsa': 0.42, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        prov.registrar('master_monthly.csv', 2026, 8, 'tsa', 0.42, 'desconhecido', [],
+                        'origem não comprovada', 'origem_nao_comprovada', caminho=caminho_prov)
+
+        enso = fmd.enso_indices(2026, 9)
+        fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
+
+        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa', caminho=caminho_prov)
+        self.assertEqual(r['classificacao'], 'desconhecido')
+
+    def test_persistencia_encadeada_preserva_mes_observado_original(self):
+        """08/2026 é, ele mesmo, uma PERSISTÊNCIA de 07/2026 (não uma
+        observação direta) — a cadeia não pode inventar uma nova
+        'observação' a cada elo: 09/2026 persistindo de 08/2026 deve
+        apontar para 07/2026 (a observação real mais distante da
+        cadeia), não para 08/2026."""
+        pd.DataFrame([{'year': 2026, 'month': 8, 'nino34': 2.52,
+                       'tsa': 0.42, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        prov.registrar('master_monthly.csv', 2026, 8, 'tsa', 0.42, 'persistido',
+                        ['2026-07'], 'master_monthly.csv (persistência)',
+                        'persistencia_ultimo_real', caminho=caminho_prov)
+
+        enso = fmd.enso_indices(2026, 9)
+        fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
+
         r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa', caminho=caminho_prov)
         self.assertEqual(r['classificacao'], 'persistido')
-        self.assertEqual(r['meses_base'], ['2026-08'])
+        self.assertEqual(r['meses_base'], ['2026-07'])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -430,6 +622,157 @@ class CorrigirIndicesHistoricosTestCase(unittest.TestCase):
         self.assertTrue(resultado['master_monthly.csv']['restaurado'])
         self.assertEqual(cih.sha256_arquivo(self.master), hash_original)
 
+    def test_rollback_tambem_restaura_proveniencia_quando_nao_existia_antes(self):
+        """Regressão do bug corrigido na 3A.3: rollback() não
+        restaurava a proveniência. Aqui ela não existia antes da
+        aplicação — depois do rollback, tem que ser REMOVIDA (nunca
+        sobrar um arquivo criado pela correção que foi revertida)."""
+        self.assertFalse(self.provp.exists())
+        cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+        self.assertTrue(self.provp.exists())
+        resultado = cih.rollback(self.caminhos)
+        self.assertTrue(resultado['_proveniencia']['restaurado'])
+        self.assertFalse(self.provp.exists(),
+                          "proveniência não existia antes — rollback deve removê-la, não deixá-la")
+
+    def test_rollback_restaura_proveniencia_preexistente_ao_conteudo_anterior(self):
+        """Quando a proveniência JÁ existia (com outro conteúdo) antes
+        da correção, rollback() restaura esse conteúdo anterior —
+        nunca remove um arquivo que já existia antes."""
+        prov.registrar('master_monthly.csv', 2020, 1, 'tsa', 0.01, 'observado',
+                        ['2020-01'], 'f', 'm', caminho=self.provp)
+        hash_prov_antes = cih.sha256_arquivo(self.provp)
+
+        cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+        self.assertNotEqual(cih.sha256_arquivo(self.provp), hash_prov_antes)
+
+        resultado = cih.rollback(self.caminhos)
+        self.assertTrue(resultado['_proveniencia']['restaurado'])
+        self.assertEqual(cih.sha256_arquivo(self.provp), hash_prov_antes)
+        r = prov.consultar('master_monthly.csv', 2020, 1, 'tsa', caminho=self.provp)
+        self.assertEqual(r['classificacao'], 'observado', "registro pré-existente preservado")
+
+    def test_falha_apos_primeiro_csv_deixa_manifesto_e_estado_parcial_verificavel(self):
+        """Injeção de falha ENTRE as duas substituições de CSV: master_
+        monthly.csv já foi trocado no disco quando serie_subst.csv
+        falha. aplicar() não finge sucesso nem silencia — devolve
+        estado parcial, com o manifesto registrando exatamente o que
+        foi substituído."""
+        chamadas = {'n': 0}
+        def side_effect(tmp, destino):
+            chamadas['n'] += 1
+            if chamadas['n'] == 2:   # 1=master_monthly.csv, 2=serie_subst.csv
+                raise OSError('falha simulada entre as duas substituições de CSV')
+            tmp.replace(destino)
+
+        hash_master_antes = cih.sha256_arquivo(self.master)
+        hash_subst_antes = cih.sha256_arquivo(self.subst)
+        with patch.object(cih, '_substituir', side_effect=side_effect):
+            resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+
+        self.assertFalse(resultado['aplicado'])
+        self.assertIn('escrita_falhou_estado_parcial', resultado['motivo'])
+        self.assertNotEqual(cih.sha256_arquivo(self.master), hash_master_antes,
+                             "master_monthly.csv JÁ foi substituído quando a falha ocorreu")
+        self.assertEqual(cih.sha256_arquivo(self.subst), hash_subst_antes,
+                          "serie_subst.csv não deveria ter sido tocado")
+        manifesto = cih._ler_manifesto(self.caminhos)
+        self.assertIsNotNone(manifesto, "manifesto deve continuar em disco após falha parcial")
+        self.assertTrue(manifesto['arquivos']['master_monthly.csv']['substituido'])
+        self.assertFalse(manifesto['arquivos']['serie_subst.csv']['substituido'])
+
+    def test_falha_durante_proveniencia_deixa_os_dois_csvs_substituidos_no_manifesto(self):
+        """Injeção de falha na substituição da PROVENIÊNCIA — os dois
+        CSVs já foram trocados quando ela falha."""
+        chamadas = {'n': 0}
+        def side_effect(tmp, destino):
+            chamadas['n'] += 1
+            if chamadas['n'] == 3:   # 1=master, 2=subst, 3=proveniência
+                raise OSError('falha simulada na substituição da proveniência')
+            tmp.replace(destino)
+
+        with patch.object(cih, '_substituir', side_effect=side_effect):
+            resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+
+        self.assertFalse(resultado['aplicado'])
+        manifesto = cih._ler_manifesto(self.caminhos)
+        self.assertIsNotNone(manifesto)
+        self.assertTrue(manifesto['arquivos']['master_monthly.csv']['substituido'])
+        self.assertTrue(manifesto['arquivos']['serie_subst.csv']['substituido'])
+        self.assertFalse(manifesto['arquivos']['_proveniencia']['substituido'])
+        self.assertFalse(self.provp.exists(),
+                          "proveniência não existia antes e a escrita falhou — não deve existir")
+
+    def test_recuperar_falha_restaura_estado_parcial_apos_falha_entre_csvs(self):
+        """Demonstração completa de recuperação: depois da falha entre
+        os dois CSVs, recuperar_falha() restaura TUDO (os dois CSVs e
+        a proveniência, incluindo removê-la se não existia antes) ao
+        estado anterior, com hash verificado, e remove o manifesto."""
+        hash_master_antes = cih.sha256_arquivo(self.master)
+        hash_subst_antes = cih.sha256_arquivo(self.subst)
+        chamadas = {'n': 0}
+        def side_effect(tmp, destino):
+            chamadas['n'] += 1
+            if chamadas['n'] == 2:
+                raise OSError('falha simulada')
+            tmp.replace(destino)
+        with patch.object(cih, '_substituir', side_effect=side_effect):
+            cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+
+        resultado = cih.recuperar_falha(self.caminhos)
+        self.assertTrue(resultado['recuperado'])
+        self.assertTrue(resultado['detalhe']['master_monthly.csv']['restaurado'])
+        self.assertTrue(resultado['detalhe']['serie_subst.csv']['restaurado'])
+        self.assertTrue(resultado['detalhe']['_proveniencia']['restaurado'])
+        self.assertEqual(cih.sha256_arquivo(self.master), hash_master_antes)
+        self.assertEqual(cih.sha256_arquivo(self.subst), hash_subst_antes)
+        self.assertFalse(self.provp.exists(), "proveniência não existia antes da transação")
+        self.assertIsNone(cih._ler_manifesto(self.caminhos), "manifesto removido após recuperação completa")
+
+    def test_recuperar_falha_e_idempotente_sem_transacao_pendente(self):
+        """Chamar recuperar_falha() sem nenhuma transação incompleta
+        pendente é um no-op explícito, nunca um erro nem uma tentativa
+        de adivinhar o que restaurar."""
+        resultado = cih.recuperar_falha(self.caminhos)
+        self.assertFalse(resultado['recuperado'])
+        self.assertEqual(resultado['motivo'], 'nenhuma_transacao_incompleta_pendente')
+
+    def test_aplicar_apos_recuperacao_funciona_normalmente(self):
+        """Depois de recuperar_falha(), aplicar() não deve mais ver
+        nenhum manifesto pendente — a próxima chamada aplica
+        normalmente, não fica bloqueada para sempre."""
+        chamadas = {'n': 0}
+        def side_effect(tmp, destino):
+            chamadas['n'] += 1
+            if chamadas['n'] == 2:
+                raise OSError('falha simulada')
+            tmp.replace(destino)
+        with patch.object(cih, '_substituir', side_effect=side_effect):
+            cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+        cih.recuperar_falha(self.caminhos)
+
+        resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+        self.assertTrue(resultado['aplicado'])
+        self.assertEqual(resultado['motivo'], 'ok')
+        df_m = pd.read_csv(self.master)
+        self.assertEqual(float(df_m[df_m.month == 9]['tsa'].iloc[0]), 0.57)
+
+    def test_aplicar_recusa_rodar_sobre_transacao_incompleta_sem_recuperar_antes(self):
+        """aplicar() nunca tenta aplicar por cima de um estado não
+        resolvido — exige recuperar_falha() primeiro."""
+        chamadas = {'n': 0}
+        def side_effect(tmp, destino):
+            chamadas['n'] += 1
+            if chamadas['n'] == 2:
+                raise OSError('falha simulada')
+            tmp.replace(destino)
+        with patch.object(cih, '_substituir', side_effect=side_effect):
+            cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+
+        resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+        self.assertFalse(resultado['aplicado'])
+        self.assertEqual(resultado['motivo'], 'transacao_anterior_incompleta_detectada')
+
     def test_celula_fora_do_plano_nunca_pode_ser_tocada(self):
         """Não existe parâmetro/flag que aceite uma célula arbitrária —
         só o que está em PLANO_BASE (ou na condicional de outubro) pode
@@ -462,6 +805,82 @@ class CorrigirIndicesHistoricosTestCase(unittest.TestCase):
         plano, motivo = cih.montar_plano(incluir_outubro=True)
         self.assertEqual(len(plano), len(cih.PLANO_BASE))
         self.assertIn('precaução', motivo)
+
+
+# ══════════════════════════════════════════════════════════════════
+# verificar_dashboard.py::divergencias_proveniencia_serie_subst
+# (item 13 — Fase ENSO-INTEGRIDADE 3A.3)
+# ══════════════════════════════════════════════════════════════════
+class VerificarDashboardProveniciaTestCase(unittest.TestCase):
+    """Função pura extraída de main() (sem print/sem `falhas` global) —
+    testável diretamente contra fixtures sintéticas de serie_subst.csv
+    e proveniência, sem precisar montar um docs/index.html completo."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmpdir.name)
+        self.subst = self.dir / 'serie_subst.csv'
+        self.provp = self.dir / 'indices_proveniencia.csv'   # nome fixo que a função deriva
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_historico_legado_sem_proveniencia_nao_gera_divergencia(self):
+        """Demonstra o requisito central: ausência histórica PURA de
+        proveniência (nenhum registro nenhum, situação real hoje no
+        repositório) nunca é tratada como inconsistência — nunca
+        bloqueio global da atualização."""
+        pd.DataFrame([
+            {'ano': 2026, 'mes': 7, 'tsa': 0.20, 'pdo': -2.85},
+            {'ano': 2026, 'mes': 8, 'tsa': 0.20, 'pdo': -2.85},
+        ]).to_csv(self.subst, index=False)
+        divergencias = vd.divergencias_proveniencia_serie_subst(self.subst)
+        self.assertEqual(divergencias, [])
+
+    def test_detecta_divergencia_de_valor_contra_proveniencia(self):
+        """Demonstração direta pedida pela revisão: o verificador
+        efetivamente detecta quando o CSV e a proveniência divergem."""
+        pd.DataFrame([{'ano': 2026, 'mes': 9, 'tsa': 0.12, 'pdo': -2.85}]).to_csv(
+            self.subst, index=False)
+        prov.registrar('serie_subst.csv', 2026, 9, 'tsa', 0.57, 'observado',
+                        ['2026-09'], 'f', 'm', caminho=self.provp)
+        divergencias = vd.divergencias_proveniencia_serie_subst(self.subst)
+        tipos = [d['tipo'] for d in divergencias]
+        self.assertIn('valor_divergente', tipos)
+
+    def test_detecta_registro_orfao_quando_linha_removida_do_csv(self):
+        """Proveniência registrada para um mês que não existe (mais)
+        em serie_subst.csv — erro de integridade."""
+        pd.DataFrame([{'ano': 2026, 'mes': 9, 'tsa': 0.57, 'pdo': -2.85}]).to_csv(
+            self.subst, index=False)
+        prov.registrar('serie_subst.csv', 2020, 1, 'tsa', 0.01, 'observado',
+                        ['2020-01'], 'f', 'm', caminho=self.provp)
+        divergencias = vd.divergencias_proveniencia_serie_subst(self.subst)
+        tipos = [d['tipo'] for d in divergencias]
+        self.assertIn('registro_orfao', tipos)
+
+    def test_proveniencia_consistente_nao_gera_nenhuma_divergencia(self):
+        pd.DataFrame([{'ano': 2026, 'mes': 9, 'tsa': 0.57, 'pdo': -2.85}]).to_csv(
+            self.subst, index=False)
+        prov.registrar('serie_subst.csv', 2026, 9, 'tsa', 0.57, 'observado',
+                        ['2026-09'], 'f', 'm', caminho=self.provp)
+        prov.registrar('serie_subst.csv', 2026, 9, 'pdo', -2.85, 'estimado',
+                        ['2026-06', '2026-07', '2026-08'], 'f', 'm', caminho=self.provp)
+        divergencias = vd.divergencias_proveniencia_serie_subst(self.subst)
+        self.assertEqual(divergencias, [])
+
+    def test_item_12_aviso_e_item_13_erro_nao_se_confundem(self):
+        """O item 12 (aviso sobre a CLASSIFICAÇÃO do mês mais recente)
+        e o item 13 (erro de integridade) não podem convergir no mesmo
+        sinal: histórico legado (sem registro algum) é só aviso no
+        item 12 e nenhuma divergência no item 13 — os dois tratam a
+        MESMA ausência sem contradição."""
+        pd.DataFrame([{'ano': 2026, 'mes': 8, 'tsa': 0.20, 'pdo': -2.85}]).to_csv(
+            self.subst, index=False)
+        reg = prov.consultar('serie_subst.csv', 2026, 8, 'tsa', caminho=self.provp)
+        self.assertIsNone(reg, "item 12 trataria isso como aviso 'DESCONHECIDA'")
+        divergencias = vd.divergencias_proveniencia_serie_subst(self.subst)
+        self.assertEqual(divergencias, [], "item 13 não reprova por essa mesma ausência")
 
 
 if __name__ == '__main__':

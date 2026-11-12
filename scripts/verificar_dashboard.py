@@ -451,6 +451,31 @@ def solve_bh(prec, etp, cad=CAD, tol=1e-3, it=200):
     return res
 
 
+def divergencias_proveniencia_serie_subst(serie_subst_path):
+    """
+    Função pura (nenhum print, nenhuma dependência de `falhas`/`erro`/
+    `ok` globais) usada pelo item 13 de `main()` — extraída assim de
+    propósito para ser testável diretamente, sem precisar rodar o
+    pipeline inteiro de verificação contra um docs/index.html real ou
+    sintético. Lê TODA a série de tsa/pdo em `serie_subst_path` e
+    devolve a lista de divergências de `proveniencia_indices.
+    verificar_consistencia()` (tipos: valor_divergente,
+    registro_orfao, valor_invalido_no_registro, chave_duplicada —
+    nunca ausência pura de registro, que é tratada só como aviso pelo
+    item 12, nunca aqui).
+    """
+    serie_subst_path = Path(serie_subst_path)
+    caminho_prov = serie_subst_path.parent / 'indices_proveniencia.csv'
+    serie_full = pd.read_csv(serie_subst_path)
+    linhas_dado = []
+    for _, linha in serie_full.iterrows():
+        for indice in ('tsa', 'pdo'):
+            if indice in linha and pd.notna(linha[indice]):
+                linhas_dado.append({'ano': int(linha['ano']), 'mes': int(linha['mes']),
+                                     'indice': indice, 'valor': float(linha[indice])})
+    return prov.verificar_consistencia('serie_subst.csv', linhas_dado, caminho=caminho_prov)
+
+
 def main(pular_continuidade_serie_subst=False):
     print(f"\n{'='*58}")
     print('  VERIFICAÇÃO DE INTEGRIDADE DO DASHBOARD')
@@ -783,6 +808,31 @@ def main(pular_continuidade_serie_subst=False):
                     print(f'  ⚠ {indice} do mês mais recente ({m_ult:02d}/{y_ult}) com '
                           f'proveniência "{reg["classificacao"]}" — origem não '
                           f'comprovada, não presumir observação')
+
+    # ── 13. consistência CSV↔proveniência (erro de integridade — nunca
+    #        bloqueia por ausência histórica pura, só pelas formas de
+    #        corrupção/divergência que o registro complementar jamais
+    #        deveria ter) ────────────────────────────────────────────────
+    # Fase ENSO-INTEGRIDADE 3A.3: diferente do item 12 (que só avisa
+    # sobre a CLASSIFICAÇÃO do mês mais recente), este item varre TODA
+    # a série de tsa/pdo em serie_subst.csv e reprova a publicação se
+    # encontrar: valor do CSV divergente do registrado na proveniência,
+    # registro de proveniência órfão (sem linha correspondente no CSV),
+    # valor inválido (NaN/infinito) num registro que deveria ser válido,
+    # ou chave duplicada no próprio arquivo de proveniência. A ausência
+    # PURA de registro (histórico legado, sem proveniência nenhuma)
+    # nunca entra aqui — isso é o item 12, sempre só aviso, nunca
+    # bloqueio global da atualização.
+    if SERIE_SUBST.exists():
+        divergencias_integridade = divergencias_proveniencia_serie_subst(SERIE_SUBST)
+        if divergencias_integridade:
+            for d in divergencias_integridade:
+                erro(f'proveniência inconsistente em serie_subst.csv ({d["tipo"]}): '
+                     f'{d["mes"]:02d}/{d["ano"]} {d["indice"]} — {d}')
+        else:
+            ok('proveniência de tsa/pdo em serie_subst.csv consistente com os registros '
+               'existentes (sem divergência de valor, registro órfão, valor inválido ou '
+               'chave duplicada)')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

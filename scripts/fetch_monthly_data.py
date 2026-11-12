@@ -181,9 +181,27 @@ def _registrar_proveniencia_serie_subst(ano, mes, enso):
     em que o valor foi obtido); se master não tiver proveniência
     própria para essa linha (registro legado, anterior a esta fase),
     a cópia também fica 'desconhecida' — nunca promovida a 'observado'
-    só por estar presente no master. Quando enso['origem'] é
-    persistência (mês ainda ausente do master), registra
-    classificacao='persistido' com o mês-fonte explícito.
+    só por estar presente no master.
+
+    Fase ENSO-INTEGRIDADE 3A.3: quando enso['origem'] é persistência
+    (mês ainda ausente do master), a classificação da linha nova NÃO
+    é mais fixada em 'persistido' incondicionalmente — ela PROPAGA a
+    classificação própria do mês-fonte (consultada na proveniência de
+    master_monthly.csv para aquele mês/índice):
+      - mês-fonte 'observado' ou 'persistido' -> nova linha
+        'persistido', meses_base = meses_base do mês-fonte (que já
+        aponta para a observação real mais distante da cadeia — um
+        mês persistido nunca inventa meses_base=[ele mesmo]).
+      - mês-fonte 'estimado' -> nova linha 'estimado' (NUNCA
+        'persistido'), meses_base = meses_base ORIGINAL da estimativa.
+        Sem isso, uma estimativa de PDO (média de 3 meses) propagada
+        por persistência apareceria como se fosse persistência de uma
+        observação direta — exatamente a distorção que esta fase
+        corrige.
+      - mês-fonte sem proveniência própria (registro legado, anterior
+        a esta fase, ou qualquer classificação não reconhecida) ->
+        nova linha 'desconhecido' — nunca inventa 'persistido' para um
+        mês histórico sem metadados.
 
     Fase ENSO-INTEGRIDADE 3A.1: o caminho da proveniência é derivado
     de MERRA_PATH (lido do módulo em tempo de CHAMADA, não capturado
@@ -211,9 +229,34 @@ def _registrar_proveniencia_serie_subst(ano, mes, enso):
         else:
             mes_fonte = enso['origem'].replace('persistencia de ', '')  # 'MM/AAAA'
             mm, aaaa = mes_fonte.split('/')
-            prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
-                            'persistido', [f'{aaaa}-{mm}'], 'master_monthly.csv (persistência)',
-                            'persistencia_ultimo_real_do_master', caminho=caminho_prov)
+            ano_fonte, mes_fonte_int = int(aaaa), int(mm)
+            origem_fonte = prov.consultar('master_monthly.csv', ano_fonte, mes_fonte_int,
+                                           indice, caminho=caminho_prov)
+            if origem_fonte is None:
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'desconhecido', [],
+                                f'master_monthly.csv (persistência de {mes_fonte}, '
+                                f'sem proveniência própria registrada)',
+                                'persistencia_sem_origem_conhecida', caminho=caminho_prov)
+            elif origem_fonte['classificacao'] == 'estimado':
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'estimado', origem_fonte['meses_base'],
+                                f"{origem_fonte['fonte']} (propagado por persistência de "
+                                f"{mes_fonte}, nunca reestimado)",
+                                'persistencia_de_estimativa_preserva_classificacao',
+                                caminho=caminho_prov)
+            elif origem_fonte['classificacao'] in ('observado', 'persistido'):
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'persistido',
+                                origem_fonte['meses_base'] or [f'{aaaa}-{mm}'],
+                                'master_monthly.csv (persistência)',
+                                'persistencia_ultimo_real_do_master', caminho=caminho_prov)
+            else:
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'desconhecido', [],
+                                f'master_monthly.csv (persistência de {mes_fonte}, '
+                                f'origem "{origem_fonte["classificacao"]}" não reconhecida)',
+                                'persistencia_de_origem_nao_reconhecida', caminho=caminho_prov)
 
 
 def main():
