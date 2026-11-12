@@ -1238,11 +1238,16 @@ def atualizar_master_monthly(nino34, tsa, pdo):
     df = df.sort_values(['year', 'month']).reset_index(drop=True)
     df.to_csv(MASTER_PATH, index=False)
 
+    # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de MASTER_PATH (lido
+    # do módulo em tempo de chamada) — um teste que já faz
+    # patch.object(update_indices, 'MASTER_PATH', tmp) redireciona a
+    # proveniência para o mesmo tmpdir automaticamente.
+    caminho_prov = MASTER_PATH.parent / 'indices_proveniencia.csv'
     agora = datetime.now().isoformat()
     for (y, m, indice, valor, classif, meses_base, metodo) in proveniencia_pendente:
         prov.registrar('master_monthly.csv', y, m, indice, valor, classif,
                         meses_base, 'update_indices.py (fetch ao vivo)', metodo,
-                        verificado_em=agora)
+                        verificado_em=agora, caminho=caminho_prov)
 
     return len(novas)
 
@@ -1311,11 +1316,15 @@ def corrigir_serie_subst(nino34, tsa, pdo):
         backup_csv(SUBST_PATH)
         df.to_csv(SUBST_PATH, index=False)
         print(f"  ✅ serie_subst.csv: corrigidas {', '.join(linhas_tocadas)}")
+        # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de SUBST_PATH
+        # (lido em tempo de chamada) — mesma disciplina de
+        # atualizar_master_monthly().
+        caminho_prov = SUBST_PATH.parent / 'indices_proveniencia.csv'
         agora = datetime.now().isoformat()
         for (y, m, indice, valor, classif, meses_base, metodo) in proveniencia_pendente:
             prov.registrar('serie_subst.csv', y, m, indice, valor, classif,
                             meses_base, 'update_indices.py (fetch ao vivo)', metodo,
-                            verificado_em=agora)
+                            verificado_em=agora, caminho=caminho_prov)
     return corrigidas
 
 

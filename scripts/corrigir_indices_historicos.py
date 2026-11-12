@@ -57,7 +57,12 @@ import proveniencia_indices as prov
 ROOT = Path(__file__).parent.parent
 MASTER_PATH = ROOT / 'data' / 'master_monthly.csv'
 SUBST_PATH = ROOT / 'data' / 'serie_subst.csv'
-PROV_PATH = prov.CAMINHO_PADRAO
+# Fase ENSO-INTEGRIDADE 3A.1: nenhuma constante de módulo captura
+# proveniencia_indices.CAMINHO_PADRAO em tempo de import — aplicar()
+# resolve o caminho da proveniência em tempo de CHAMADA (derivado de
+# MASTER_PATH, ou do que `caminhos` explicitamente informar), mesma
+# disciplina usada em fetch_monthly_data.py/update_indices.py/
+# update_dashboard.py.
 
 COLUNA_POR_ARQUIVO = {'master_monthly.csv': ('year', 'month'),
                       'serie_subst.csv': ('ano', 'mes')}
@@ -249,7 +254,8 @@ def aplicar(plano, caminhos=None, confirmar_outubro_mensagem=None):
     arquivos tocados nesta chamada é substituído).
     """
     caminhos = caminhos or {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
-    prov_path = caminhos.get('_proveniencia', PROV_PATH)
+    prov_path = caminhos.get('_proveniencia') or (
+        Path(caminhos['master_monthly.csv']).parent / 'indices_proveniencia.csv')
 
     avaliacoes = relatorio_dry_run(plano, caminhos)
     bloqueantes = [a for a in avaliacoes if a['status'] in ('inesperado', 'linha_ausente')]

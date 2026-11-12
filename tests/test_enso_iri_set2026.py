@@ -393,6 +393,77 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         'data/serie_subst.csv',           # série de referência que treina o modelo
     ]
 
+    # ── Fase ENSO-INTEGRIDADE 3A/3A.1 ───────────────────────────────
+    # `scripts/update_dashboard.py` ganhou proteção fail-closed contra
+    # índices ENSO ausentes/inválidos (`incorporar_fallback_openmeteo`)
+    # e passou a registrar proveniência (`import proveniencia_indices`).
+    # Isso NÃO é mudança de modelo científico — a função tratada aqui
+    # só decide SE um mês novo entra na série via Open-Meteo, nunca
+    # como SARIMAX/XGBoost/EMOS H2/solve_bh calculam o que quer que
+    # seja. Em vez de tirar o arquivo da lista de intocáveis (o que
+    # cegaria esta guarda para qualquer mudança futura nele, científica
+    # ou não) ou usar skip/xfail/tolerância, a guarda abaixo compara
+    # byte-a-byte SÓ a superfície explicitamente autorizada; qualquer
+    # outra diferença no arquivo ainda reprova test_a, exatamente como
+    # antes.
+    _UD_IMPORT_PERMITIDO = 'import proveniencia_indices as prov\n'
+    _UD_FUNC_INICIO = 'def incorporar_fallback_openmeteo'
+    _UD_FUNC_FIM_MARCADOR = '\n\n\n# ── Caminhos'
+
+    # Segunda superfície autorizada: a linha que inicializava o PDO
+    # ausente com `.fillna(0)` (um 0.0 fabricado, exatamente o que
+    # CLAUDE.md "armadilha 6" proíbe) foi trocada por `.ffill()` puro —
+    # o NaN residual (só na abertura da série) é removido depois pelo
+    # `dropna(subset=[...,'pdo_l23'])` já existente antes desta fase.
+    # Aceita as duas formas (antiga/nova) em qualquer ordem, porque a
+    # mesma função compara texto de base OU de HEAD indistintamente.
+    _UD_PDO_ANTIGO = "d['pdo'] = d['pdo'].ffill().fillna(0)\n"
+    _UD_PDO_NOVO = (
+        "d['pdo'] = d['pdo'].ffill()   # Fase ENSO-INTEGRIDADE: nunca fillna(0) — um 0.0\n"
+        "                               # fabricado seria ENSO-neutro falso; qualquer NaN\n"
+        "                               # residual (só a abertura da série, antes de\n"
+        "                               # existir qualquer PDO real) é removido abaixo\n"
+        "                               # pelo dropna(subset=[...,'pdo_l23']), nunca\n"
+        "                               # sobrevive como 0.0 disfarçado de observação.\n"
+    )
+
+    @classmethod
+    def _nucleo_cientifico_update_dashboard(cls, texto):
+        """Devolve o conteúdo de update_dashboard.py com a superfície
+        autorizada (o import novo, o corpo de
+        incorporar_fallback_openmeteo e a linha do PDO fail-closed)
+        removida — o que resta é só o que tem que continuar
+        byte-a-byte idêntico. Nunca falha em silêncio: se os
+        marcadores não forem encontrados (ex.: alguém renomeou/moveu a
+        função, ou a linha do PDO foi alterada de uma terceira forma
+        não autorizada), levanta em vez de devolver um resultado que
+        pareceria "sem diferença" por engano."""
+        sem_import = texto.replace(cls._UD_IMPORT_PERMITIDO, '', 1)
+
+        inicio = sem_import.find(cls._UD_FUNC_INICIO)
+        if inicio < 0:
+            raise AssertionError(
+                f'{cls._UD_FUNC_INICIO!r} não encontrado — marcador da área '
+                'autorizada mudou; revisar esta guarda antes de confiar nela')
+        fim = sem_import.find(cls._UD_FUNC_FIM_MARCADOR, inicio)
+        if fim < 0:
+            raise AssertionError(
+                f'{cls._UD_FUNC_FIM_MARCADOR!r} não encontrado após o início da função — '
+                'marcador da área autorizada mudou; revisar esta guarda antes de confiar nela')
+        sem_funcao = sem_import[:inicio] + sem_import[fim:]
+
+        if cls._UD_PDO_ANTIGO in sem_funcao:
+            sem_pdo = sem_funcao.replace(cls._UD_PDO_ANTIGO, '', 1)
+        elif cls._UD_PDO_NOVO in sem_funcao:
+            sem_pdo = sem_funcao.replace(cls._UD_PDO_NOVO, '', 1)
+        else:
+            raise AssertionError(
+                'nem a forma antiga (.fillna(0)) nem a nova (.ffill() fail-closed) da '
+                "linha do PDO foram encontradas — marcador da área autorizada mudou; "
+                'revisar esta guarda antes de confiar nela')
+
+        return sem_pdo
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -409,6 +480,28 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True,
         )
         alterados = [l for l in resultado.stdout.splitlines() if l.strip()]
+
+        # scripts/update_dashboard.py pode aparecer como "alterado" por
+        # causa só da superfície autorizada (ENSO-INTEGRIDADE 3A/3A.1) —
+        # nesse caso, confirmar que o NÚCLEO científico do arquivo segue
+        # byte-a-byte idêntico antes de tirá-lo da lista de reprovados.
+        # Qualquer outro arquivo nesta lista, ou qualquer diferença fora
+        # dessa superfície em update_dashboard.py, continua reprovando.
+        if alterados == ['scripts/update_dashboard.py']:
+            base_txt = self._ler_arquivo_na_revisao(self.base, 'scripts/update_dashboard.py')
+            head_txt = self._ler_arquivo_na_revisao('HEAD', 'scripts/update_dashboard.py')
+            self.assertIsNotNone(base_txt, 'não foi possível ler update_dashboard.py no merge-base')
+            self.assertIsNotNone(head_txt, 'não foi possível ler update_dashboard.py em HEAD')
+            nucleo_base = self._nucleo_cientifico_update_dashboard(base_txt)
+            nucleo_head = self._nucleo_cientifico_update_dashboard(head_txt)
+            self.assertEqual(
+                nucleo_base, nucleo_head,
+                'scripts/update_dashboard.py mudou FORA da superfície autorizada '
+                '(import proveniencia_indices + incorporar_fallback_openmeteo + '
+                'linha fail-closed do PDO) — isso é alteração de modelo científico, '
+                'não de validação/fallback')
+            return
+
         self.assertEqual(alterados, [], f'arquivo(s) científico(s)/de referência foram alterados: {alterados}')
 
     def _ler_arquivo_na_revisao(self, ref, caminho):
@@ -475,6 +568,93 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         self.assertTrue(
             set(scripts_operacionais).isdisjoint(self.ARQUIVOS_CIENTIFICOS),
             'scripts operacionais nunca devem entrar na lista de arquivos científicos')
+
+    # ── Regressão da superfície autorizada (ENSO-INTEGRIDADE 3A.1) ──
+    # Os testes abaixo não tocam git nem o arquivo real — são testes
+    # unitários puros de `_nucleo_cientifico_update_dashboard`, com
+    # texto sintético, para provar que a exceção introduzida em test_a
+    # é estreita: cobre exatamente o que foi autorizado (import +
+    # incorporar_fallback_openmeteo + a linha fail-closed do PDO) e
+    # nada além disso.
+
+    _TEXTO_SINTETICO_BASE = (
+        "import os\n"
+        "from pathlib import Path\n"
+        "\n"
+        "def incorporar_fallback_openmeteo(serie, data_path):\n"
+        "    return serie\n"
+        "\n"
+        "\n"
+        "# ── Caminhos ──\n"
+        "def solve_bh(prec_jul, etp_jul):\n"
+        "    return prec_jul - etp_jul\n"
+        "\n"
+        "d['pdo'] = d['pdo'].ffill().fillna(0)\n"
+        "def gtsa(p):\n"
+        "    return p\n"
+    )
+
+    def test_e_mudanca_so_na_area_permitida_nao_e_sinalizada(self):
+        """Positivo: alterar só o import autorizado, o corpo de
+        incorporar_fallback_openmeteo e a linha do PDO (o que
+        ENSO-INTEGRIDADE 3A/3A.1 de fato fez) não deve sobrar
+        diferença no núcleo científico — é exatamente o caso que
+        permite test_a destravar sem mascarar nada."""
+        texto_modificado = self._TEXTO_SINTETICO_BASE.replace(
+            "import os\nfrom pathlib import Path\n",
+            "import os\nfrom pathlib import Path\nimport proveniencia_indices as prov\n",
+        ).replace(
+            "def incorporar_fallback_openmeteo(serie, data_path):\n    return serie\n",
+            "def incorporar_fallback_openmeteo(serie, data_path):\n"
+            "    if serie is None:\n"
+            "        raise ValueError('fail-closed')\n"
+            "    return serie\n",
+        ).replace(self._UD_PDO_ANTIGO, self._UD_PDO_NOVO)
+        nucleo_base = self._nucleo_cientifico_update_dashboard(self._TEXTO_SINTETICO_BASE)
+        nucleo_mod = self._nucleo_cientifico_update_dashboard(texto_modificado)
+        self.assertEqual(nucleo_base, nucleo_mod)
+
+    def test_f_mudanca_fora_da_area_permitida_e_detectada(self):
+        """Negativo: uma alteração em código científico de verdade
+        (aqui, solve_bh — fora da área autorizada) tem que continuar
+        sendo detectada pela comparação de núcleo, mesmo que o import
+        de proveniência e a mudança autorizada do PDO também estejam
+        presentes. Prova que a exceção de test_a não abre brecha para
+        mudanças científicas indevidas passarem disfarçadas de 'só
+        validação/fallback'."""
+        texto_com_mudancas_permitidas = self._TEXTO_SINTETICO_BASE.replace(
+            "import os\nfrom pathlib import Path\n",
+            "import os\nfrom pathlib import Path\nimport proveniencia_indices as prov\n",
+        ).replace(self._UD_PDO_ANTIGO, self._UD_PDO_NOVO)
+        texto_com_bh_tambem_alterado = texto_com_mudancas_permitidas.replace(
+            "def solve_bh(prec_jul, etp_jul):\n    return prec_jul - etp_jul\n",
+            "def solve_bh(prec_jul, etp_jul):\n    return (prec_jul - etp_jul) * 0.9\n",
+        )
+        nucleo_base = self._nucleo_cientifico_update_dashboard(self._TEXTO_SINTETICO_BASE)
+        nucleo_alterado = self._nucleo_cientifico_update_dashboard(texto_com_bh_tambem_alterado)
+        self.assertNotEqual(
+            nucleo_base, nucleo_alterado,
+            'uma mudança em solve_bh (núcleo científico) deveria ter sido detectada')
+
+    def test_g_terceira_forma_nao_autorizada_da_linha_pdo_e_detectada(self):
+        """Negativo específico para a segunda superfície autorizada:
+        uma TERCEIRA forma da linha do PDO (nem `.fillna(0)` nem
+        `.ffill()` fail-closed — ex.: alguém trocasse por uma
+        constante arbitrária) não é reconhecida por nenhum dos dois
+        marcadores, então tem que levantar em vez de ser tratada como
+        'sem diferença'."""
+        texto_terceira_forma = self._TEXTO_SINTETICO_BASE.replace(
+            self._UD_PDO_ANTIGO, "d['pdo'] = d['pdo'].fillna(-99)\n")
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_update_dashboard(texto_terceira_forma)
+
+    def test_h_marcadores_ausentes_levantam_em_vez_de_mascarar(self):
+        """Se os marcadores da área autorizada não forem encontrados
+        (ex.: a função foi renomeada/movida), a comparação tem que
+        levantar — nunca devolver silenciosamente 'sem diferença'."""
+        texto_sem_funcao = "import os\nfrom pathlib import Path\n# nada aqui\n"
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_update_dashboard(texto_sem_funcao)
 
 
 if __name__ == '__main__':

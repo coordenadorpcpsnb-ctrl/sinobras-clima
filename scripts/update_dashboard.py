@@ -106,6 +106,11 @@ def incorporar_fallback_openmeteo(serie, data_path):
     mer     = merra[["year","month","nino34","tsa","pdo"]].copy()
     mer.columns = ["ano","mes","nino34","tsa","pdo"]
     mer_idx = mer.set_index(["ano","mes"])
+    # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado do PRÓPRIO
+    # parâmetro data_path (já injetado explicitamente pelo chamador,
+    # inclusive em teste) — nunca de proveniencia_indices.CAMINHO_
+    # PADRAO isoladamente.
+    caminho_prov = Path(data_path) / 'indices_proveniencia.csv'
     for i, r in df_novos.iterrows():
         try:
             mi = mer_idx.loc[(int(r.ano), int(r.mes))]
@@ -124,16 +129,18 @@ def incorporar_fallback_openmeteo(serie, data_path):
             df_novos.at[i, "tsa"]    = float(mi["tsa"])
             df_novos.at[i, "pdo"]    = float(mi["pdo"])
             for campo in ("nino34", "tsa", "pdo"):
-                origem = prov.consultar("master_monthly.csv", int(r.ano), int(r.mes), campo)
+                origem = prov.consultar("master_monthly.csv", int(r.ano), int(r.mes), campo,
+                                         caminho=caminho_prov)
                 if origem is not None:
                     prov.registrar("serie_subst.csv", int(r.ano), int(r.mes), campo,
                                     float(mi[campo]), origem["classificacao"],
-                                    origem["meses_base"], origem["fonte"], origem["metodo"])
+                                    origem["meses_base"], origem["fonte"], origem["metodo"],
+                                    caminho=caminho_prov)
                 else:
                     prov.registrar("serie_subst.csv", int(r.ano), int(r.mes), campo,
                                     float(mi[campo]), "desconhecido", [],
                                     "master_monthly.csv (sem proveniência registrada)",
-                                    "copiado_do_master_sem_origem_conhecida")
+                                    "copiado_do_master_sem_origem_conhecida", caminho=caminho_prov)
 
     # Qualquer mês que ficou com algum índice NaN (sem correspondência
     # válida no master) é descartado por completo desta rodada — nunca

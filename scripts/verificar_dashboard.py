@@ -756,11 +756,16 @@ def main(pular_continuidade_serie_subst=False):
     # só compara a classificação registrada, nunca o valor em si.
     if SERIE_SUBST.exists():
         serie_check = pd.read_csv(SERIE_SUBST)
+        # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de SERIE_SUBST
+        # (lido em tempo de chamada) — um teste que já faz
+        # patch.object(verificar_dashboard, 'SERIE_SUBST', tmp)
+        # redireciona a proveniência consultada para o mesmo tmpdir.
+        caminho_prov = SERIE_SUBST.parent / 'indices_proveniencia.csv'
         if not serie_check.empty:
             ult = serie_check.sort_values(['ano', 'mes']).iloc[-1]
             y_ult, m_ult = int(ult['ano']), int(ult['mes'])
             for indice in ('tsa', 'pdo'):
-                reg = prov.consultar('serie_subst.csv', y_ult, m_ult, indice)
+                reg = prov.consultar('serie_subst.csv', y_ult, m_ult, indice, caminho=caminho_prov)
                 if reg is None:
                     print(f'  ⚠ proveniência DESCONHECIDA para {indice} do mês mais '
                           f'recente de serie_subst.csv ({m_ult:02d}/{y_ult}) — nenhum '

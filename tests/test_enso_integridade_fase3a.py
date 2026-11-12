@@ -204,11 +204,16 @@ class EnsoIndicesFailClosedTestCase(unittest.TestCase):
     def test_observacao_real_registra_proveniencia_copiada_para_serie_subst(self):
         pd.DataFrame([{'year': 2026, 'month': 9, 'nino34': 2.84,
                        'tsa': 0.57, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
+        # proveniência do master é lida/escrita no mesmo caminho que
+        # _registrar_proveniencia_serie_subst deriva de MERRA_PATH —
+        # não no CAMINHO_PADRAO patcheado, que esta função não usa mais.
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
         prov.registrar('master_monthly.csv', 2026, 9, 'tsa', 0.57, 'observado',
-                        ['2026-09'], 'PSL tsa.data', 'observacao_direta')
+                        ['2026-09'], 'PSL tsa.data', 'observacao_direta',
+                        caminho=caminho_prov)
         enso = fmd.enso_indices(2026, 9)
         fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
-        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa')
+        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa', caminho=caminho_prov)
         self.assertEqual(r['classificacao'], 'observado')
 
     def test_master_sem_proveniencia_propria_vira_desconhecida_na_copia(self):
@@ -219,7 +224,8 @@ class EnsoIndicesFailClosedTestCase(unittest.TestCase):
                        'tsa': 0.57, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
         enso = fmd.enso_indices(2026, 9)
         fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
-        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa')
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa', caminho=caminho_prov)
         self.assertEqual(r['classificacao'], 'desconhecido')
 
     def test_persistencia_registra_proveniencia_persistido_com_mes_fonte(self):
@@ -227,7 +233,8 @@ class EnsoIndicesFailClosedTestCase(unittest.TestCase):
                        'tsa': 0.42, 'pdo': -2.85}]).to_csv(self.merra_path, index=False)
         enso = fmd.enso_indices(2026, 9)
         fmd._registrar_proveniencia_serie_subst(2026, 9, enso)
-        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa')
+        caminho_prov = self.merra_path.parent / 'indices_proveniencia.csv'
+        r = prov.consultar('serie_subst.csv', 2026, 9, 'tsa', caminho=caminho_prov)
         self.assertEqual(r['classificacao'], 'persistido')
         self.assertEqual(r['meses_base'], ['2026-08'])
 
@@ -257,7 +264,7 @@ def _import_update_dashboard_fallback():
     fim = texto.index('\n\n\n# ── Caminhos')
     trecho = texto[inicio:fim]
     namespace = {
-        'pd': pd, 'np': np, 'prov': prov,
+        'pd': pd, 'np': np, 'prov': prov, 'Path': Path,
         'buscar_prec_openmeteo': None,  # sobrescrito via patch nos testes
     }
     exec(compile(trecho, str(caminho), 'exec'), namespace)
@@ -302,15 +309,19 @@ class IncorporarFallbackOpenmeteoTestCase(unittest.TestCase):
         pd.DataFrame([{'year': 2026, 'month': 7, 'date': '2026-07-01',
                        'nino34': 2.0, 'tsa': 0.12, 'pdo': -2.85}]).to_csv(
             self.data_path / 'master_monthly.csv', index=False)
+        # mesmo caminho que incorporar_fallback_openmeteo deriva do seu
+        # próprio parâmetro data_path — não o CAMINHO_PADRAO patcheado,
+        # que esta função não usa mais (resolução passa a ser explícita).
+        caminho_prov = self.data_path / 'indices_proveniencia.csv'
         prov.registrar('master_monthly.csv', 2026, 7, 'tsa', 0.12, 'observado',
-                        ['2026-07'], 'f', 'observacao_direta')
+                        ['2026-07'], 'f', 'observacao_direta', caminho=caminho_prov)
         self.fn.__globals__['buscar_prec_openmeteo'] = lambda *a, **k: self._om_payload(
             [{'ano': 2026, 'mes': 7, 'prec': 5.0, 'fonte': 'OpenMeteo-ERA5'}])
         resultado = self.fn(serie, self.data_path)
         self.assertEqual(len(resultado), 2)
         linha = resultado[resultado['mes'] == 7].iloc[0]
         self.assertEqual(linha['tsa'], 0.12)
-        r = prov.consultar('serie_subst.csv', 2026, 7, 'tsa')
+        r = prov.consultar('serie_subst.csv', 2026, 7, 'tsa', caminho=caminho_prov)
         self.assertEqual(r['classificacao'], 'observado')
 
     def test_valor_nan_no_master_tambem_descarta_o_mes(self):

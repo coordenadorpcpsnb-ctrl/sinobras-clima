@@ -184,24 +184,36 @@ def _registrar_proveniencia_serie_subst(ano, mes, enso):
     só por estar presente no master. Quando enso['origem'] é
     persistência (mês ainda ausente do master), registra
     classificacao='persistido' com o mês-fonte explícito.
+
+    Fase ENSO-INTEGRIDADE 3A.1: o caminho da proveniência é derivado
+    de MERRA_PATH (lido do módulo em tempo de CHAMADA, não capturado
+    como default de função) — nunca de proveniencia_indices.
+    CAMINHO_PADRAO isoladamente. Um teste que já faz
+    patch.object(fmd, 'MERRA_PATH', tmp) (padrão já usado por
+    test_fetch_fallback.py/test_cobertura_temporal_precipitacao.py)
+    redireciona a proveniência para o MESMO tmpdir automaticamente,
+    sem precisar conhecer este módulo nem ser alterado.
     """
+    caminho_prov = MERRA_PATH.parent / 'indices_proveniencia.csv'
     for indice in ('nino34', 'tsa', 'pdo'):
         if enso['origem'] == 'master':
-            origem_master = prov.consultar('master_monthly.csv', ano, mes, indice)
+            origem_master = prov.consultar('master_monthly.csv', ano, mes, indice,
+                                            caminho=caminho_prov)
             if origem_master is not None:
                 prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
                                 origem_master['classificacao'], origem_master['meses_base'],
-                                origem_master['fonte'], origem_master['metodo'])
+                                origem_master['fonte'], origem_master['metodo'],
+                                caminho=caminho_prov)
             else:
                 prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
                                 'desconhecido', [], 'master_monthly.csv (sem proveniência registrada)',
-                                'copiado_do_master_sem_origem_conhecida')
+                                'copiado_do_master_sem_origem_conhecida', caminho=caminho_prov)
         else:
             mes_fonte = enso['origem'].replace('persistencia de ', '')  # 'MM/AAAA'
             mm, aaaa = mes_fonte.split('/')
             prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
                             'persistido', [f'{aaaa}-{mm}'], 'master_monthly.csv (persistência)',
-                            'persistencia_ultimo_real_do_master')
+                            'persistencia_ultimo_real_do_master', caminho=caminho_prov)
 
 
 def main():

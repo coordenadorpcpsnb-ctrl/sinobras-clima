@@ -62,7 +62,8 @@ jobs:
             tests.test_update_indices \
             tests.test_update_indices_enso_auto \
             tests.test_fetch_fallback \
-            tests.test_cobertura_temporal_precipitacao
+            tests.test_cobertura_temporal_precipitacao \
+            tests.test_enso_integridade_fase3a
 
       - name: Sumário
         if: always()
