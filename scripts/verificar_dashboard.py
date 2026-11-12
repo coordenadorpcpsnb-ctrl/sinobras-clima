@@ -36,6 +36,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import proveniencia_indices as prov
+
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
 SERIE_SUBST = ROOT / 'data' / 'serie_subst.csv'
@@ -740,6 +742,42 @@ def main(pular_continuidade_serie_subst=False):
                       f'falha recorrente do workflow semanal/mensal')
             else:
                 ok('defasagem dos índices oceânicos mensais dentro do esperado')
+
+    # ── 12. defasagem de TSA/PDO via proveniência (nunca por constância
+    #        do valor — só aviso, mesma disciplina do item 11) ──────────
+    # Fase ENSO-INTEGRIDADE (12/11/2026): PDO não tinha NENHUMA checagem
+    # até aqui (confirmado em auditoria — zero menções a "pdo" neste
+    # arquivo antes desta fase). Um valor de PDO congelado por meses
+    # (persistido/estimado) é indistinguível de uma observação real sem
+    # consultar o registro complementar de proveniência — nunca inferido
+    # pela constância do número (um PDO real também pode variar pouco
+    # entre meses vizinhos; "mudou" não prova "é observação", e
+    # "não mudou" não prova "é estimativa"). Sem limiar físico novo —
+    # só compara a classificação registrada, nunca o valor em si.
+    if SERIE_SUBST.exists():
+        serie_check = pd.read_csv(SERIE_SUBST)
+        if not serie_check.empty:
+            ult = serie_check.sort_values(['ano', 'mes']).iloc[-1]
+            y_ult, m_ult = int(ult['ano']), int(ult['mes'])
+            for indice in ('tsa', 'pdo'):
+                reg = prov.consultar('serie_subst.csv', y_ult, m_ult, indice)
+                if reg is None:
+                    print(f'  ⚠ proveniência DESCONHECIDA para {indice} do mês mais '
+                          f'recente de serie_subst.csv ({m_ult:02d}/{y_ult}) — nenhum '
+                          f'registro complementar encontrado; não presumir observação')
+                elif reg['classificacao'] == 'observado':
+                    ok(f'{indice} do mês mais recente ({m_ult:02d}/{y_ult}) registrado '
+                       f'como observação real')
+                elif reg['classificacao'] in ('persistido', 'estimado'):
+                    meses_base = ', '.join(reg['meses_base']) if reg['meses_base'] else '?'
+                    print(f'  ⚠ {indice} do mês mais recente ({m_ult:02d}/{y_ult}) é '
+                          f'{reg["classificacao"]} (base: {meses_base}, método: '
+                          f'{reg["metodo"]}) — não é observação real deste mês; '
+                          f'aviso informativo, nunca bloqueia a publicação')
+                else:
+                    print(f'  ⚠ {indice} do mês mais recente ({m_ult:02d}/{y_ult}) com '
+                          f'proveniência "{reg["classificacao"]}" — origem não '
+                          f'comprovada, não presumir observação')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

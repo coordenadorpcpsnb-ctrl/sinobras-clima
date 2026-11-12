@@ -33,6 +33,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 # ══════════════════════════════════════════════════════════════════════════
 
 from _openmeteo import buscar_prec_openmeteo, FAZENDAS_LAT, FAZENDAS_LON
+import proveniencia_indices as prov
 
 
 def incorporar_fallback_openmeteo(serie, data_path):
@@ -74,28 +75,79 @@ def incorporar_fallback_openmeteo(serie, data_path):
         print("  ℹ Nenhum mês novo via Open-Meteo")
         return serie
 
-    # Preencher índices ENSO do master_monthly quando disponível
-    df_novos["nino34"] = 0.0
-    df_novos["tsa"]    = 0.0
-    df_novos["pdo"]    = 0.0
+    # Preencher índices ENSO do master_monthly quando disponível. Fase
+    # ENSO-INTEGRIDADE (12/11/2026): NUNCA inicializar em 0.0 — um mês
+    # sem correspondência no master (KeyError) ou com master ilegível
+    # fica com nino34/tsa/pdo = NaN e, por isso, é DESCARTADO desta
+    # rodada (nunca gravado em serie_subst.csv com índice fabricado);
+    # a precipitação desse mês fica pendente também, igual ao
+    # tratamento já existente para "sem precipitação de nenhuma
+    # fonte" — tentaremos de novo na próxima execução.
+    df_novos["nino34"] = np.nan
+    df_novos["tsa"]    = np.nan
+    df_novos["pdo"]    = np.nan
     df_novos["date"]   = pd.to_datetime(
         dict(year=df_novos["ano"].astype(int),
              month=df_novos["mes"].astype(int), day=1)).astype(str)
+
     try:
-        merra   = pd.read_csv(data_path / "master_monthly.csv", parse_dates=["date"])
-        mer     = merra[["year","month","nino34","tsa","pdo"]].copy()
-        mer.columns = ["ano","mes","nino34","tsa","pdo"]
-        mer_idx = mer.set_index(["ano","mes"])
-        for i, r in df_novos.iterrows():
-            try:
-                mi = mer_idx.loc[(int(r.ano), int(r.mes))]
-                df_novos.at[i,"nino34"] = float(mi["nino34"])
-                df_novos.at[i,"tsa"]    = float(mi["tsa"])
-                df_novos.at[i,"pdo"]    = float(mi["pdo"])
-            except KeyError:
-                pass
-    except Exception:
-        pass
+        merra = pd.read_csv(data_path / "master_monthly.csv", parse_dates=["date"])
+    except Exception as e:
+        print(f"  ⚠ master_monthly.csv ilegível ({e}) — nenhum mês via Open-Meteo "
+              f"será gravado nesta rodada (erro estrutural, não atraso de fonte)")
+        return serie
+
+    faltando_cols = {"year", "month", "nino34", "tsa", "pdo"} - set(merra.columns)
+    if faltando_cols:
+        print(f"  ⚠ master_monthly.csv sem colunas obrigatórias {sorted(faltando_cols)} — "
+              f"nenhum mês via Open-Meteo será gravado nesta rodada")
+        return serie
+
+    mer     = merra[["year","month","nino34","tsa","pdo"]].copy()
+    mer.columns = ["ano","mes","nino34","tsa","pdo"]
+    mer_idx = mer.set_index(["ano","mes"])
+    for i, r in df_novos.iterrows():
+        try:
+            mi = mer_idx.loc[(int(r.ano), int(r.mes))]
+        except KeyError:
+            print(f"  ⚠ {int(r.mes):02d}/{int(r.ano)}: sem índices ENSO no master_monthly "
+                  f"— mês pulado nesta rodada, tentaremos na próxima execução")
+            continue
+        for campo in ("nino34", "tsa", "pdo"):
+            v = mi[campo]
+            if pd.isna(v) or not np.isfinite(float(v)):
+                print(f"  ⚠ {int(r.mes):02d}/{int(r.ano)}: {campo} ausente/não finito no "
+                      f"master_monthly — mês pulado nesta rodada")
+                break
+        else:
+            df_novos.at[i, "nino34"] = float(mi["nino34"])
+            df_novos.at[i, "tsa"]    = float(mi["tsa"])
+            df_novos.at[i, "pdo"]    = float(mi["pdo"])
+            for campo in ("nino34", "tsa", "pdo"):
+                origem = prov.consultar("master_monthly.csv", int(r.ano), int(r.mes), campo)
+                if origem is not None:
+                    prov.registrar("serie_subst.csv", int(r.ano), int(r.mes), campo,
+                                    float(mi[campo]), origem["classificacao"],
+                                    origem["meses_base"], origem["fonte"], origem["metodo"])
+                else:
+                    prov.registrar("serie_subst.csv", int(r.ano), int(r.mes), campo,
+                                    float(mi[campo]), "desconhecido", [],
+                                    "master_monthly.csv (sem proveniência registrada)",
+                                    "copiado_do_master_sem_origem_conhecida")
+
+    # Qualquer mês que ficou com algum índice NaN (sem correspondência
+    # válida no master) é descartado por completo desta rodada — nunca
+    # entra em serie_subst.csv com um índice fabricado.
+    antes = len(df_novos)
+    df_novos = df_novos.dropna(subset=["nino34", "tsa", "pdo"]).copy()
+    se_descartados = antes - len(df_novos)
+    if se_descartados:
+        print(f"  ℹ {se_descartados} mês(es) descartado(s) nesta rodada por falta de "
+              f"índice ENSO válido — precipitação correspondente também não foi gravada")
+
+    if df_novos.empty:
+        print("  ℹ Nenhum mês novo via Open-Meteo com índices ENSO válidos")
+        return serie
 
     print(f"  ✅ {len(df_novos)} mês(es) adicionados via ERA5-Land:")
     for _, r in df_novos.iterrows():
@@ -182,7 +234,12 @@ else:
 # ══════════════════════════════════════════════════════════════════════════
 print("\n[2/6] Feature engineering…")
 d = serie.copy()
-d['pdo'] = d['pdo'].ffill().fillna(0)
+d['pdo'] = d['pdo'].ffill()   # Fase ENSO-INTEGRIDADE: nunca fillna(0) — um 0.0
+                               # fabricado seria ENSO-neutro falso; qualquer NaN
+                               # residual (só a abertura da série, antes de
+                               # existir qualquer PDO real) é removido abaixo
+                               # pelo dropna(subset=[...,'pdo_l23']), nunca
+                               # sobrevive como 0.0 disfarçado de observação.
 for L in [2, 3]:
     d[f'n34_l{L}'] = d['nino34'].shift(L)
     d[f'tsa_l{L}'] = d['tsa'].shift(L)
