@@ -16,3 +16,12 @@ cache/nmme/
 # data/indices_proveniencia.csv (o registro complementar de
 # proveniência) NÃO bate neste padrão e permanece versionável.
 data/.corrigir_indices_historicos.*.json
+
+# ENSO-INTEGRIDADE 3B.0 — os .tmp intermediários da escrita atômica
+# (tmp+fsync+os.replace) de corrigir_indices_historicos.py: residuo de
+# uma interrupção exata entre a escrita do .tmp e o replace nunca é o
+# registro definitivo (master_monthly.csv.tmp, serie_subst.csv.tmp,
+# indices_proveniencia.csv.tmp, e o próprio manifesto .json.tmp, ativo
+# ou arquivado). Restrito a data/ — nunca *.tmp no repositório inteiro.
+# data/indices_proveniencia.csv (sem .tmp) continua fora deste padrão.
+data/*.tmp

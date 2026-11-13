@@ -63,7 +63,8 @@ jobs:
             tests.test_update_indices_enso_auto \
             tests.test_fetch_fallback \
             tests.test_cobertura_temporal_precipitacao \
-            tests.test_enso_integridade_fase3a
+            tests.test_enso_integridade_fase3a \
+            tests.test_enso_integridade_fase3b0
 
       - name: Sumário
         if: always()
@@ -152,6 +153,23 @@ jobs:
       # backfill, uma correção de série), a checagem deve rodar CHEIA,
       # sem pular — é exatamente o caso em que uma lacuna nova seria
       # uma regressão real introduzida por esta própria PR.
+      #
+      # Fase ENSO-INTEGRIDADE 3B.0 — EXCEÇÃO ESTRITA, só para
+      # pull_request: se data/serie_subst.csv FOI tocado, mas o diff
+      # completo (master_monthly.csv + serie_subst.csv +
+      # indices_proveniencia.csv, os 3 juntos) corresponde EXATAMENTE
+      # ao plano fechado de correção histórica de TSA
+      # (scripts/corrigir_indices_historicos.PLANO_BASE — fonte única,
+      # nunca uma lista divergente aqui), a lacuna de set/out ainda
+      # ausentes é a MESMA defasagem de calendário pré-existente do
+      # caso "não tocado" acima, não uma regressão desta correção —
+      # pular é seguro. Qualquer diff que NÃO bata exatamente com o
+      # plano (outro mês, outra coluna, precipitação, Niño 3.4, PDO,
+      # inclusão/exclusão/duplicação de mês, proveniência inconsistente
+      # etc.) mantém a checagem CHEIA, sem exceção — nunca consulta a
+      # NOAA, só compara texto já commitado. update.yml/
+      # indices_semanal.yml não chamam este validador e continuam
+      # exigindo continuidade completa sempre.
       - name: Decidir se a checagem de continuidade pode ser pulada
         id: continuidade
         run: |
@@ -159,9 +177,12 @@ jobs:
             if git diff --quiet ${{ github.event.pull_request.base.sha }} HEAD -- data/serie_subst.csv; then
               echo "pular=true" >> $GITHUB_OUTPUT
               echo "data/serie_subst.csv não foi tocado por esta PR — lacuna do mês corrente (se houver) é defasagem de calendário pré-existente, não desta mudança."
+            elif python scripts/validar_correcao_historica_tsa.py ${{ github.event.pull_request.base.sha }} HEAD; then
+              echo "pular=true" >> $GITHUB_OUTPUT
+              echo "data/serie_subst.csv foi alterado, mas o diff bate exatamente com o plano fechado de correção histórica de TSA — exceção estrita da Fase ENSO-INTEGRIDADE 3B.0, não uma liberação genérica."
             else
               echo "pular=false" >> $GITHUB_OUTPUT
-              echo "data/serie_subst.csv FOI alterado por esta PR — checagem de continuidade roda sem pular; uma lacuna nova aqui seria regressão real desta mudança."
+              echo "data/serie_subst.csv FOI alterado por esta PR e o diff NÃO corresponde ao plano fechado de TSA — checagem de continuidade roda sem pular; uma lacuna nova aqui seria regressão real desta mudança."
             fi
           else
             # workflow_dispatch manual, sem PR/base de comparação: mesma
