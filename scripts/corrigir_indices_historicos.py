@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 import urllib.request
@@ -91,21 +92,85 @@ COLUNA_POR_ARQUIVO = {'master_monthly.csv': ('year', 'month'),
 # projeto não tem e não finge ter).
 MANIFESTO_NOME = '.corrigir_indices_historicos.ativo.json'
 
+_CAMPOS_OBRIGATORIOS_MANIFESTO = {'status', 'iniciado_em', 'arquivos'}
+
+
+class ManifestoInvalido(Exception):
+    """Levantada quando um manifesto EXISTE no disco mas está
+    malformado (JSON truncado/corrompido) ou estruturalmente inválido
+    (campos obrigatórios ausentes). Nunca tratada como "nenhuma
+    transação pendente" — isso mascararia uma transação real cujo
+    estado não pode ser confiavelmente lido, abrindo caminho para
+    `aplicar()` começar uma transação nova por cima de um estado
+    desconhecido, ou para `recuperar_falha()`/`rollback()` tentarem
+    uma recuperação "destrutiva às cegas" sem saber o que de fato foi
+    substituído. Os backups .bak no mesmo diretório nunca são tocados
+    quando esta exceção é levantada — ficam preservados para
+    recuperação manual supervisionada."""
+
 
 def _manifesto_path(caminhos):
     return Path(caminhos['master_monthly.csv']).parent / MANIFESTO_NOME
 
 
+def _validar_manifesto(dados, caminho):
+    """Validação estrutural explícita — nunca assume que um JSON que
+    parseou com sucesso tem o formato esperado."""
+    if not isinstance(dados, dict):
+        raise ManifestoInvalido(f"{caminho}: conteúdo não é um objeto JSON (manifesto corrompido)")
+    faltando = _CAMPOS_OBRIGATORIOS_MANIFESTO - set(dados.keys())
+    if faltando:
+        raise ManifestoInvalido(
+            f"{caminho}: campo(s) obrigatório(s) ausente(s) {sorted(faltando)} "
+            f"(manifesto estruturalmente inválido)")
+    if not isinstance(dados['arquivos'], dict) or not dados['arquivos']:
+        raise ManifestoInvalido(f"{caminho}: campo 'arquivos' ausente, vazio ou não é um objeto")
+    for arquivo, info in dados['arquivos'].items():
+        if not isinstance(info, dict) or 'caminho' not in info or 'substituido' not in info:
+            raise ManifestoInvalido(
+                f"{caminho}: entrada 'arquivos.{arquivo}' malformada (faltam 'caminho'/'substituido')")
+    return dados
+
+
 def _ler_manifesto(caminhos):
+    """Lê e valida o manifesto ATIVO. Devolve None só quando o arquivo
+    genuinamente não existe (nenhuma transação pendente) — nunca para
+    um arquivo presente, mas ilegível/malformado, caso em que levanta
+    ManifestoInvalido (erro acionável) em vez de mascarar o problema
+    como ausência."""
     p = _manifesto_path(caminhos)
     if not p.exists():
         return None
-    return json.loads(p.read_text(encoding='utf-8'))
+    try:
+        dados = json.loads(p.read_text(encoding='utf-8'))
+    except json.JSONDecodeError as e:
+        raise ManifestoInvalido(
+            f"{p}: JSON malformado ({e}) — provável truncamento por interrupção durante a "
+            f"própria escrita do manifesto. NÃO use para recuperação automática; inspecione "
+            f"manualmente este arquivo e os backups .bak no mesmo diretório.")
+    return _validar_manifesto(dados, p)
 
 
 def _escrever_manifesto(caminhos, dados):
+    """Escrita atômica: grava em .tmp no MESMO diretório, fsync antes
+    do replace (quando o SO suporta — best effort, nunca falha a
+    operação por isso) e só então substitui o arquivo final via
+    os.replace(). Uma interrupção no meio desta função deixa, no
+    máximo, um .tmp parcial — o manifesto ATIVO (o nome que
+    _ler_manifesto procura) nunca fica truncado, porque só passa a
+    existir com esse nome depois do replace atômico."""
     p = _manifesto_path(caminhos)
-    p.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding='utf-8')
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + '.tmp')
+    texto = json.dumps(dados, indent=2, ensure_ascii=False)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(texto)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass   # sistema de arquivos/ambiente sem suporte a fsync — best effort, não fatal
+    tmp.replace(p)
 
 
 def _remover_manifesto(caminhos):
@@ -120,22 +185,46 @@ def _arquivar_manifesto_concluido(caminhos, dados):
     para que um rollback() manual, feito bem depois, ainda saiba se a
     proveniência existia antes daquela correção (sem isso, perder o
     manifesto perde a única forma confiável de saber se deve restaurar
-    ou simplesmente apagar a proveniência numa reversão manual)."""
+    ou simplesmente apagar a proveniência numa reversão manual).
+    Mesma disciplina de escrita atômica de _escrever_manifesto()."""
     ativo = _manifesto_path(caminhos)
     ts = dados['concluido_em'].replace(':', '-')
     historico = ativo.with_name(f'.corrigir_indices_historicos.{ts}.concluido.json')
-    historico.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding='utf-8')
+    tmp = historico.with_name(historico.name + '.tmp')
+    texto = json.dumps(dados, indent=2, ensure_ascii=False)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(texto)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+    tmp.replace(historico)
     if ativo.exists():
         ativo.unlink()
     return historico
 
 
 def _historico_mais_recente(caminhos):
+    """Lê e valida o manifesto arquivado mais recente. Mesma regra de
+    _ler_manifesto(): um arquivo ausente devolve None (sem histórico
+    ainda); um arquivo presente mas corrompido levanta
+    ManifestoInvalido — nunca tratado como "sem histórico", o que
+    faria rollback() cair silenciosamente no modo antigo (sem
+    restaurar a proveniência) por um motivo errado (corrupção, não
+    ausência genuína)."""
     base = _manifesto_path(caminhos).parent
     candidatos = sorted(base.glob('.corrigir_indices_historicos.*.concluido.json'))
     if not candidatos:
         return None
-    return json.loads(candidatos[-1].read_text(encoding='utf-8'))
+    p = candidatos[-1]
+    try:
+        dados = json.loads(p.read_text(encoding='utf-8'))
+    except json.JSONDecodeError as e:
+        raise ManifestoInvalido(
+            f"{p}: JSON malformado ({e}) — manifesto histórico corrompido. "
+            f"Inspecione manualmente antes de confiar em qualquer rollback automático.")
+    return _validar_manifesto(dados, p)
 
 
 def _substituir(tmp, destino):
@@ -398,7 +487,12 @@ def aplicar(plano, caminhos=None, confirmar_outubro_mensagem=None):
     # por coincidência, todas as células do plano atual já estejam no
     # valor novo (o que não garante que a proveniência/manifesto
     # daquela transação tenham sido corretamente arquivados).
-    manifesto_pendente = _ler_manifesto(caminhos)
+    try:
+        manifesto_pendente = _ler_manifesto(caminhos)
+    except ManifestoInvalido as e:
+        return {'aplicado': False, 'motivo': 'manifesto_corrompido', 'erro': str(e),
+                'acao_requerida': 'manifesto malformado — não iniciar nova aplicação; inspecionar '
+                                   'manualmente o arquivo e os backups .bak preservados no mesmo diretório'}
     if manifesto_pendente is not None:
         return {'aplicado': False, 'motivo': 'transacao_anterior_incompleta_detectada',
                 'manifesto': manifesto_pendente,
@@ -564,6 +658,27 @@ def aplicar(plano, caminhos=None, confirmar_outubro_mensagem=None):
         divergencias += prov.verificar_consistencia(arquivo, linhas_dado, prov_path,
                                                       indices_obrigatorios=obrigatorios)
 
+    # Fase ENSO-INTEGRIDADE 3A.5: hash divergente OU qualquer
+    # inconsistência pós-escrita REPROVA a operação — nunca arquivar
+    # a transação como concluída sem checar isso primeiro. Antes desta
+    # correção, `hash_mismatch`/`divergencias` eram calculados mas a
+    # função sempre devolvia aplicado=True e arquivava como concluída
+    # de qualquer forma, descartando a única informação que permitiria
+    # recuperar_falha() agir. O manifesto continua ATIVO (não
+    # arquivado) quando isso acontece, exatamente como numa falha de
+    # escrita — recuperar_falha() restaura os dois CSVs e a
+    # proveniência a partir dele.
+    if hash_mismatch or divergencias:
+        manifesto['status'] = 'falhou_verificacao_pos_escrita'
+        manifesto['hash_mismatch_pos_escrita'] = hash_mismatch
+        manifesto['divergencias_pos_escrita'] = divergencias
+        _escrever_manifesto(caminhos, manifesto)
+        return {'aplicado': False, 'motivo': 'verificacao_pos_escrita_falhou',
+                'avaliacoes': avaliacoes, 'backups': backups,
+                'hash_mismatch_pos_escrita': hash_mismatch,
+                'divergencias_pos_escrita': divergencias, 'manifesto': manifesto,
+                'acao_requerida': 'chamar recuperar_falha(caminhos) para restaurar o estado anterior'}
+
     manifesto['status'] = 'concluido'
     manifesto['concluido_em'] = datetime.now(timezone.utc).isoformat()
     _arquivar_manifesto_concluido(caminhos, manifesto)
@@ -585,7 +700,15 @@ def recuperar_falha(caminhos=None):
     (essas são responsabilidade de rollback(), não desta função).
     """
     caminhos = caminhos or {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
-    manifesto = _ler_manifesto(caminhos)
+    try:
+        manifesto = _ler_manifesto(caminhos)
+    except ManifestoInvalido as e:
+        # Nunca recuperação destrutiva às cegas: um manifesto corrompido
+        # não é "nenhuma transação pendente" — é um estado desconhecido.
+        # Os backups .bak permanecem intocados para inspeção manual.
+        return {'recuperado': False, 'motivo': 'manifesto_corrompido', 'erro': str(e),
+                'acao_requerida': 'inspecionar manualmente o manifesto e os backups .bak '
+                                   'preservados no mesmo diretório'}
     if manifesto is None:
         return {'recuperado': False, 'motivo': 'nenhuma_transacao_incompleta_pendente'}
 
@@ -616,14 +739,27 @@ def rollback(caminhos=None):
     """
     caminhos = caminhos or {'master_monthly.csv': MASTER_PATH, 'serie_subst.csv': SUBST_PATH}
 
-    manifesto_ativo = _ler_manifesto(caminhos)
+    try:
+        manifesto_ativo = _ler_manifesto(caminhos)
+    except ManifestoInvalido as e:
+        # Nunca cair para o modo antigo (.bak sem manifesto) por causa
+        # de corrupção — isso reverteria só os CSVs, silenciosamente
+        # incompleto, por um motivo que não é "ausência genuína".
+        return {'_origem': 'manifesto_corrompido', 'erro': str(e),
+                'acao_requerida': 'inspecionar manualmente o manifesto ativo e os backups .bak '
+                                   'preservados no mesmo diretório antes de qualquer reversão'}
     if manifesto_ativo is not None:
         resultado = _restaurar_pelo_manifesto(manifesto_ativo, caminhos)
         if all(r.get('restaurado') for r in resultado.values()):
             _remover_manifesto(caminhos)
         return {**resultado, '_origem': 'transacao_incompleta_recuperada'}
 
-    manifesto_historico = _historico_mais_recente(caminhos)
+    try:
+        manifesto_historico = _historico_mais_recente(caminhos)
+    except ManifestoInvalido as e:
+        return {'_origem': 'manifesto_historico_corrompido', 'erro': str(e),
+                'acao_requerida': 'inspecionar manualmente o manifesto histórico mais recente e '
+                                   'os backups .bak preservados antes de qualquer reversão'}
     if manifesto_historico is not None:
         resultado = _restaurar_pelo_manifesto(manifesto_historico, caminhos)
         return {**resultado, '_origem': 'manifesto_historico'}

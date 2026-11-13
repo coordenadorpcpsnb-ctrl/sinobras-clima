@@ -15,6 +15,7 @@ real: urllib é sempre mockado onde aparece.
 Roda com:
     python -m unittest tests.test_enso_integridade_fase3a -v
 """
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -773,6 +774,106 @@ class CorrigirIndicesHistoricosTestCase(unittest.TestCase):
         self.assertFalse(resultado['aplicado'])
         self.assertEqual(resultado['motivo'], 'transacao_anterior_incompleta_detectada')
 
+    # ── Fase ENSO-INTEGRIDADE 3A.5 — escrita atômica do manifesto,
+    #    validação explícita e condição de sucesso pós-escrita ────────
+
+    def _escrever_manifesto_bruto(self, texto):
+        """Grava texto arbitrário direto no caminho do manifesto ATIVO
+        — simula um JSON truncado/corrompido por interrupção real,
+        sem passar por _escrever_manifesto() (que é exatamente o que
+        estamos testando que NUNCA produz esse estado)."""
+        p = cih._manifesto_path(self.caminhos)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(texto, encoding='utf-8')
+
+    def test_manifesto_truncado_e_detectado_e_nao_tratado_como_ausente(self):
+        self._escrever_manifesto_bruto('{"status": "aplicando", "arquivos": {"master')  # truncado
+        with self.assertRaises(cih.ManifestoInvalido):
+            cih._ler_manifesto(self.caminhos)
+
+    def test_manifesto_estruturalmente_invalido_e_detectado(self):
+        """JSON válido, mas sem os campos obrigatórios — malformado
+        estruturalmente, não só sintaticamente."""
+        self._escrever_manifesto_bruto('{"alguma_coisa": 1}')
+        with self.assertRaises(cih.ManifestoInvalido):
+            cih._ler_manifesto(self.caminhos)
+
+    def test_aplicar_recusa_iniciar_com_manifesto_corrompido(self):
+        self._escrever_manifesto_bruto('{"status": "aplicando", "arquivos": {"master')
+        hash_master_antes = cih.sha256_arquivo(self.master)
+        resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+        self.assertFalse(resultado['aplicado'])
+        self.assertEqual(resultado['motivo'], 'manifesto_corrompido')
+        self.assertEqual(cih.sha256_arquivo(self.master), hash_master_antes,
+                          "nenhuma escrita real deve ocorrer com manifesto corrompido pendente")
+
+    def test_recuperar_falha_recusa_manifesto_corrompido_sem_recuperacao_destrutiva(self):
+        self._escrever_manifesto_bruto('not even json')
+        resultado = cih.recuperar_falha(self.caminhos)
+        self.assertFalse(resultado['recuperado'])
+        self.assertEqual(resultado['motivo'], 'manifesto_corrompido')
+        # o próprio manifesto corrompido continua lá — nada foi
+        # "recuperado às cegas" por cima dele.
+        self.assertTrue(cih._manifesto_path(self.caminhos).exists())
+
+    def test_rollback_recusa_manifesto_ativo_corrompido(self):
+        self._escrever_manifesto_bruto('{"status":')
+        resultado = cih.rollback(self.caminhos)
+        self.assertEqual(resultado['_origem'], 'manifesto_corrompido')
+
+    def test_escrever_manifesto_interrompido_nao_deixa_manifesto_truncado(self):
+        """Simula interrupção entre a gravação do .tmp e a substituição
+        atômica — o manifesto ATIVO (nome canônico) nunca chega a
+        existir com conteúdo truncado; _ler_manifesto() continua
+        devolvendo None (nenhum manifesto válido anterior), nunca
+        ManifestoInvalido."""
+        dados = {'status': 'backup_concluido', 'iniciado_em': 'x',
+                  'arquivos': {'master_monthly.csv': {'caminho': str(self.master), 'substituido': False}}}
+        with patch.object(Path, 'replace', side_effect=OSError('interrompido')):
+            with self.assertRaises(OSError):
+                cih._escrever_manifesto(self.caminhos, dados)
+        self.assertIsNone(cih._ler_manifesto(self.caminhos),
+                           "interrupção não deve deixar o manifesto ativo com conteúdo truncado")
+
+    def test_hash_divergente_pos_escrita_reprova_e_mantem_manifesto_ativo(self):
+        """Injeção de divergência de HASH depois da substituição real
+        (simula corrupção silenciosa de disco/fs) — aplicar() tem que
+        reprovar (aplicado=False), nunca arquivar a transação como
+        concluída, e manter o manifesto ativo para recuperar_falha()."""
+        hash_real = cih.sha256_arquivo
+        def hash_fake(caminho):
+            h = hash_real(caminho)
+            if str(caminho) == str(self.master):
+                return 'hash-adulterado-nao-corresponde-ao-arquivo-real'
+            return h
+        with patch.object(cih, 'sha256_arquivo', side_effect=hash_fake):
+            resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+
+        self.assertFalse(resultado['aplicado'])
+        self.assertEqual(resultado['motivo'], 'verificacao_pos_escrita_falhou')
+        self.assertIn('master_monthly.csv', resultado['hash_mismatch_pos_escrita'])
+        self.assertIsNotNone(cih._ler_manifesto(self.caminhos),
+                              "manifesto deve continuar ATIVO (não arquivado) após reprovação")
+        # recuperação continua funcionando a partir daqui
+        rec = cih.recuperar_falha(self.caminhos)
+        self.assertTrue(rec['recuperado'])
+
+    def test_divergencia_de_proveniencia_pos_escrita_reprova_e_mantem_manifesto_ativo(self):
+        """Mesma garantia, mas para inconsistência de PROVENIÊNCIA
+        (não de hash de arquivo) detectada depois da escrita real."""
+        divergencia_falsa = [{'tipo': 'valor_divergente', 'arquivo': 'master_monthly.csv',
+                               'ano': 2026, 'mes': 9, 'indice': 'tsa',
+                               'valor_csv': 0.57, 'valor_proveniencia': 0.12}]
+        with patch.object(prov, 'verificar_consistencia', return_value=divergencia_falsa):
+            resultado = cih.aplicar(self._plano_sem_outubro(), self.caminhos)
+
+        self.assertFalse(resultado['aplicado'])
+        self.assertEqual(resultado['motivo'], 'verificacao_pos_escrita_falhou')
+        self.assertIn(divergencia_falsa[0], resultado['divergencias_pos_escrita'])
+        self.assertIsNotNone(cih._ler_manifesto(self.caminhos))
+        rec = cih.recuperar_falha(self.caminhos)
+        self.assertTrue(rec['recuperado'])
+
     def test_celula_fora_do_plano_nunca_pode_ser_tocada(self):
         """Não existe parâmetro/flag que aceite uma célula arbitrária —
         só o que está em PLANO_BASE (ou na condicional de outubro) pode
@@ -881,6 +982,45 @@ class VerificarDashboardProveniciaTestCase(unittest.TestCase):
         self.assertIsNone(reg, "item 12 trataria isso como aviso 'DESCONHECIDA'")
         divergencias = vd.divergencias_proveniencia_serie_subst(self.subst)
         self.assertEqual(divergencias, [], "item 13 não reprova por essa mesma ausência")
+
+
+# ══════════════════════════════════════════════════════════════════
+# .gitignore — manifestos de corrigir_indices_historicos.py nunca
+# commitados; indices_proveniencia.csv (registro definitivo)
+# permanece versionável (Fase ENSO-INTEGRIDADE 3A.5)
+# ══════════════════════════════════════════════════════════════════
+class GitignoreManifestoTestCase(unittest.TestCase):
+    """Usa `git check-ignore` de verdade contra o .gitignore real do
+    repositório — não uma reimplementação do padrão glob em Python,
+    que poderia divergir silenciosamente da regra que o git realmente
+    aplica."""
+
+    def test_manifesto_ativo_e_ignorado(self):
+        r = subprocess.run(['git', 'check-ignore', 'data/.corrigir_indices_historicos.ativo.json'],
+                            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, 'manifesto ativo deveria ser ignorado pelo git')
+
+    def test_manifesto_arquivado_e_ignorado(self):
+        r = subprocess.run(
+            ['git', 'check-ignore',
+             'data/.corrigir_indices_historicos.2026-11-13T12-00-00.concluido.json'],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, 'manifesto arquivado deveria ser ignorado pelo git')
+
+    def test_backup_bak_de_qualquer_arquivo_tocado_e_ignorado(self):
+        for nome in ('data/master_monthly.2026-11-13T12-00-00.bak',
+                     'data/serie_subst.2026-11-13T12-00-00.bak',
+                     'data/indices_proveniencia.2026-11-13T12-00-00.bak'):
+            r = subprocess.run(['git', 'check-ignore', nome], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f'{nome} deveria ser ignorado pelo git')
+
+    def test_indices_proveniencia_csv_definitivo_permanece_versionavel(self):
+        """O registro definitivo NUNCA deve bater no padrão de
+        manifesto/backup — precisa continuar commitável normalmente."""
+        r = subprocess.run(['git', 'check-ignore', 'data/indices_proveniencia.csv'],
+                            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1,
+                          'data/indices_proveniencia.csv NÃO deveria ser ignorado pelo git')
 
 
 if __name__ == '__main__':
