@@ -46,17 +46,35 @@ Open-Meteo ERA5-Land — fallback final:
   - Centroide Sinobras: lat=-7.80, lon=-47.95 (Norte do Tocantins)
 """
 
-import sys, shutil
+import sys, shutil, math
 from pathlib import Path
 from datetime import date
 import pandas as pd
 
 from _chirps import buscar_prec_chirps, buscar_prec_chc_preliminar_zonal
 from _openmeteo import buscar_prec_openmeteo
+import proveniencia_indices as prov
 
 ROOT       = Path(__file__).parent.parent
 SERIE_PATH = ROOT / 'data' / 'serie_subst.csv'
 MERRA_PATH = ROOT / 'data' / 'master_monthly.csv'
+
+COLUNAS_OBRIGATORIAS_MASTER = {'year', 'month', 'nino34', 'tsa', 'pdo'}
+
+
+class IndiceIndisponivel(Exception):
+    """
+    Sinaliza que os índices ENSO de um mês não puderam ser obtidos com
+    segurança — nem do master, nem por persistência válida. Nunca
+    convertido em 0.0/NaN silencioso: o chamador (main()) pula o mês
+    (fica pendente, retry automático na próxima execução), nunca o
+    grava em serie_subst.csv. Fase ENSO-INTEGRIDADE (12/11/2026):
+    diferencia explicitamente erro ESTRUTURAL (arquivo ilegível,
+    colunas ausentes, valor NaN/não-finito numa linha que deveria ser
+    válida) de atraso NORMAL da fonte (mês ainda não publicado, que
+    continua caindo no ramo de persistência — isso nunca levanta esta
+    exceção).
+    """
 
 MESES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']
 
@@ -87,6 +105,17 @@ def listar_lacunas(serie, ate_ano, ate_mes):
     return faltando
 
 
+def _valor_valido(valor, campo, contexto):
+    """Converte para float e exige finito (não-NaN, não-infinito) —
+    nunca aceita um índice ausente/inválido como se fosse real."""
+    if pd.isna(valor):
+        raise IndiceIndisponivel(f"{campo} ausente (NaN) {contexto}")
+    v = float(valor)
+    if not math.isfinite(v):
+        raise IndiceIndisponivel(f"{campo} não finito ({v}) {contexto}")
+    return v
+
+
 def enso_indices(ano: int, mes: int) -> dict:
     """
     Busca índices ENSO do master_monthly.csv para o mês dado.
@@ -95,18 +124,33 @@ def enso_indices(ano: int, mes: int) -> dict:
     quando o mês simplesmente ainda não foi consolidado no master.
     Retorna dict com nino34, tsa, pdo e 'origem'
     ('master' ou 'persistencia de MM/AAAA').
+
+    Levanta IndiceIndisponivel (Fase ENSO-INTEGRIDADE) quando o
+    problema é ESTRUTURAL — arquivo ilegível, colunas obrigatórias
+    ausentes, ou valor NaN/não-finito numa linha que deveria ser
+    válida — nunca mais devolve 0.0 como substituto silencioso desses
+    casos. O ramo de persistência (mês ainda não publicado, atraso
+    normal da fonte) continua devolvendo um valor normalmente, nunca
+    levanta esta exceção.
     """
     try:
         merra = pd.read_csv(MERRA_PATH)
-    except Exception:
-        return {'nino34': 0.0, 'tsa': 0.0, 'pdo': 0.0, 'origem': 'indisponivel'}
+    except Exception as e:
+        raise IndiceIndisponivel(f"master_monthly.csv ilegível: {e}")
+
+    faltando = COLUNAS_OBRIGATORIAS_MASTER - set(merra.columns)
+    if faltando:
+        raise IndiceIndisponivel(
+            f"master_monthly.csv sem as colunas obrigatórias: {sorted(faltando)}")
 
     row = merra[(merra['year'] == ano) & (merra['month'] == mes)]
     if not row.empty:
+        r = row.iloc[0]
+        contexto = f"na linha {mes:02d}/{ano} do master (observação)"
         return {
-            'nino34': float(row['nino34'].iloc[0]),
-            'tsa':    float(row['tsa'].iloc[0]),
-            'pdo':    float(row['pdo'].iloc[0]),
+            'nino34': _valor_valido(r['nino34'], 'nino34', contexto),
+            'tsa':    _valor_valido(r['tsa'],    'tsa',    contexto),
+            'pdo':    _valor_valido(r['pdo'],    'pdo',    contexto),
             'origem': 'master',
         }
 
@@ -115,14 +159,104 @@ def enso_indices(ano: int, mes: int) -> dict:
     ].sort_values(['year', 'month'])
     if not anteriores.empty:
         ult = anteriores.iloc[-1]
+        contexto = (f"na linha de persistência {int(ult['month']):02d}/"
+                    f"{int(ult['year'])} do master")
         return {
-            'nino34': float(ult['nino34']),
-            'tsa':    float(ult['tsa']),
-            'pdo':    float(ult['pdo']),
+            'nino34': _valor_valido(ult['nino34'], 'nino34', contexto),
+            'tsa':    _valor_valido(ult['tsa'],    'tsa',    contexto),
+            'pdo':    _valor_valido(ult['pdo'],    'pdo',    contexto),
             'origem': f"persistencia de {int(ult['month']):02d}/{int(ult['year'])}",
         }
 
-    return {'nino34': 0.0, 'tsa': 0.0, 'pdo': 0.0, 'origem': 'indisponivel'}
+    raise IndiceIndisponivel(
+        f"sem nenhum histórico anterior a {mes:02d}/{ano} em master_monthly.csv")
+
+
+def _registrar_proveniencia_serie_subst(ano, mes, enso):
+    """
+    Registra a proveniência da linha nova de serie_subst.csv — nunca
+    inventa 'observado': quando enso['origem']=='master', COPIA a
+    classificação que master_monthly.csv já tem registrada para
+    aquele (ano,mes,índice) (gravada por update_indices.py no momento
+    em que o valor foi obtido); se master não tiver proveniência
+    própria para essa linha (registro legado, anterior a esta fase),
+    a cópia também fica 'desconhecida' — nunca promovida a 'observado'
+    só por estar presente no master.
+
+    Fase ENSO-INTEGRIDADE 3A.3: quando enso['origem'] é persistência
+    (mês ainda ausente do master), a classificação da linha nova NÃO
+    é mais fixada em 'persistido' incondicionalmente — ela PROPAGA a
+    classificação própria do mês-fonte (consultada na proveniência de
+    master_monthly.csv para aquele mês/índice):
+      - mês-fonte 'observado' ou 'persistido' -> nova linha
+        'persistido', meses_base = meses_base do mês-fonte (que já
+        aponta para a observação real mais distante da cadeia — um
+        mês persistido nunca inventa meses_base=[ele mesmo]).
+      - mês-fonte 'estimado' -> nova linha 'estimado' (NUNCA
+        'persistido'), meses_base = meses_base ORIGINAL da estimativa.
+        Sem isso, uma estimativa de PDO (média de 3 meses) propagada
+        por persistência apareceria como se fosse persistência de uma
+        observação direta — exatamente a distorção que esta fase
+        corrige.
+      - mês-fonte sem proveniência própria (registro legado, anterior
+        a esta fase, ou qualquer classificação não reconhecida) ->
+        nova linha 'desconhecido' — nunca inventa 'persistido' para um
+        mês histórico sem metadados.
+
+    Fase ENSO-INTEGRIDADE 3A.1: o caminho da proveniência é derivado
+    de MERRA_PATH (lido do módulo em tempo de CHAMADA, não capturado
+    como default de função) — nunca de proveniencia_indices.
+    CAMINHO_PADRAO isoladamente. Um teste que já faz
+    patch.object(fmd, 'MERRA_PATH', tmp) (padrão já usado por
+    test_fetch_fallback.py/test_cobertura_temporal_precipitacao.py)
+    redireciona a proveniência para o MESMO tmpdir automaticamente,
+    sem precisar conhecer este módulo nem ser alterado.
+    """
+    caminho_prov = MERRA_PATH.parent / 'indices_proveniencia.csv'
+    for indice in ('nino34', 'tsa', 'pdo'):
+        if enso['origem'] == 'master':
+            origem_master = prov.consultar('master_monthly.csv', ano, mes, indice,
+                                            caminho=caminho_prov)
+            if origem_master is not None:
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                origem_master['classificacao'], origem_master['meses_base'],
+                                origem_master['fonte'], origem_master['metodo'],
+                                caminho=caminho_prov)
+            else:
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'desconhecido', [], 'master_monthly.csv (sem proveniência registrada)',
+                                'copiado_do_master_sem_origem_conhecida', caminho=caminho_prov)
+        else:
+            mes_fonte = enso['origem'].replace('persistencia de ', '')  # 'MM/AAAA'
+            mm, aaaa = mes_fonte.split('/')
+            ano_fonte, mes_fonte_int = int(aaaa), int(mm)
+            origem_fonte = prov.consultar('master_monthly.csv', ano_fonte, mes_fonte_int,
+                                           indice, caminho=caminho_prov)
+            if origem_fonte is None:
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'desconhecido', [],
+                                f'master_monthly.csv (persistência de {mes_fonte}, '
+                                f'sem proveniência própria registrada)',
+                                'persistencia_sem_origem_conhecida', caminho=caminho_prov)
+            elif origem_fonte['classificacao'] == 'estimado':
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'estimado', origem_fonte['meses_base'],
+                                f"{origem_fonte['fonte']} (propagado por persistência de "
+                                f"{mes_fonte}, nunca reestimado)",
+                                'persistencia_de_estimativa_preserva_classificacao',
+                                caminho=caminho_prov)
+            elif origem_fonte['classificacao'] in ('observado', 'persistido'):
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'persistido',
+                                origem_fonte['meses_base'] or [f'{aaaa}-{mm}'],
+                                'master_monthly.csv (persistência)',
+                                'persistencia_ultimo_real_do_master', caminho=caminho_prov)
+            else:
+                prov.registrar('serie_subst.csv', ano, mes, indice, enso[indice],
+                                'desconhecido', [],
+                                f'master_monthly.csv (persistência de {mes_fonte}, '
+                                f'origem "{origem_fonte["classificacao"]}" não reconhecida)',
+                                'persistencia_de_origem_nao_reconhecida', caminho=caminho_prov)
 
 
 def main():
@@ -199,10 +333,17 @@ def main():
 
         prec  = prec_map[(y, m)]
         fonte = fonte_map[(y, m)]
-        enso  = enso_indices(y, m)
+        try:
+            enso = enso_indices(y, m)
+        except IndiceIndisponivel as e:
+            print(f"  ⚠ {MESES_PT[m-1]}/{y}: índices ENSO indisponíveis ({e}) — "
+                  f"pulando, tentaremos na próxima execução")
+            continue
         if enso['origem'] != 'master':
             print(f"  ⚠ {MESES_PT[m-1]}/{y}: sem registro no master_monthly — "
                   f"usando {enso['origem']}")
+
+        _registrar_proveniencia_serie_subst(y, m, enso)
 
         novas.append({
             'ano':    y,

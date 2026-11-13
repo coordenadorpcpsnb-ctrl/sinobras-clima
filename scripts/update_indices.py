@@ -28,6 +28,8 @@ from datetime import date, datetime
 import urllib.request
 import pandas as pd
 
+import proveniencia_indices as prov
+
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
 MISSING   = -999.9
@@ -1149,13 +1151,20 @@ def _tsa_persistido(tsa):
 
 
 def _pdo_estimado(pdo):
-    """Média dos últimos 3 meses reais de PDO disponíveis no dict, ou None.
-    Nunca o último valor isolado — um mês atípico não deve ser propagado
-    como se fosse a característica do ano inteiro."""
+    """Média dos últimos 3 meses reais de PDO disponíveis no dict, ou
+    (None, []). Nunca o último valor isolado — um mês atípico não deve
+    ser propagado como se fosse a característica do ano inteiro.
+
+    Devolve (valor, [as 3 chaves (ano,mes) usadas]) — Fase
+    ENSO-INTEGRIDADE: a revisão externa pediu explicitamente que os
+    TRÊS meses-base sejam registrados na proveniência, nunca resumidos
+    a um único 'mes_fonte' (ao contrário de TSA, que persiste de 1 só
+    mês)."""
     chaves = sorted(pdo.keys())
     if len(chaves) < 3:
-        return None
-    return round(sum(pdo[k] for k in chaves[-3:]) / 3, 2)
+        return None, []
+    base = chaves[-3:]
+    return round(sum(pdo[k] for k in base) / 3, 2), base
 
 
 def atualizar_master_monthly(nino34, tsa, pdo):
@@ -1165,34 +1174,53 @@ def atualizar_master_monthly(nino34, tsa, pdo):
     persistência/estimativa (nunca zero), sinalizadas no log. Colunas
     que não vêm dessa fonte (estações, clim, anom, soi) ficam vazias —
     não inventadas.
+
+    Fase ENSO-INTEGRIDADE: cada valor gravado (observado, persistido
+    ou estimado) também é registrado em proveniencia_indices.py, no
+    MOMENTO exato em que a origem é conhecida — nunca inferido depois
+    por quem só lê o master_monthly.csv.
     """
     df = pd.read_csv(MASTER_PATH)
     existentes = set(zip(df['year'].astype(int), df['month'].astype(int)))
     oni = calc_oni(nino34)
 
-    tsa_val, tsa_key   = _tsa_persistido(tsa)
-    pdo_media3         = _pdo_estimado(pdo)
+    tsa_val, tsa_key        = _tsa_persistido(tsa)
+    pdo_media3, pdo_meses_b = _pdo_estimado(pdo)
 
     novas = []
+    proveniencia_pendente = []   # [(y, m, indice, valor, classif, meses_base, metodo), ...]
     for (y, m) in sorted(nino34.keys()):
         if (y, m) in existentes:
             continue
 
+        proveniencia_pendente.append((y, m, 'nino34', nino34[(y, m)], 'observado',
+                                       [f'{y}-{m:02d}'], 'observacao_direta'))
+
         if (y, m) in tsa:
             t = tsa[(y, m)]
+            proveniencia_pendente.append((y, m, 'tsa', t, 'observado',
+                                           [f'{y}-{m:02d}'], 'observacao_direta'))
         elif tsa_val is not None:
             t = tsa_val
             print(f"  ⚠ master_monthly {m:02d}/{y}: TSA sem dado real — "
                   f"persistência de {tsa_key[1]:02d}/{tsa_key[0]} ({t})")
+            proveniencia_pendente.append((y, m, 'tsa', t, 'persistido',
+                                           [f'{tsa_key[0]}-{tsa_key[1]:02d}'],
+                                           'persistencia_ultimo_real'))
         else:
             t = None
 
         if (y, m) in pdo:
             p = pdo[(y, m)]
+            proveniencia_pendente.append((y, m, 'pdo', p, 'observado',
+                                           [f'{y}-{m:02d}'], 'observacao_direta'))
         elif pdo_media3 is not None:
             p = pdo_media3
+            meses_base_fmt = [f'{ky}-{km:02d}' for (ky, km) in pdo_meses_b]
             print(f"  ⚠ master_monthly {m:02d}/{y}: PDO sem dado real — "
-                  f"estimativa (média 3m) = {p}")
+                  f"estimativa (média 3m de {', '.join(meses_base_fmt)}) = {p}")
+            proveniencia_pendente.append((y, m, 'pdo', p, 'estimado',
+                                           meses_base_fmt, 'media_3_meses'))
         else:
             p = None
 
@@ -1209,6 +1237,18 @@ def atualizar_master_monthly(nino34, tsa, pdo):
     df = pd.concat([df, pd.DataFrame(novas)], ignore_index=True, sort=False)
     df = df.sort_values(['year', 'month']).reset_index(drop=True)
     df.to_csv(MASTER_PATH, index=False)
+
+    # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de MASTER_PATH (lido
+    # do módulo em tempo de chamada) — um teste que já faz
+    # patch.object(update_indices, 'MASTER_PATH', tmp) redireciona a
+    # proveniência para o mesmo tmpdir automaticamente.
+    caminho_prov = MASTER_PATH.parent / 'indices_proveniencia.csv'
+    agora = datetime.now().isoformat()
+    for (y, m, indice, valor, classif, meses_base, metodo) in proveniencia_pendente:
+        prov.registrar('master_monthly.csv', y, m, indice, valor, classif,
+                        meses_base, 'update_indices.py (fetch ao vivo)', metodo,
+                        verificado_em=agora, caminho=caminho_prov)
+
     return len(novas)
 
 
@@ -1218,34 +1258,51 @@ def corrigir_serie_subst(nino34, tsa, pdo):
     nino34=tsa=pdo=0 — resíduo do bug em que um mês ausente no master
     era gravado como ENSO neutro. Atualiza os índices no lugar,
     preservando prec, date e fonte. É esta série que treina o SARIMAX.
+
+    Fase ENSO-INTEGRIDADE: registra a proveniência de cada valor
+    corrigido, no mesmo padrão de atualizar_master_monthly().
     """
     df = pd.read_csv(SUBST_PATH)
-    tsa_val, tsa_key = _tsa_persistido(tsa)
-    pdo_media3       = _pdo_estimado(pdo)
+    tsa_val, tsa_key        = _tsa_persistido(tsa)
+    pdo_media3, pdo_meses_b = _pdo_estimado(pdo)
 
     zeradas = df[(df['nino34'] == 0) & (df['tsa'] == 0) & (df['pdo'] == 0)]
     corrigidas = 0
     linhas_tocadas = []
+    proveniencia_pendente = []
     for idx, row in zeradas.iterrows():
         y, m = int(row['ano']), int(row['mes'])
         if (y, m) not in nino34:
             continue  # sem Niño 3.4 real tampouco — não mexe
 
+        proveniencia_pendente.append((y, m, 'nino34', nino34[(y, m)], 'observado',
+                                       [f'{y}-{m:02d}'], 'observacao_direta'))
+
         if (y, m) in tsa:
             t = tsa[(y, m)]
+            proveniencia_pendente.append((y, m, 'tsa', t, 'observado',
+                                           [f'{y}-{m:02d}'], 'observacao_direta'))
         elif tsa_val is not None:
             t = tsa_val
             print(f"  ⚠ serie_subst {m:02d}/{y}: TSA sem dado real — "
                   f"persistência de {tsa_key[1]:02d}/{tsa_key[0]} ({t})")
+            proveniencia_pendente.append((y, m, 'tsa', t, 'persistido',
+                                           [f'{tsa_key[0]}-{tsa_key[1]:02d}'],
+                                           'persistencia_ultimo_real'))
         else:
             t = row['tsa']
 
         if (y, m) in pdo:
             p = pdo[(y, m)]
+            proveniencia_pendente.append((y, m, 'pdo', p, 'observado',
+                                           [f'{y}-{m:02d}'], 'observacao_direta'))
         elif pdo_media3 is not None:
             p = pdo_media3
+            meses_base_fmt = [f'{ky}-{km:02d}' for (ky, km) in pdo_meses_b]
             print(f"  ⚠ serie_subst {m:02d}/{y}: PDO sem dado real — "
-                  f"estimativa (média 3m) = {p}")
+                  f"estimativa (média 3m de {', '.join(meses_base_fmt)}) = {p}")
+            proveniencia_pendente.append((y, m, 'pdo', p, 'estimado',
+                                           meses_base_fmt, 'media_3_meses'))
         else:
             p = row['pdo']
 
@@ -1259,6 +1316,15 @@ def corrigir_serie_subst(nino34, tsa, pdo):
         backup_csv(SUBST_PATH)
         df.to_csv(SUBST_PATH, index=False)
         print(f"  ✅ serie_subst.csv: corrigidas {', '.join(linhas_tocadas)}")
+        # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de SUBST_PATH
+        # (lido em tempo de chamada) — mesma disciplina de
+        # atualizar_master_monthly().
+        caminho_prov = SUBST_PATH.parent / 'indices_proveniencia.csv'
+        agora = datetime.now().isoformat()
+        for (y, m, indice, valor, classif, meses_base, metodo) in proveniencia_pendente:
+            prov.registrar('serie_subst.csv', y, m, indice, valor, classif,
+                            meses_base, 'update_indices.py (fetch ao vivo)', metodo,
+                            verificado_em=agora, caminho=caminho_prov)
     return corrigidas
 
 

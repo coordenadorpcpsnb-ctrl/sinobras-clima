@@ -9,3 +9,10 @@ artifacts/
 # NMME (Fase 2C.1, .github/workflows/nmme_poc.yml) — cache local de
 # NetCDF, nunca commitado (Seção 28).
 cache/nmme/
+
+# ENSO-INTEGRIDADE (scripts/corrigir_indices_historicos.py) — manifesto
+# de transação (ativo e arquivado) nunca é o registro definitivo; não
+# deve ser commitado por um `git add data/` de workflow operacional.
+# data/indices_proveniencia.csv (o registro complementar de
+# proveniência) NÃO bate neste padrão e permanece versionável.
+data/.corrigir_indices_historicos.*.json

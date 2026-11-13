@@ -36,6 +36,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import proveniencia_indices as prov
+
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
 SERIE_SUBST = ROOT / 'data' / 'serie_subst.csv'
@@ -449,6 +451,31 @@ def solve_bh(prec, etp, cad=CAD, tol=1e-3, it=200):
     return res
 
 
+def divergencias_proveniencia_serie_subst(serie_subst_path):
+    """
+    Função pura (nenhum print, nenhuma dependência de `falhas`/`erro`/
+    `ok` globais) usada pelo item 13 de `main()` — extraída assim de
+    propósito para ser testável diretamente, sem precisar rodar o
+    pipeline inteiro de verificação contra um docs/index.html real ou
+    sintético. Lê TODA a série de tsa/pdo em `serie_subst_path` e
+    devolve a lista de divergências de `proveniencia_indices.
+    verificar_consistencia()` (tipos: valor_divergente,
+    registro_orfao, valor_invalido_no_registro, chave_duplicada —
+    nunca ausência pura de registro, que é tratada só como aviso pelo
+    item 12, nunca aqui).
+    """
+    serie_subst_path = Path(serie_subst_path)
+    caminho_prov = serie_subst_path.parent / 'indices_proveniencia.csv'
+    serie_full = pd.read_csv(serie_subst_path)
+    linhas_dado = []
+    for _, linha in serie_full.iterrows():
+        for indice in ('tsa', 'pdo'):
+            if indice in linha and pd.notna(linha[indice]):
+                linhas_dado.append({'ano': int(linha['ano']), 'mes': int(linha['mes']),
+                                     'indice': indice, 'valor': float(linha[indice])})
+    return prov.verificar_consistencia('serie_subst.csv', linhas_dado, caminho=caminho_prov)
+
+
 def main(pular_continuidade_serie_subst=False):
     print(f"\n{'='*58}")
     print('  VERIFICAÇÃO DE INTEGRIDADE DO DASHBOARD')
@@ -740,6 +767,72 @@ def main(pular_continuidade_serie_subst=False):
                       f'falha recorrente do workflow semanal/mensal')
             else:
                 ok('defasagem dos índices oceânicos mensais dentro do esperado')
+
+    # ── 12. defasagem de TSA/PDO via proveniência (nunca por constância
+    #        do valor — só aviso, mesma disciplina do item 11) ──────────
+    # Fase ENSO-INTEGRIDADE (12/11/2026): PDO não tinha NENHUMA checagem
+    # até aqui (confirmado em auditoria — zero menções a "pdo" neste
+    # arquivo antes desta fase). Um valor de PDO congelado por meses
+    # (persistido/estimado) é indistinguível de uma observação real sem
+    # consultar o registro complementar de proveniência — nunca inferido
+    # pela constância do número (um PDO real também pode variar pouco
+    # entre meses vizinhos; "mudou" não prova "é observação", e
+    # "não mudou" não prova "é estimativa"). Sem limiar físico novo —
+    # só compara a classificação registrada, nunca o valor em si.
+    if SERIE_SUBST.exists():
+        serie_check = pd.read_csv(SERIE_SUBST)
+        # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de SERIE_SUBST
+        # (lido em tempo de chamada) — um teste que já faz
+        # patch.object(verificar_dashboard, 'SERIE_SUBST', tmp)
+        # redireciona a proveniência consultada para o mesmo tmpdir.
+        caminho_prov = SERIE_SUBST.parent / 'indices_proveniencia.csv'
+        if not serie_check.empty:
+            ult = serie_check.sort_values(['ano', 'mes']).iloc[-1]
+            y_ult, m_ult = int(ult['ano']), int(ult['mes'])
+            for indice in ('tsa', 'pdo'):
+                reg = prov.consultar('serie_subst.csv', y_ult, m_ult, indice, caminho=caminho_prov)
+                if reg is None:
+                    print(f'  ⚠ proveniência DESCONHECIDA para {indice} do mês mais '
+                          f'recente de serie_subst.csv ({m_ult:02d}/{y_ult}) — nenhum '
+                          f'registro complementar encontrado; não presumir observação')
+                elif reg['classificacao'] == 'observado':
+                    ok(f'{indice} do mês mais recente ({m_ult:02d}/{y_ult}) registrado '
+                       f'como observação real')
+                elif reg['classificacao'] in ('persistido', 'estimado'):
+                    meses_base = ', '.join(reg['meses_base']) if reg['meses_base'] else '?'
+                    print(f'  ⚠ {indice} do mês mais recente ({m_ult:02d}/{y_ult}) é '
+                          f'{reg["classificacao"]} (base: {meses_base}, método: '
+                          f'{reg["metodo"]}) — não é observação real deste mês; '
+                          f'aviso informativo, nunca bloqueia a publicação')
+                else:
+                    print(f'  ⚠ {indice} do mês mais recente ({m_ult:02d}/{y_ult}) com '
+                          f'proveniência "{reg["classificacao"]}" — origem não '
+                          f'comprovada, não presumir observação')
+
+    # ── 13. consistência CSV↔proveniência (erro de integridade — nunca
+    #        bloqueia por ausência histórica pura, só pelas formas de
+    #        corrupção/divergência que o registro complementar jamais
+    #        deveria ter) ────────────────────────────────────────────────
+    # Fase ENSO-INTEGRIDADE 3A.3: diferente do item 12 (que só avisa
+    # sobre a CLASSIFICAÇÃO do mês mais recente), este item varre TODA
+    # a série de tsa/pdo em serie_subst.csv e reprova a publicação se
+    # encontrar: valor do CSV divergente do registrado na proveniência,
+    # registro de proveniência órfão (sem linha correspondente no CSV),
+    # valor inválido (NaN/infinito) num registro que deveria ser válido,
+    # ou chave duplicada no próprio arquivo de proveniência. A ausência
+    # PURA de registro (histórico legado, sem proveniência nenhuma)
+    # nunca entra aqui — isso é o item 12, sempre só aviso, nunca
+    # bloqueio global da atualização.
+    if SERIE_SUBST.exists():
+        divergencias_integridade = divergencias_proveniencia_serie_subst(SERIE_SUBST)
+        if divergencias_integridade:
+            for d in divergencias_integridade:
+                erro(f'proveniência inconsistente em serie_subst.csv ({d["tipo"]}): '
+                     f'{d["mes"]:02d}/{d["ano"]} {d["indice"]} — {d}')
+        else:
+            ok('proveniência de tsa/pdo em serie_subst.csv consistente com os registros '
+               'existentes (sem divergência de valor, registro órfão, valor inválido ou '
+               'chave duplicada)')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")
