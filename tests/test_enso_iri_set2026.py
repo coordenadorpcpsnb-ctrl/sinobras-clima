@@ -17,6 +17,8 @@ Roda com:
     python -m unittest tests.test_enso_iri_set2026 -v
 """
 
+import csv
+import io
 import json
 import re
 import subprocess
@@ -26,6 +28,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
+
+sys.path.insert(0, str(ROOT / 'scripts'))
+import corrigir_indices_historicos as cih  # noqa: E402
 
 
 def _html():
@@ -464,6 +469,90 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
 
         return sem_pdo
 
+    # ── Fase ENSO-INTEGRIDADE 3B.0 ──────────────────────────────────
+    # Segunda exceção escopada, desta vez em `data/serie_subst.csv`
+    # (não em código): a correção histórica de TSA autorizada altera
+    # só julho/2026 (0.20→0.12) e agosto/2026 (0.20→0.42) — as mesmas
+    # duas células de `corrigir_indices_historicos.PLANO_BASE`, fonte
+    # única (nunca um valor duplicado aqui). Em vez de tirar o arquivo
+    # da lista ARQUIVOS_CIENTIFICOS (o que cegaria esta guarda para
+    # qualquer mudança futura nele) ou comparar só nome/presença de
+    # data, a verificação abaixo faz comparação ESTRUTURAL real
+    # (célula a célula, todas as colunas, todos os meses) e levanta
+    # para qualquer diferença fora dessas duas células exatas —
+    # inclusão/exclusão/duplicação de mês, mudança de coluna (prec,
+    # nino34, pdo, date, fonte) ou valor que não bata com o plano.
+    _TSA_SERIE_SUBST_AUTORIZADAS = {
+        (c['ano'], c['mes']): (c['valor_antigo_esperado'], c['valor_novo'])
+        for c in cih.PLANO_BASE if c['arquivo'] == 'serie_subst.csv'
+    }
+
+    @staticmethod
+    def _linhas_serie_subst(texto):
+        """Parseia o texto CSV de serie_subst.csv em
+        {(ano,mes): {coluna: valor}}. Levanta se encontrar (ano,mes)
+        duplicado — nunca silencia uma chave repetida tratando-a como
+        'a última ganha'."""
+        linhas = {}
+        for row in csv.DictReader(io.StringIO(texto)):
+            chave = (int(row['ano']), int(row['mes']))
+            if chave in linhas:
+                raise AssertionError(f'ano/mes duplicado em serie_subst.csv: {chave}')
+            linhas[chave] = row
+        return linhas
+
+    @classmethod
+    def _diferencas_serie_subst(cls, texto_base, texto_head):
+        """Compara linha a linha (todas as colunas) entre base e
+        HEAD. Meses incluídos/excluídos ou colunas divergentes
+        levantam direto (nunca uma lista de diferenças que mascare
+        isso como só mais uma célula mudada)."""
+        linhas_base = cls._linhas_serie_subst(texto_base)
+        linhas_head = cls._linhas_serie_subst(texto_head)
+        chaves_base, chaves_head = set(linhas_base), set(linhas_head)
+        if chaves_base != chaves_head:
+            incluidas, excluidas = chaves_head - chaves_base, chaves_base - chaves_head
+            raise AssertionError(
+                f'conjunto de meses de serie_subst.csv mudou (incluído(s)={sorted(incluidas)}, '
+                f'excluído(s)={sorted(excluidas)}) — correção histórica nunca adiciona/remove mês')
+        diffs = []
+        for chave in chaves_base:
+            linha_base, linha_head = linhas_base[chave], linhas_head[chave]
+            if set(linha_base) != set(linha_head):
+                raise AssertionError(f'colunas de serie_subst.csv mudaram em {chave}')
+            for coluna in linha_base:
+                if linha_base[coluna] != linha_head[coluna]:
+                    diffs.append({'chave': chave, 'coluna': coluna,
+                                   'valor_antigo': linha_base[coluna], 'valor_novo': linha_head[coluna]})
+        return diffs
+
+    @classmethod
+    def _nucleo_cientifico_serie_subst(cls, texto_base, texto_head):
+        """Levanta (nunca devolve silenciosamente 'sem diferença')
+        se o diff entre texto_base e texto_head contiver QUALQUER
+        célula fora das duas de TSA autorizadas, ou com valor antigo/
+        novo que não bata exatamente com o plano fechado."""
+        diffs = cls._diferencas_serie_subst(texto_base, texto_head)
+        nao_autorizados = []
+        for d in diffs:
+            chave, coluna = d['chave'], d['coluna']
+            esperado = cls._TSA_SERIE_SUBST_AUTORIZADAS.get(chave) if coluna == 'tsa' else None
+            if esperado is None:
+                nao_autorizados.append(d)
+                continue
+            esperado_antigo, esperado_novo = esperado
+            try:
+                bate = (abs(float(d['valor_antigo']) - esperado_antigo) < 1e-9 and
+                        abs(float(d['valor_novo']) - esperado_novo) < 1e-9)
+            except (TypeError, ValueError):
+                bate = False
+            if not bate:
+                nao_autorizados.append(d)
+        if nao_autorizados:
+            raise AssertionError(
+                f'serie_subst.csv mudou fora da correção histórica de TSA autorizada '
+                f'(jul/ago-2026, plano fechado): {nao_autorizados}')
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -480,14 +569,13 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True,
         )
         alterados = [l for l in resultado.stdout.splitlines() if l.strip()]
+        restantes = list(alterados)
 
         # scripts/update_dashboard.py pode aparecer como "alterado" por
         # causa só da superfície autorizada (ENSO-INTEGRIDADE 3A/3A.1) —
         # nesse caso, confirmar que o NÚCLEO científico do arquivo segue
         # byte-a-byte idêntico antes de tirá-lo da lista de reprovados.
-        # Qualquer outro arquivo nesta lista, ou qualquer diferença fora
-        # dessa superfície em update_dashboard.py, continua reprovando.
-        if alterados == ['scripts/update_dashboard.py']:
+        if 'scripts/update_dashboard.py' in restantes:
             base_txt = self._ler_arquivo_na_revisao(self.base, 'scripts/update_dashboard.py')
             head_txt = self._ler_arquivo_na_revisao('HEAD', 'scripts/update_dashboard.py')
             self.assertIsNotNone(base_txt, 'não foi possível ler update_dashboard.py no merge-base')
@@ -500,9 +588,21 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
                 '(import proveniencia_indices + incorporar_fallback_openmeteo + '
                 'linha fail-closed do PDO) — isso é alteração de modelo científico, '
                 'não de validação/fallback')
-            return
+            restantes.remove('scripts/update_dashboard.py')
 
-        self.assertEqual(alterados, [], f'arquivo(s) científico(s)/de referência foram alterados: {alterados}')
+        # data/serie_subst.csv pode aparecer como "alterado" só pela
+        # correção histórica de TSA autorizada (ENSO-INTEGRIDADE
+        # 3B.0/3B) — mesma disciplina: comparação estrutural real do
+        # conteúdo, nunca remoção do arquivo da lista de intocáveis.
+        if 'data/serie_subst.csv' in restantes:
+            base_txt = self._ler_arquivo_na_revisao(self.base, 'data/serie_subst.csv')
+            head_txt = self._ler_arquivo_na_revisao('HEAD', 'data/serie_subst.csv')
+            self.assertIsNotNone(base_txt, 'não foi possível ler serie_subst.csv no merge-base')
+            self.assertIsNotNone(head_txt, 'não foi possível ler serie_subst.csv em HEAD')
+            self._nucleo_cientifico_serie_subst(base_txt, head_txt)  # levanta se não autorizado
+            restantes.remove('data/serie_subst.csv')
+
+        self.assertEqual(restantes, [], f'arquivo(s) científico(s)/de referência foram alterados: {restantes}')
 
     def _ler_arquivo_na_revisao(self, ref, caminho):
         resultado = subprocess.run(
@@ -655,6 +755,113 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         texto_sem_funcao = "import os\nfrom pathlib import Path\n# nada aqui\n"
         with self.assertRaises(AssertionError):
             self._nucleo_cientifico_update_dashboard(texto_sem_funcao)
+
+    # ── Regressão da exceção de serie_subst.csv (ENSO-INTEGRIDADE
+    # 3B.0) — testes unitários puros de _nucleo_cientifico_serie_subst,
+    # com texto sintético, nunca git/arquivo real. Mesma disciplina
+    # dos testes e/f/g/h acima: provar que a exceção é estreita.
+
+    _COLUNAS_SERIE_SUBST = ['ano', 'mes', 'prec', 'nino34', 'tsa', 'pdo', 'date', 'fonte']
+    _LINHAS_SINTETICAS_SERIE_SUBST_BASE = [
+        {'ano': '2026', 'mes': '6', 'prec': '10.5', 'nino34': '1.0', 'tsa': '0.10',
+         'pdo': '0.50', 'date': '2026-06-01', 'fonte': 'CHIRPS'},
+        {'ano': '2026', 'mes': '7', 'prec': '6.4', 'nino34': '1.1', 'tsa': '0.20',
+         'pdo': '0.55', 'date': '2026-07-01', 'fonte': 'CHIRPS'},
+        {'ano': '2026', 'mes': '8', 'prec': '10.4', 'nino34': '1.2', 'tsa': '0.20',
+         'pdo': '0.60', 'date': '2026-08-01', 'fonte': 'CHIRPS'},
+        {'ano': '2026', 'mes': '9', 'prec': '41.7', 'nino34': '1.3', 'tsa': '0.12',
+         'pdo': '0.65', 'date': '2026-09-01', 'fonte': 'CHIRPS'},
+    ]
+
+    @classmethod
+    def _montar_csv_serie_subst(cls, linhas):
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cls._COLUNAS_SERIE_SUBST)
+        w.writeheader()
+        for linha in linhas:
+            w.writerow(linha)
+        return buf.getvalue()
+
+    @classmethod
+    def _texto_base_serie_subst(cls):
+        return cls._montar_csv_serie_subst(cls._LINHAS_SINTETICAS_SERIE_SUBST_BASE)
+
+    @classmethod
+    def _texto_serie_subst_com_mudanca(cls, mudancas_por_mes):
+        """mudancas_por_mes: {mes: {coluna: valor_novo}} — devolve o
+        texto CSV com só essas células alteradas em relação à base
+        sintética."""
+        linhas = [dict(l) for l in cls._LINHAS_SINTETICAS_SERIE_SUBST_BASE]
+        for linha in linhas:
+            mudancas = mudancas_por_mes.get(int(linha['mes']))
+            if mudancas:
+                linha.update({k: str(v) for k, v in mudancas.items()})
+        return cls._montar_csv_serie_subst(linhas)
+
+    def test_i_jul_ago_tsa_autorizadas_aprovado(self):
+        """Positivo: a correção exata do plano (jul 0.20->0.12, ago
+        0.20->0.42) não levanta — é exatamente o caso autorizado."""
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({7: {'tsa': '0.12'}, 8: {'tsa': '0.42'}})
+        self._nucleo_cientifico_serie_subst(base, head)  # não deve levantar
+
+    def test_j_tsa_em_outro_mes_e_reprovada(self):
+        """Negativo: TSA de set/2026 não está autorizada em
+        serie_subst.csv (só em master_monthly.csv, plano separado)."""
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({9: {'tsa': '0.57'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_k_alteracao_de_precipitacao_e_reprovada(self):
+        """Negativo: mesmo com a TSA de julho correta, mudar `prec`
+        no mesmo mês continua reprovando."""
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({7: {'tsa': '0.12', 'prec': '99.9'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_l_alteracao_de_nino34_ou_pdo_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({8: {'tsa': '0.42', 'pdo': '9.99'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_m_inclusao_de_mes_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        linhas = [dict(l) for l in self._LINHAS_SINTETICAS_SERIE_SUBST_BASE]
+        linhas.append({'ano': '2026', 'mes': '10', 'prec': '0.0', 'nino34': '1.4',
+                        'tsa': '0.57', 'pdo': '0.65', 'date': '2026-10-01', 'fonte': 'CHIRPS'})
+        head = self._montar_csv_serie_subst(linhas)
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_n_exclusao_de_mes_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        linhas = [dict(l) for l in self._LINHAS_SINTETICAS_SERIE_SUBST_BASE if l['mes'] != '6']
+        head = self._montar_csv_serie_subst(linhas)
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_o_duplicacao_de_mes_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        linhas = [dict(l) for l in self._LINHAS_SINTETICAS_SERIE_SUBST_BASE]
+        linhas.append(dict(linhas[1]))  # duplica a linha de julho/2026
+        head = self._montar_csv_serie_subst(linhas)
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_p_mudanca_de_fonte_ou_data_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({7: {'tsa': '0.12', 'fonte': 'CHC-Preliminar'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_q_sem_alteracao_nao_levanta(self):
+        """Histórico sem alteração: comportamento original preservado
+        — texto idêntico nunca levanta."""
+        base = self._texto_base_serie_subst()
+        self._nucleo_cientifico_serie_subst(base, base)
 
 
 if __name__ == '__main__':
