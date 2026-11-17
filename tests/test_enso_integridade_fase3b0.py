@@ -645,6 +645,81 @@ class AcionamentoRealDoWorkflowTestCase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), 'true')
 
+    # ── Fase ENSO-INTEGRIDADE 3B.0.4 — 3 cenários adicionais pedidos
+    # pela revisão externa, todos via Git temporário real (o mesmo
+    # script que ci.yml chama, nunca uma reimplementação).
+
+    def test_provenencia_com_metadados_contraditorios_falha_explicita(self):
+        """Correção TSA completa e correta nos CSVs, mas a proveniência
+        de uma das células tem meses_base contraditório com o plano —
+        tem que falhar explicitamente, nunca ser tratada como
+        'checagem ordinária' só porque os CSVs batem."""
+        prov_contraditoria = _provenencia_correta_para(
+            _CELULAS_CORRECAO_COMPLETA,
+            overrides={('master_monthly.csv', 2026, 7): {'meses_base': '2026-01'}})
+        repo = self._repo(
+            {'data/master_monthly.csv': _MASTER_BASE_TXT, 'data/serie_subst.csv': _SUBST_BASE_TXT},
+            {'data/master_monthly.csv': _CORRECAO_COMPLETA_MASTER,
+             'data/serie_subst.csv': _CORRECAO_COMPLETA_SUBST,
+             'data/indices_proveniencia.csv': prov_contraditoria})
+        r = repo.decidir()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('REPROVADA', r.stderr)
+
+    def test_alteracao_exclusiva_na_provenencia_consistente_e_segura(self):
+        """Só data/indices_proveniencia.csv muda (master/serie_subst
+        intocados) — e o registro novo bate exatamente com uma célula
+        do plano. Comportamento seguro E justificado: como nenhum CSV
+        de dado mudou, não há nada para a checagem de continuidade
+        proteger aqui — pular é inofensivo independentemente do
+        conteúdo da proveniência, mas só é concedido porque o registro
+        também é consistente (ver o teste seguinte para o caso
+        contraditório, que reprova mesmo sem nenhum CSV ter mudado)."""
+        prov_apenas = _provenencia_correta_para([_CEL_MASTER_JUL])
+        repo = self._repo(
+            {'data/master_monthly.csv': _MASTER_BASE_TXT, 'data/serie_subst.csv': _SUBST_BASE_TXT},
+            {'data/master_monthly.csv': _MASTER_BASE_TXT, 'data/serie_subst.csv': _SUBST_BASE_TXT,
+             'data/indices_proveniencia.csv': prov_apenas})
+        r = repo.decidir()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), 'true')
+
+    def test_alteracao_exclusiva_na_provenencia_contraditoria_nao_mascara_e_falha(self):
+        """Mesmo cenário acima, mas o registro novo CONTRADIZ o plano
+        (classificação errada para uma célula autorizada) — uma
+        mudança exclusiva na proveniência não pode mascarar um
+        registro contraditório só porque nenhum CSV de dado mudou."""
+        prov_contraditoria = _provenencia_correta_para(
+            [_CEL_MASTER_JUL], overrides={('master_monthly.csv', 2026, 7): {'classificacao': 'persistido'}})
+        repo = self._repo(
+            {'data/master_monthly.csv': _MASTER_BASE_TXT, 'data/serie_subst.csv': _SUBST_BASE_TXT},
+            {'data/master_monthly.csv': _MASTER_BASE_TXT, 'data/serie_subst.csv': _SUBST_BASE_TXT,
+             'data/indices_proveniencia.csv': prov_contraditoria})
+        r = repo.decidir()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+
+    def test_tentativa_invalida_mesmo_com_serie_temporal_completa_falha_explicita(self):
+        """serie_subst.csv com uma sequência longa e sem nenhuma lacuna
+        de mês (12 meses adicionais, 2025 inteiro, antes dos meses já
+        existentes) — 'completude temporal' não é sequer consultada
+        por este validador (ele nunca olha continuidade), então uma
+        tentativa de correção de TSA inválida (aqui, sem proveniência)
+        continua falhando explicitamente, independente de a série
+        parecer temporalmente completa."""
+        meses_extra_2025 = [
+            {'ano': 2025, 'mes': m, 'prec': 50.0, 'nino34': 0.1, 'tsa': 0.05, 'pdo': 0.1,
+             'date': f'2025-{m:02d}-01', 'fonte': 'CHIRPS'}
+            for m in range(1, 13)
+        ]
+        subst_base_completa = _subst_texto(linhas_extra=meses_extra_2025)
+        subst_head_completa = _subst_texto({7: {'tsa': 0.12}, 8: {'tsa': 0.42}}, linhas_extra=meses_extra_2025)
+        repo = self._repo(
+            {'data/master_monthly.csv': _MASTER_BASE_TXT, 'data/serie_subst.csv': subst_base_completa},
+            {'data/master_monthly.csv': _CORRECAO_COMPLETA_MASTER, 'data/serie_subst.csv': subst_head_completa})
+        r = repo.decidir()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('REPROVADA', r.stderr)
+
 
 class GitignoreTmpTestCase(unittest.TestCase):
     """Item 12 da seção 'Testes obrigatórios' da Fase 3B.0: arquivos

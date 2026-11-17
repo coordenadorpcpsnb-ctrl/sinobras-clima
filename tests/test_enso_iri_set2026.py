@@ -20,6 +20,7 @@ Roda com:
 import csv
 import io
 import json
+import math
 import re
 import subprocess
 import sys
@@ -92,6 +93,173 @@ def _sarimax_data(html):
     return json.loads(m.group(1))
 
 
+# ══════════════════════════════════════════════════════════════════
+# Fase ENSO-INTEGRIDADE 3B.0.4 — a emissão do CPC avança mensalmente
+# de verdade (indices_semanal.yml publica uma nova todo mês), então
+# nenhuma checagem aqui pode fixar um mês/ano específico de emissão
+# nem um vetor de probabilidades de uma emissão particular — isso
+# reprova na emissão seguinte por desatualização, não por regressão
+# real (foi exatamente o que quebrou test_f/test_c nesta fase, quando
+# a main avançou de out/2026 para nov/2026 por automação legítima).
+# As funções abaixo são estruturais: nunca comparam com um valor fixo
+# de uma emissão, só verificam coerência interna (formato de data,
+# mesmo mês entre discussão e tabela, alinhamento com seasons,
+# intervalo [0,100], soma ~100%, null nunca parcial). Puras — nenhuma
+# toca git/rede/HTML — para permitir testes negativos com fixtures
+# sintéticas, sem depender do dashboard real.
+# ══════════════════════════════════════════════════════════════════
+_MESES_PT = {'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
+             'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12}
+
+
+def _parse_data_pt(texto):
+    """Parseia uma data em QUALQUER uma das duas convenções realmente
+    usadas no CPC_IRI._meta real: 'D/mon/AAAA' (CPC, mês em 3 letras
+    minúsculas pt-BR, ex. '8/out/2026') OU 'DD/MM/AAAA' (IRI, mês
+    numérico, ex. '21/09/2026') — achado desta fase: as duas fontes
+    usam convenções de data diferentes, não é um erro a normalizar,
+    então o parser aceita as duas. Devolve (ano, mes, dia) ou None se
+    não casar nenhuma — nunca lança e nunca adivinha um valor, para o
+    chamador decidir como tratar 'ausente/inválido'."""
+    if not isinstance(texto, str):
+        return None
+    texto = texto.strip()
+
+    m = re.fullmatch(r'(\d{1,2})/([a-z]{3})/(\d{4})', texto)
+    if m:
+        dia_str, mes_abrev, ano_str = m.groups()
+        mes = _MESES_PT.get(mes_abrev)
+        if mes is None:
+            return None
+        dia = int(dia_str)
+        return (int(ano_str), mes, dia) if 1 <= dia <= 31 else None
+
+    m = re.fullmatch(r'(\d{1,2})/(\d{1,2})/(\d{4})', texto)
+    if m:
+        dia_str, mes_str, ano_str = m.groups()
+        dia, mes = int(dia_str), int(mes_str)
+        return (int(ano_str), mes, dia) if 1 <= dia <= 31 and 1 <= mes <= 12 else None
+
+    return None
+
+
+def _parse_mes_ano_pt(texto):
+    """Parseia 'mon/AAAA' em (ano, mes). None se não casar."""
+    if not isinstance(texto, str):
+        return None
+    m = re.fullmatch(r'([a-z]{3})/(\d{4})', texto.strip())
+    if not m:
+        return None
+    mes_abrev, ano_str = m.groups()
+    mes = _MESES_PT.get(mes_abrev)
+    if mes is None:
+        return None
+    return (int(ano_str), mes)
+
+
+def _validar_coerencia_emissoes_cpc_iri(meta):
+    """
+    Confere coerência ESTRUTURAL entre as emissões CPC e IRI em `meta`
+    (dict já extraído de _meta:{...}) — nunca presume que CPC e IRI
+    precisam ter o mesmo mês (são produtos distintos, CLAUDE.md:
+    CPC usa ERSSTv5/6, IRI usa OISSTv2; divergência é esperada, não
+    erro). Devolve a lista de problemas encontrados (vazia =
+    coerente).
+    """
+    problemas = []
+    cpc_emissao = meta.get('cpc_emissao', '')
+    cpc_prob_emissao = meta.get('cpc_probabilidades_emissao', '')
+    iri_emissao = meta.get('iri_emissao', '')
+
+    data_cpc = _parse_data_pt(cpc_emissao)
+    if data_cpc is None:
+        problemas.append(f'cpc_emissao ausente ou com formato inválido (esperado D/mon/AAAA): {cpc_emissao!r}')
+
+    mes_ano_prob = _parse_mes_ano_pt(cpc_prob_emissao)
+    if mes_ano_prob is None:
+        problemas.append('cpc_probabilidades_emissao ausente ou com formato inválido '
+                          f'(esperado mon/AAAA): {cpc_prob_emissao!r}')
+
+    if data_cpc is not None and mes_ano_prob is not None:
+        ano_cpc, mes_cpc, _dia = data_cpc
+        if (ano_cpc, mes_cpc) != mes_ano_prob:
+            problemas.append(
+                f'cpc_emissao ({cpc_emissao!r}) e cpc_probabilidades_emissao ({cpc_prob_emissao!r}) '
+                'referem meses diferentes — a discussão CPC e a tabela de probabilidades não '
+                'podem ser de emissões diferentes')
+
+    if not iri_emissao:
+        problemas.append('iri_emissao ausente')
+    elif _parse_data_pt(iri_emissao) is None:
+        problemas.append(f'iri_emissao com formato de data inválido (esperado D/mon/AAAA): {iri_emissao!r}')
+
+    if cpc_emissao and iri_emissao and cpc_emissao == iri_emissao:
+        problemas.append('cpc_emissao e iri_emissao idênticos — CPC e IRI são produtos distintos '
+                          '(fontes/metodologias diferentes), não deveriam coincidir byte a byte')
+
+    for campo in ('iri_pagina', 'iri_fonte_url', 'iri_extracao', 'iri_status'):
+        if not meta.get(campo):
+            problemas.append(f'{campo} ausente ou vazio — metadado IRI precisa permanecer identificado')
+
+    return problemas
+
+
+# Tolerância de soma: cada categoria (en/neu/ln) é publicada já
+# arredondada a inteiro pelo CPC — erro máximo teórico de
+# arredondamento é 0,5 ponto por categoria; 3 categorias => até 1,5
+# ponto de desvio da soma exata de 100 é consistente com arredondamento
+# legítimo, não com dado fabricado/corrompido.
+_TOLERANCIA_SOMA_PROBABILIDADES = 1.5
+
+
+def _validar_probabilidades_cpc(seasons, en, neu, ln):
+    """
+    Confere consistência ESTRUTURAL/científica de cpc{en,neu,ln} contra
+    `seasons` — nunca compara com um vetor fixo de uma emissão
+    específica (isso reprovaria na emissão seguinte por
+    desatualização, não por regressão real). Devolve a lista de
+    problemas encontrados (vazia = consistente).
+    """
+    problemas = []
+    n = len(seasons)
+    vetores = {'en': en, 'neu': neu, 'ln': ln}
+    for nome, vetor in vetores.items():
+        if len(vetor) != n:
+            problemas.append(f'cpc.{nome} tem {len(vetor)} elemento(s), seasons tem {n} — '
+                              'desalinhamento de trimestres (possível mistura de emissões diferentes)')
+
+    if any(len(v) != n for v in vetores.values()):
+        return problemas  # não dá para iterar por índice com tamanhos divergentes
+
+    for i in range(n):
+        valores = (en[i], neu[i], ln[i])
+        nulos = [v is None for v in valores]
+        if any(nulos) and not all(nulos):
+            problemas.append(
+                f'trimestre {seasons[i]}: null parcial em cpc (en={en[i]!r}, neu={neu[i]!r}, '
+                f'ln={ln[i]!r}) — ausência de publicação tem que ser null nas 3 categorias '
+                'juntas, nunca uma mistura com 0.0 fabricado')
+            continue
+        if all(nulos):
+            continue
+        for nome, v in zip(('en', 'neu', 'ln'), valores):
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                problemas.append(f'trimestre {seasons[i]}: cpc.{nome}={v!r} não é numérico')
+            elif not math.isfinite(float(v)):
+                problemas.append(f'trimestre {seasons[i]}: cpc.{nome}={v!r} não é finito')
+            elif not (0.0 <= float(v) <= 100.0):
+                problemas.append(f'trimestre {seasons[i]}: cpc.{nome}={v!r} fora do intervalo [0,100]')
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+               for v in valores):
+            soma = float(en[i]) + float(neu[i]) + float(ln[i])
+            if abs(soma - 100.0) > _TOLERANCIA_SOMA_PROBABILIDADES:
+                problemas.append(
+                    f'trimestre {seasons[i]}: soma en+neu+ln = {soma!r}, fora de '
+                    f'100±{_TOLERANCIA_SOMA_PROBABILIDADES} (tolerância de arredondamento) — '
+                     'possível mistura de categorias de emissões diferentes')
+    return problemas
+
+
 class MetaIriEmissaoTestCase(unittest.TestCase):
 
     def setUp(self):
@@ -125,13 +293,75 @@ class MetaIriEmissaoTestCase(unittest.TestCase):
         self.assertIn('403', extracao)
         self.assertIn('CONNECT', extracao)
 
-    def test_f_separacao_cpc_outubro_iri_setembro(self):
-        self.assertNotEqual(self.meta.get('cpc_emissao'), self.meta.get('iri_emissao'))
-        self.assertIn('out/2026', self.meta.get('cpc_emissao', '') + self.meta.get('cpc_probabilidades_emissao', ''))
-        self.assertTrue(self.meta.get('iri_emissao', '').startswith('21/09/2026'))
+    def test_f_cpc_e_iri_sao_produtos_distintos_com_metadados_coerentes(self):
+        """Fase ENSO-INTEGRIDADE 3B.0.4: substitui a expectativa fixa de
+        'out/2026' (reprovava a cada emissão CPC nova publicada pela
+        automação semanal — não é regressão, é desatualização) por
+        checagem ESTRUTURAL: cpc_emissao e cpc_probabilidades_emissao
+        referem o MESMO mês entre si (discussão e tabela não podem ser
+        de emissões diferentes); CPC e IRI são produtos distintos
+        (nunca presumido que precisam ter o mesmo mês — CLAUDE.md:
+        ERSSTv5/6 vs. OISSTv2); metadados IRI permanecem identificados
+        e não são silenciosamente apagados quando o CPC é atualizado.
+        Sobrevive à próxima emissão por construção, não fixa nenhum
+        mês/ano específico."""
+        problemas = _validar_coerencia_emissoes_cpc_iri(self.meta)
+        self.assertEqual(problemas, [], problemas)
 
     def test_g_iri_dados_download_registrado(self):
         self.assertIn('não fornece mais arquivos', self.meta.get('iri_dados_download', ''))
+
+    # ── Testes negativos de _validar_coerencia_emissoes_cpc_iri
+    # (fixtures sintéticas, nunca o dashboard real) — provam que a
+    # checagem estrutural continua reprovando o que deve reprovar.
+
+    _META_SINTETICA_VALIDA = {
+        'cpc_emissao': '12/nov/2026', 'cpc_probabilidades_emissao': 'nov/2026',
+        'iri_emissao': '21/09/2026', 'iri_pagina': 'September 2026 Quick Look',
+        'iri_fonte_url': 'https://iri.columbia.edu/x', 'iri_extracao': 'extração externa',
+        'iri_status': 'ok',
+    }
+
+    def test_h_meta_sintetica_valida_nao_e_sinalizada(self):
+        """Positivo: confirma que a própria fixture de controle (usada
+        como base dos negativos abaixo) não levanta nenhum problema —
+        sem isso, os negativos poderiam estar testando um defeito da
+        fixture, não da função."""
+        self.assertEqual(_validar_coerencia_emissoes_cpc_iri(self._META_SINTETICA_VALIDA), [])
+
+    def test_h2_meta_valida_com_outra_emissao_tambem_passa(self):
+        """A mesma checagem aceita out/2026 OU nov/2026 (ou qualquer
+        mês futuro) igualmente — não fixa nenhuma emissão específica."""
+        meta_out = dict(self._META_SINTETICA_VALIDA,
+                         cpc_emissao='8/out/2026', cpc_probabilidades_emissao='out/2026')
+        self.assertEqual(_validar_coerencia_emissoes_cpc_iri(meta_out), [])
+
+    def test_i_cpc_emissao_data_invalida_e_detectada(self):
+        meta = dict(self._META_SINTETICA_VALIDA, cpc_emissao='32/nov/2026')
+        self.assertTrue(_validar_coerencia_emissoes_cpc_iri(meta))
+
+    def test_j_cpc_emissao_e_probabilidades_em_meses_diferentes_e_detectado(self):
+        meta = dict(self._META_SINTETICA_VALIDA, cpc_probabilidades_emissao='out/2026')
+        problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+        self.assertTrue(any('meses diferentes' in p for p in problemas), problemas)
+
+    def test_k_iri_emissao_ausente_e_detectado(self):
+        meta = dict(self._META_SINTETICA_VALIDA, iri_emissao='')
+        problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+        self.assertTrue(any('iri_emissao ausente' in p for p in problemas), problemas)
+
+    def test_l_metadado_iri_ausente_e_detectado(self):
+        for campo in ('iri_pagina', 'iri_fonte_url', 'iri_extracao', 'iri_status'):
+            with self.subTest(campo=campo):
+                meta = dict(self._META_SINTETICA_VALIDA)
+                meta[campo] = ''
+                problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+                self.assertTrue(any(campo in p for p in problemas), problemas)
+
+    def test_m_cpc_e_iri_emissao_identicos_e_detectado(self):
+        meta = dict(self._META_SINTETICA_VALIDA, iri_emissao=self._META_SINTETICA_VALIDA['cpc_emissao'])
+        problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+        self.assertTrue(any('idênticos' in p for p in problemas), problemas)
 
 
 class SeasonsEAlinhamentoTestCase(unittest.TestCase):
@@ -152,11 +382,55 @@ class SeasonsEAlinhamentoTestCase(unittest.TestCase):
         self.assertEqual(len(_iri_subcampo('neu', self.bloco)), n)
         self.assertEqual(len(_iri_subcampo('ln', self.bloco)), n)
 
-    def test_c_cpc_nao_foi_alterado_nesta_fase(self):
-        self.assertEqual(
-            _cpc_subcampo('en', self.bloco),
-            [None, 100.0, 100.0, 100.0, 100.0, 100.0, 98.0, 85.0, 45.0],
-        )
+    def test_c_probabilidades_cpc_estruturalmente_consistentes(self):
+        """Fase ENSO-INTEGRIDADE 3B.0.4: substitui a comparação com o
+        vetor fixo de uma emissão específica (reprovava a cada nova
+        emissão CPC publicada pela automação semanal) por verificação
+        ESTRUTURAL/científica: alinhamento com seasons, intervalo
+        [0,100], soma ~100% por trimestre, null nunca parcial entre
+        en/neu/ln. Preserva ValoresExplicitosSetembro2026TestCase
+        (iri{}, não tocado aqui) e NullComoAusenciaNuncaZeroTestCase."""
+        problemas = _validar_probabilidades_cpc(
+            self.seasons, _cpc_subcampo('en', self.bloco),
+            _cpc_subcampo('neu', self.bloco), _cpc_subcampo('ln', self.bloco))
+        self.assertEqual(problemas, [], problemas)
+
+    # ── Testes negativos de _validar_probabilidades_cpc (fixtures
+    # sintéticas, nunca o dashboard real).
+
+    def test_d_cpc_sintetico_consistente_nao_e_sinalizado(self):
+        seasons = ['ASO/26', 'SON/26', 'OND/26']
+        en = [None, 100.0, 60.0]
+        neu = [None, 0.0, 30.0]
+        ln = [None, 0.0, 10.0]
+        self.assertEqual(_validar_probabilidades_cpc(seasons, en, neu, ln), [])
+
+    def test_e_cpc_sintetico_soma_fora_de_100_e_detectado(self):
+        seasons = ['ASO/26', 'SON/26']
+        problemas = _validar_probabilidades_cpc(seasons, [50.0, 100.0], [10.0, 0.0], [10.0, 0.0])
+        self.assertTrue(any('soma' in p for p in problemas), problemas)
+
+    def test_f_cpc_sintetico_valor_fora_do_intervalo_e_detectado(self):
+        seasons = ['ASO/26']
+        problemas = _validar_probabilidades_cpc(seasons, [150.0], [0.0], [0.0])
+        self.assertTrue(any('fora do intervalo' in p for p in problemas), problemas)
+
+    def test_g_cpc_sintetico_null_parcial_e_detectado(self):
+        seasons = ['ASO/26']
+        problemas = _validar_probabilidades_cpc(seasons, [None], [0.0], [0.0])
+        self.assertTrue(any('null parcial' in p for p in problemas), problemas)
+
+    def test_h_cpc_sintetico_desalinhamento_de_trimestres_e_detectado(self):
+        """Mistura de dados de emissões diferentes (ex.: um vetor com
+        um elemento a mais/a menos que seasons) reprova."""
+        seasons = ['ASO/26', 'SON/26', 'OND/26']
+        problemas = _validar_probabilidades_cpc(seasons, [None, 100.0], [None, 0.0], [None, 0.0])
+        self.assertTrue(any('desalinhamento' in p for p in problemas), problemas)
+
+    def test_i_cpc_sintetico_valor_nao_numerico_e_detectado(self):
+        seasons = ['ASO/26']
+        problemas = _validar_probabilidades_cpc(seasons, ['abacate'], [0.0], [0.0])
+        self.assertTrue(any('não é numérico' in p for p in problemas), problemas)
 
 
 class ValoresExplicitosSetembro2026TestCase(unittest.TestCase):
