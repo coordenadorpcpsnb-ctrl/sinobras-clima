@@ -63,7 +63,8 @@ jobs:
             tests.test_update_indices_enso_auto \
             tests.test_fetch_fallback \
             tests.test_cobertura_temporal_precipitacao \
-            tests.test_enso_integridade_fase3a
+            tests.test_enso_integridade_fase3a \
+            tests.test_enso_integridade_fase3b0
 
       - name: Sumário
         if: always()
@@ -152,25 +153,37 @@ jobs:
       # backfill, uma correção de série), a checagem deve rodar CHEIA,
       # sem pular — é exatamente o caso em que uma lacuna nova seria
       # uma regressão real introduzida por esta própria PR.
+      #
+      # Fase ENSO-INTEGRIDADE 3B.0.2 — correção de 3 lacunas encontradas
+      # na versão 3B.0: (1) a decisão olhava SÓ data/serie_subst.csv —
+      # uma correção de TSA feita só em data/master_monthly.csv nunca
+      # era validada; (2) o validador exigia consistência da
+      # proveniência só QUANDO ela existia, nunca sua PRESENÇA; (3) um
+      # resultado "não autorizado" do validador caía sempre no mesmo
+      # ramo que uma alteração legítima de outra natureza (checagem
+      # cheia), em vez de reprovar explicitamente uma tentativa de
+      # correção de TSA inválida. A decisão agora olha os 3 arquivos
+      # (master_monthly.csv + serie_subst.csv + indices_proveniencia.csv)
+      # e é delegada a scripts/decidir_continuidade_serie_subst.sh
+      # (testável isoladamente — ver
+      # tests/test_enso_integridade_fase3b0.py), que por sua vez chama
+      # scripts/validar_correcao_historica_tsa.py — este distingue 3
+      # classificações (exit 0=autorizado/pular; exit
+      # 10=não é tentativa de TSA, alteração de outra natureza,
+      # comportamento ORDINÁRIO preservado — decide só por
+      # serie_subst.csv, igual a antes desta fase; qualquer outro
+      # código=tentativa de TSA REPROVADA, falha explícita do passo,
+      # nunca tratada como "pode seguir com a checagem cheia e talvez
+      # passar mesmo assim"). Nunca consulta a NOAA, só compara texto
+      # já commitado. update.yml/indices_semanal.yml não chamam este
+      # script e continuam exigindo continuidade completa sempre, sem
+      # excecão.
       - name: Decidir se a checagem de continuidade pode ser pulada
         id: continuidade
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if git diff --quiet ${{ github.event.pull_request.base.sha }} HEAD -- data/serie_subst.csv; then
-              echo "pular=true" >> $GITHUB_OUTPUT
-              echo "data/serie_subst.csv não foi tocado por esta PR — lacuna do mês corrente (se houver) é defasagem de calendário pré-existente, não desta mudança."
-            else
-              echo "pular=false" >> $GITHUB_OUTPUT
-              echo "data/serie_subst.csv FOI alterado por esta PR — checagem de continuidade roda sem pular; uma lacuna nova aqui seria regressão real desta mudança."
-            fi
-          else
-            # workflow_dispatch manual, sem PR/base de comparação: mesma
-            # situação estrutural do indices_semanal.yml (nunca roda
-            # fetch_monthly_data.py) — pular evita o mesmo falso-positivo
-            # de calendário já corrigido naquele workflow.
-            echo "pular=true" >> $GITHUB_OUTPUT
-            echo "workflow_dispatch manual, sem PR — tratado como indices_semanal.yml (pula por padrão)."
-          fi
+          pular=$(scripts/decidir_continuidade_serie_subst.sh \
+            "${{ github.event_name }}" "${{ github.event.pull_request.base.sha }}" "HEAD")
+          echo "pular=$pular" >> $GITHUB_OUTPUT
 
       - name: Verificar integridade do dashboard (docs/index.html real, commitado)
         run: |

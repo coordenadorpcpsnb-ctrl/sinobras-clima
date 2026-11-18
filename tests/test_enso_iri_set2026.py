@@ -17,7 +17,10 @@ Roda com:
     python -m unittest tests.test_enso_iri_set2026 -v
 """
 
+import csv
+import io
 import json
+import math
 import re
 import subprocess
 import sys
@@ -26,6 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
+
+sys.path.insert(0, str(ROOT / 'scripts'))
+import corrigir_indices_historicos as cih  # noqa: E402
 
 
 def _html():
@@ -87,6 +93,173 @@ def _sarimax_data(html):
     return json.loads(m.group(1))
 
 
+# ══════════════════════════════════════════════════════════════════
+# Fase ENSO-INTEGRIDADE 3B.0.4 — a emissão do CPC avança mensalmente
+# de verdade (indices_semanal.yml publica uma nova todo mês), então
+# nenhuma checagem aqui pode fixar um mês/ano específico de emissão
+# nem um vetor de probabilidades de uma emissão particular — isso
+# reprova na emissão seguinte por desatualização, não por regressão
+# real (foi exatamente o que quebrou test_f/test_c nesta fase, quando
+# a main avançou de out/2026 para nov/2026 por automação legítima).
+# As funções abaixo são estruturais: nunca comparam com um valor fixo
+# de uma emissão, só verificam coerência interna (formato de data,
+# mesmo mês entre discussão e tabela, alinhamento com seasons,
+# intervalo [0,100], soma ~100%, null nunca parcial). Puras — nenhuma
+# toca git/rede/HTML — para permitir testes negativos com fixtures
+# sintéticas, sem depender do dashboard real.
+# ══════════════════════════════════════════════════════════════════
+_MESES_PT = {'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
+             'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12}
+
+
+def _parse_data_pt(texto):
+    """Parseia uma data em QUALQUER uma das duas convenções realmente
+    usadas no CPC_IRI._meta real: 'D/mon/AAAA' (CPC, mês em 3 letras
+    minúsculas pt-BR, ex. '8/out/2026') OU 'DD/MM/AAAA' (IRI, mês
+    numérico, ex. '21/09/2026') — achado desta fase: as duas fontes
+    usam convenções de data diferentes, não é um erro a normalizar,
+    então o parser aceita as duas. Devolve (ano, mes, dia) ou None se
+    não casar nenhuma — nunca lança e nunca adivinha um valor, para o
+    chamador decidir como tratar 'ausente/inválido'."""
+    if not isinstance(texto, str):
+        return None
+    texto = texto.strip()
+
+    m = re.fullmatch(r'(\d{1,2})/([a-z]{3})/(\d{4})', texto)
+    if m:
+        dia_str, mes_abrev, ano_str = m.groups()
+        mes = _MESES_PT.get(mes_abrev)
+        if mes is None:
+            return None
+        dia = int(dia_str)
+        return (int(ano_str), mes, dia) if 1 <= dia <= 31 else None
+
+    m = re.fullmatch(r'(\d{1,2})/(\d{1,2})/(\d{4})', texto)
+    if m:
+        dia_str, mes_str, ano_str = m.groups()
+        dia, mes = int(dia_str), int(mes_str)
+        return (int(ano_str), mes, dia) if 1 <= dia <= 31 and 1 <= mes <= 12 else None
+
+    return None
+
+
+def _parse_mes_ano_pt(texto):
+    """Parseia 'mon/AAAA' em (ano, mes). None se não casar."""
+    if not isinstance(texto, str):
+        return None
+    m = re.fullmatch(r'([a-z]{3})/(\d{4})', texto.strip())
+    if not m:
+        return None
+    mes_abrev, ano_str = m.groups()
+    mes = _MESES_PT.get(mes_abrev)
+    if mes is None:
+        return None
+    return (int(ano_str), mes)
+
+
+def _validar_coerencia_emissoes_cpc_iri(meta):
+    """
+    Confere coerência ESTRUTURAL entre as emissões CPC e IRI em `meta`
+    (dict já extraído de _meta:{...}) — nunca presume que CPC e IRI
+    precisam ter o mesmo mês (são produtos distintos, CLAUDE.md:
+    CPC usa ERSSTv5/6, IRI usa OISSTv2; divergência é esperada, não
+    erro). Devolve a lista de problemas encontrados (vazia =
+    coerente).
+    """
+    problemas = []
+    cpc_emissao = meta.get('cpc_emissao', '')
+    cpc_prob_emissao = meta.get('cpc_probabilidades_emissao', '')
+    iri_emissao = meta.get('iri_emissao', '')
+
+    data_cpc = _parse_data_pt(cpc_emissao)
+    if data_cpc is None:
+        problemas.append(f'cpc_emissao ausente ou com formato inválido (esperado D/mon/AAAA): {cpc_emissao!r}')
+
+    mes_ano_prob = _parse_mes_ano_pt(cpc_prob_emissao)
+    if mes_ano_prob is None:
+        problemas.append('cpc_probabilidades_emissao ausente ou com formato inválido '
+                          f'(esperado mon/AAAA): {cpc_prob_emissao!r}')
+
+    if data_cpc is not None and mes_ano_prob is not None:
+        ano_cpc, mes_cpc, _dia = data_cpc
+        if (ano_cpc, mes_cpc) != mes_ano_prob:
+            problemas.append(
+                f'cpc_emissao ({cpc_emissao!r}) e cpc_probabilidades_emissao ({cpc_prob_emissao!r}) '
+                'referem meses diferentes — a discussão CPC e a tabela de probabilidades não '
+                'podem ser de emissões diferentes')
+
+    if not iri_emissao:
+        problemas.append('iri_emissao ausente')
+    elif _parse_data_pt(iri_emissao) is None:
+        problemas.append(f'iri_emissao com formato de data inválido (esperado D/mon/AAAA): {iri_emissao!r}')
+
+    if cpc_emissao and iri_emissao and cpc_emissao == iri_emissao:
+        problemas.append('cpc_emissao e iri_emissao idênticos — CPC e IRI são produtos distintos '
+                          '(fontes/metodologias diferentes), não deveriam coincidir byte a byte')
+
+    for campo in ('iri_pagina', 'iri_fonte_url', 'iri_extracao', 'iri_status'):
+        if not meta.get(campo):
+            problemas.append(f'{campo} ausente ou vazio — metadado IRI precisa permanecer identificado')
+
+    return problemas
+
+
+# Tolerância de soma: cada categoria (en/neu/ln) é publicada já
+# arredondada a inteiro pelo CPC — erro máximo teórico de
+# arredondamento é 0,5 ponto por categoria; 3 categorias => até 1,5
+# ponto de desvio da soma exata de 100 é consistente com arredondamento
+# legítimo, não com dado fabricado/corrompido.
+_TOLERANCIA_SOMA_PROBABILIDADES = 1.5
+
+
+def _validar_probabilidades_cpc(seasons, en, neu, ln):
+    """
+    Confere consistência ESTRUTURAL/científica de cpc{en,neu,ln} contra
+    `seasons` — nunca compara com um vetor fixo de uma emissão
+    específica (isso reprovaria na emissão seguinte por
+    desatualização, não por regressão real). Devolve a lista de
+    problemas encontrados (vazia = consistente).
+    """
+    problemas = []
+    n = len(seasons)
+    vetores = {'en': en, 'neu': neu, 'ln': ln}
+    for nome, vetor in vetores.items():
+        if len(vetor) != n:
+            problemas.append(f'cpc.{nome} tem {len(vetor)} elemento(s), seasons tem {n} — '
+                              'desalinhamento de trimestres (possível mistura de emissões diferentes)')
+
+    if any(len(v) != n for v in vetores.values()):
+        return problemas  # não dá para iterar por índice com tamanhos divergentes
+
+    for i in range(n):
+        valores = (en[i], neu[i], ln[i])
+        nulos = [v is None for v in valores]
+        if any(nulos) and not all(nulos):
+            problemas.append(
+                f'trimestre {seasons[i]}: null parcial em cpc (en={en[i]!r}, neu={neu[i]!r}, '
+                f'ln={ln[i]!r}) — ausência de publicação tem que ser null nas 3 categorias '
+                'juntas, nunca uma mistura com 0.0 fabricado')
+            continue
+        if all(nulos):
+            continue
+        for nome, v in zip(('en', 'neu', 'ln'), valores):
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                problemas.append(f'trimestre {seasons[i]}: cpc.{nome}={v!r} não é numérico')
+            elif not math.isfinite(float(v)):
+                problemas.append(f'trimestre {seasons[i]}: cpc.{nome}={v!r} não é finito')
+            elif not (0.0 <= float(v) <= 100.0):
+                problemas.append(f'trimestre {seasons[i]}: cpc.{nome}={v!r} fora do intervalo [0,100]')
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+               for v in valores):
+            soma = float(en[i]) + float(neu[i]) + float(ln[i])
+            if abs(soma - 100.0) > _TOLERANCIA_SOMA_PROBABILIDADES:
+                problemas.append(
+                    f'trimestre {seasons[i]}: soma en+neu+ln = {soma!r}, fora de '
+                    f'100±{_TOLERANCIA_SOMA_PROBABILIDADES} (tolerância de arredondamento) — '
+                     'possível mistura de categorias de emissões diferentes')
+    return problemas
+
+
 class MetaIriEmissaoTestCase(unittest.TestCase):
 
     def setUp(self):
@@ -120,13 +293,75 @@ class MetaIriEmissaoTestCase(unittest.TestCase):
         self.assertIn('403', extracao)
         self.assertIn('CONNECT', extracao)
 
-    def test_f_separacao_cpc_outubro_iri_setembro(self):
-        self.assertNotEqual(self.meta.get('cpc_emissao'), self.meta.get('iri_emissao'))
-        self.assertIn('out/2026', self.meta.get('cpc_emissao', '') + self.meta.get('cpc_probabilidades_emissao', ''))
-        self.assertTrue(self.meta.get('iri_emissao', '').startswith('21/09/2026'))
+    def test_f_cpc_e_iri_sao_produtos_distintos_com_metadados_coerentes(self):
+        """Fase ENSO-INTEGRIDADE 3B.0.4: substitui a expectativa fixa de
+        'out/2026' (reprovava a cada emissão CPC nova publicada pela
+        automação semanal — não é regressão, é desatualização) por
+        checagem ESTRUTURAL: cpc_emissao e cpc_probabilidades_emissao
+        referem o MESMO mês entre si (discussão e tabela não podem ser
+        de emissões diferentes); CPC e IRI são produtos distintos
+        (nunca presumido que precisam ter o mesmo mês — CLAUDE.md:
+        ERSSTv5/6 vs. OISSTv2); metadados IRI permanecem identificados
+        e não são silenciosamente apagados quando o CPC é atualizado.
+        Sobrevive à próxima emissão por construção, não fixa nenhum
+        mês/ano específico."""
+        problemas = _validar_coerencia_emissoes_cpc_iri(self.meta)
+        self.assertEqual(problemas, [], problemas)
 
     def test_g_iri_dados_download_registrado(self):
         self.assertIn('não fornece mais arquivos', self.meta.get('iri_dados_download', ''))
+
+    # ── Testes negativos de _validar_coerencia_emissoes_cpc_iri
+    # (fixtures sintéticas, nunca o dashboard real) — provam que a
+    # checagem estrutural continua reprovando o que deve reprovar.
+
+    _META_SINTETICA_VALIDA = {
+        'cpc_emissao': '12/nov/2026', 'cpc_probabilidades_emissao': 'nov/2026',
+        'iri_emissao': '21/09/2026', 'iri_pagina': 'September 2026 Quick Look',
+        'iri_fonte_url': 'https://iri.columbia.edu/x', 'iri_extracao': 'extração externa',
+        'iri_status': 'ok',
+    }
+
+    def test_h_meta_sintetica_valida_nao_e_sinalizada(self):
+        """Positivo: confirma que a própria fixture de controle (usada
+        como base dos negativos abaixo) não levanta nenhum problema —
+        sem isso, os negativos poderiam estar testando um defeito da
+        fixture, não da função."""
+        self.assertEqual(_validar_coerencia_emissoes_cpc_iri(self._META_SINTETICA_VALIDA), [])
+
+    def test_h2_meta_valida_com_outra_emissao_tambem_passa(self):
+        """A mesma checagem aceita out/2026 OU nov/2026 (ou qualquer
+        mês futuro) igualmente — não fixa nenhuma emissão específica."""
+        meta_out = dict(self._META_SINTETICA_VALIDA,
+                         cpc_emissao='8/out/2026', cpc_probabilidades_emissao='out/2026')
+        self.assertEqual(_validar_coerencia_emissoes_cpc_iri(meta_out), [])
+
+    def test_i_cpc_emissao_data_invalida_e_detectada(self):
+        meta = dict(self._META_SINTETICA_VALIDA, cpc_emissao='32/nov/2026')
+        self.assertTrue(_validar_coerencia_emissoes_cpc_iri(meta))
+
+    def test_j_cpc_emissao_e_probabilidades_em_meses_diferentes_e_detectado(self):
+        meta = dict(self._META_SINTETICA_VALIDA, cpc_probabilidades_emissao='out/2026')
+        problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+        self.assertTrue(any('meses diferentes' in p for p in problemas), problemas)
+
+    def test_k_iri_emissao_ausente_e_detectado(self):
+        meta = dict(self._META_SINTETICA_VALIDA, iri_emissao='')
+        problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+        self.assertTrue(any('iri_emissao ausente' in p for p in problemas), problemas)
+
+    def test_l_metadado_iri_ausente_e_detectado(self):
+        for campo in ('iri_pagina', 'iri_fonte_url', 'iri_extracao', 'iri_status'):
+            with self.subTest(campo=campo):
+                meta = dict(self._META_SINTETICA_VALIDA)
+                meta[campo] = ''
+                problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+                self.assertTrue(any(campo in p for p in problemas), problemas)
+
+    def test_m_cpc_e_iri_emissao_identicos_e_detectado(self):
+        meta = dict(self._META_SINTETICA_VALIDA, iri_emissao=self._META_SINTETICA_VALIDA['cpc_emissao'])
+        problemas = _validar_coerencia_emissoes_cpc_iri(meta)
+        self.assertTrue(any('idênticos' in p for p in problemas), problemas)
 
 
 class SeasonsEAlinhamentoTestCase(unittest.TestCase):
@@ -147,11 +382,55 @@ class SeasonsEAlinhamentoTestCase(unittest.TestCase):
         self.assertEqual(len(_iri_subcampo('neu', self.bloco)), n)
         self.assertEqual(len(_iri_subcampo('ln', self.bloco)), n)
 
-    def test_c_cpc_nao_foi_alterado_nesta_fase(self):
-        self.assertEqual(
-            _cpc_subcampo('en', self.bloco),
-            [None, 100.0, 100.0, 100.0, 100.0, 100.0, 98.0, 85.0, 45.0],
-        )
+    def test_c_probabilidades_cpc_estruturalmente_consistentes(self):
+        """Fase ENSO-INTEGRIDADE 3B.0.4: substitui a comparação com o
+        vetor fixo de uma emissão específica (reprovava a cada nova
+        emissão CPC publicada pela automação semanal) por verificação
+        ESTRUTURAL/científica: alinhamento com seasons, intervalo
+        [0,100], soma ~100% por trimestre, null nunca parcial entre
+        en/neu/ln. Preserva ValoresExplicitosSetembro2026TestCase
+        (iri{}, não tocado aqui) e NullComoAusenciaNuncaZeroTestCase."""
+        problemas = _validar_probabilidades_cpc(
+            self.seasons, _cpc_subcampo('en', self.bloco),
+            _cpc_subcampo('neu', self.bloco), _cpc_subcampo('ln', self.bloco))
+        self.assertEqual(problemas, [], problemas)
+
+    # ── Testes negativos de _validar_probabilidades_cpc (fixtures
+    # sintéticas, nunca o dashboard real).
+
+    def test_d_cpc_sintetico_consistente_nao_e_sinalizado(self):
+        seasons = ['ASO/26', 'SON/26', 'OND/26']
+        en = [None, 100.0, 60.0]
+        neu = [None, 0.0, 30.0]
+        ln = [None, 0.0, 10.0]
+        self.assertEqual(_validar_probabilidades_cpc(seasons, en, neu, ln), [])
+
+    def test_e_cpc_sintetico_soma_fora_de_100_e_detectado(self):
+        seasons = ['ASO/26', 'SON/26']
+        problemas = _validar_probabilidades_cpc(seasons, [50.0, 100.0], [10.0, 0.0], [10.0, 0.0])
+        self.assertTrue(any('soma' in p for p in problemas), problemas)
+
+    def test_f_cpc_sintetico_valor_fora_do_intervalo_e_detectado(self):
+        seasons = ['ASO/26']
+        problemas = _validar_probabilidades_cpc(seasons, [150.0], [0.0], [0.0])
+        self.assertTrue(any('fora do intervalo' in p for p in problemas), problemas)
+
+    def test_g_cpc_sintetico_null_parcial_e_detectado(self):
+        seasons = ['ASO/26']
+        problemas = _validar_probabilidades_cpc(seasons, [None], [0.0], [0.0])
+        self.assertTrue(any('null parcial' in p for p in problemas), problemas)
+
+    def test_h_cpc_sintetico_desalinhamento_de_trimestres_e_detectado(self):
+        """Mistura de dados de emissões diferentes (ex.: um vetor com
+        um elemento a mais/a menos que seasons) reprova."""
+        seasons = ['ASO/26', 'SON/26', 'OND/26']
+        problemas = _validar_probabilidades_cpc(seasons, [None, 100.0], [None, 0.0], [None, 0.0])
+        self.assertTrue(any('desalinhamento' in p for p in problemas), problemas)
+
+    def test_i_cpc_sintetico_valor_nao_numerico_e_detectado(self):
+        seasons = ['ASO/26']
+        problemas = _validar_probabilidades_cpc(seasons, ['abacate'], [0.0], [0.0])
+        self.assertTrue(any('não é numérico' in p for p in problemas), problemas)
 
 
 class ValoresExplicitosSetembro2026TestCase(unittest.TestCase):
@@ -464,6 +743,90 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
 
         return sem_pdo
 
+    # ── Fase ENSO-INTEGRIDADE 3B.0 ──────────────────────────────────
+    # Segunda exceção escopada, desta vez em `data/serie_subst.csv`
+    # (não em código): a correção histórica de TSA autorizada altera
+    # só julho/2026 (0.20→0.12) e agosto/2026 (0.20→0.42) — as mesmas
+    # duas células de `corrigir_indices_historicos.PLANO_BASE`, fonte
+    # única (nunca um valor duplicado aqui). Em vez de tirar o arquivo
+    # da lista ARQUIVOS_CIENTIFICOS (o que cegaria esta guarda para
+    # qualquer mudança futura nele) ou comparar só nome/presença de
+    # data, a verificação abaixo faz comparação ESTRUTURAL real
+    # (célula a célula, todas as colunas, todos os meses) e levanta
+    # para qualquer diferença fora dessas duas células exatas —
+    # inclusão/exclusão/duplicação de mês, mudança de coluna (prec,
+    # nino34, pdo, date, fonte) ou valor que não bata com o plano.
+    _TSA_SERIE_SUBST_AUTORIZADAS = {
+        (c['ano'], c['mes']): (c['valor_antigo_esperado'], c['valor_novo'])
+        for c in cih.PLANO_BASE if c['arquivo'] == 'serie_subst.csv'
+    }
+
+    @staticmethod
+    def _linhas_serie_subst(texto):
+        """Parseia o texto CSV de serie_subst.csv em
+        {(ano,mes): {coluna: valor}}. Levanta se encontrar (ano,mes)
+        duplicado — nunca silencia uma chave repetida tratando-a como
+        'a última ganha'."""
+        linhas = {}
+        for row in csv.DictReader(io.StringIO(texto)):
+            chave = (int(row['ano']), int(row['mes']))
+            if chave in linhas:
+                raise AssertionError(f'ano/mes duplicado em serie_subst.csv: {chave}')
+            linhas[chave] = row
+        return linhas
+
+    @classmethod
+    def _diferencas_serie_subst(cls, texto_base, texto_head):
+        """Compara linha a linha (todas as colunas) entre base e
+        HEAD. Meses incluídos/excluídos ou colunas divergentes
+        levantam direto (nunca uma lista de diferenças que mascare
+        isso como só mais uma célula mudada)."""
+        linhas_base = cls._linhas_serie_subst(texto_base)
+        linhas_head = cls._linhas_serie_subst(texto_head)
+        chaves_base, chaves_head = set(linhas_base), set(linhas_head)
+        if chaves_base != chaves_head:
+            incluidas, excluidas = chaves_head - chaves_base, chaves_base - chaves_head
+            raise AssertionError(
+                f'conjunto de meses de serie_subst.csv mudou (incluído(s)={sorted(incluidas)}, '
+                f'excluído(s)={sorted(excluidas)}) — correção histórica nunca adiciona/remove mês')
+        diffs = []
+        for chave in chaves_base:
+            linha_base, linha_head = linhas_base[chave], linhas_head[chave]
+            if set(linha_base) != set(linha_head):
+                raise AssertionError(f'colunas de serie_subst.csv mudaram em {chave}')
+            for coluna in linha_base:
+                if linha_base[coluna] != linha_head[coluna]:
+                    diffs.append({'chave': chave, 'coluna': coluna,
+                                   'valor_antigo': linha_base[coluna], 'valor_novo': linha_head[coluna]})
+        return diffs
+
+    @classmethod
+    def _nucleo_cientifico_serie_subst(cls, texto_base, texto_head):
+        """Levanta (nunca devolve silenciosamente 'sem diferença')
+        se o diff entre texto_base e texto_head contiver QUALQUER
+        célula fora das duas de TSA autorizadas, ou com valor antigo/
+        novo que não bata exatamente com o plano fechado."""
+        diffs = cls._diferencas_serie_subst(texto_base, texto_head)
+        nao_autorizados = []
+        for d in diffs:
+            chave, coluna = d['chave'], d['coluna']
+            esperado = cls._TSA_SERIE_SUBST_AUTORIZADAS.get(chave) if coluna == 'tsa' else None
+            if esperado is None:
+                nao_autorizados.append(d)
+                continue
+            esperado_antigo, esperado_novo = esperado
+            try:
+                bate = (abs(float(d['valor_antigo']) - esperado_antigo) < 1e-9 and
+                        abs(float(d['valor_novo']) - esperado_novo) < 1e-9)
+            except (TypeError, ValueError):
+                bate = False
+            if not bate:
+                nao_autorizados.append(d)
+        if nao_autorizados:
+            raise AssertionError(
+                f'serie_subst.csv mudou fora da correção histórica de TSA autorizada '
+                f'(jul/ago-2026, plano fechado): {nao_autorizados}')
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -480,14 +843,13 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True,
         )
         alterados = [l for l in resultado.stdout.splitlines() if l.strip()]
+        restantes = list(alterados)
 
         # scripts/update_dashboard.py pode aparecer como "alterado" por
         # causa só da superfície autorizada (ENSO-INTEGRIDADE 3A/3A.1) —
         # nesse caso, confirmar que o NÚCLEO científico do arquivo segue
         # byte-a-byte idêntico antes de tirá-lo da lista de reprovados.
-        # Qualquer outro arquivo nesta lista, ou qualquer diferença fora
-        # dessa superfície em update_dashboard.py, continua reprovando.
-        if alterados == ['scripts/update_dashboard.py']:
+        if 'scripts/update_dashboard.py' in restantes:
             base_txt = self._ler_arquivo_na_revisao(self.base, 'scripts/update_dashboard.py')
             head_txt = self._ler_arquivo_na_revisao('HEAD', 'scripts/update_dashboard.py')
             self.assertIsNotNone(base_txt, 'não foi possível ler update_dashboard.py no merge-base')
@@ -500,9 +862,21 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
                 '(import proveniencia_indices + incorporar_fallback_openmeteo + '
                 'linha fail-closed do PDO) — isso é alteração de modelo científico, '
                 'não de validação/fallback')
-            return
+            restantes.remove('scripts/update_dashboard.py')
 
-        self.assertEqual(alterados, [], f'arquivo(s) científico(s)/de referência foram alterados: {alterados}')
+        # data/serie_subst.csv pode aparecer como "alterado" só pela
+        # correção histórica de TSA autorizada (ENSO-INTEGRIDADE
+        # 3B.0/3B) — mesma disciplina: comparação estrutural real do
+        # conteúdo, nunca remoção do arquivo da lista de intocáveis.
+        if 'data/serie_subst.csv' in restantes:
+            base_txt = self._ler_arquivo_na_revisao(self.base, 'data/serie_subst.csv')
+            head_txt = self._ler_arquivo_na_revisao('HEAD', 'data/serie_subst.csv')
+            self.assertIsNotNone(base_txt, 'não foi possível ler serie_subst.csv no merge-base')
+            self.assertIsNotNone(head_txt, 'não foi possível ler serie_subst.csv em HEAD')
+            self._nucleo_cientifico_serie_subst(base_txt, head_txt)  # levanta se não autorizado
+            restantes.remove('data/serie_subst.csv')
+
+        self.assertEqual(restantes, [], f'arquivo(s) científico(s)/de referência foram alterados: {restantes}')
 
     def _ler_arquivo_na_revisao(self, ref, caminho):
         resultado = subprocess.run(
@@ -655,6 +1029,113 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         texto_sem_funcao = "import os\nfrom pathlib import Path\n# nada aqui\n"
         with self.assertRaises(AssertionError):
             self._nucleo_cientifico_update_dashboard(texto_sem_funcao)
+
+    # ── Regressão da exceção de serie_subst.csv (ENSO-INTEGRIDADE
+    # 3B.0) — testes unitários puros de _nucleo_cientifico_serie_subst,
+    # com texto sintético, nunca git/arquivo real. Mesma disciplina
+    # dos testes e/f/g/h acima: provar que a exceção é estreita.
+
+    _COLUNAS_SERIE_SUBST = ['ano', 'mes', 'prec', 'nino34', 'tsa', 'pdo', 'date', 'fonte']
+    _LINHAS_SINTETICAS_SERIE_SUBST_BASE = [
+        {'ano': '2026', 'mes': '6', 'prec': '10.5', 'nino34': '1.0', 'tsa': '0.10',
+         'pdo': '0.50', 'date': '2026-06-01', 'fonte': 'CHIRPS'},
+        {'ano': '2026', 'mes': '7', 'prec': '6.4', 'nino34': '1.1', 'tsa': '0.20',
+         'pdo': '0.55', 'date': '2026-07-01', 'fonte': 'CHIRPS'},
+        {'ano': '2026', 'mes': '8', 'prec': '10.4', 'nino34': '1.2', 'tsa': '0.20',
+         'pdo': '0.60', 'date': '2026-08-01', 'fonte': 'CHIRPS'},
+        {'ano': '2026', 'mes': '9', 'prec': '41.7', 'nino34': '1.3', 'tsa': '0.12',
+         'pdo': '0.65', 'date': '2026-09-01', 'fonte': 'CHIRPS'},
+    ]
+
+    @classmethod
+    def _montar_csv_serie_subst(cls, linhas):
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cls._COLUNAS_SERIE_SUBST)
+        w.writeheader()
+        for linha in linhas:
+            w.writerow(linha)
+        return buf.getvalue()
+
+    @classmethod
+    def _texto_base_serie_subst(cls):
+        return cls._montar_csv_serie_subst(cls._LINHAS_SINTETICAS_SERIE_SUBST_BASE)
+
+    @classmethod
+    def _texto_serie_subst_com_mudanca(cls, mudancas_por_mes):
+        """mudancas_por_mes: {mes: {coluna: valor_novo}} — devolve o
+        texto CSV com só essas células alteradas em relação à base
+        sintética."""
+        linhas = [dict(l) for l in cls._LINHAS_SINTETICAS_SERIE_SUBST_BASE]
+        for linha in linhas:
+            mudancas = mudancas_por_mes.get(int(linha['mes']))
+            if mudancas:
+                linha.update({k: str(v) for k, v in mudancas.items()})
+        return cls._montar_csv_serie_subst(linhas)
+
+    def test_i_jul_ago_tsa_autorizadas_aprovado(self):
+        """Positivo: a correção exata do plano (jul 0.20->0.12, ago
+        0.20->0.42) não levanta — é exatamente o caso autorizado."""
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({7: {'tsa': '0.12'}, 8: {'tsa': '0.42'}})
+        self._nucleo_cientifico_serie_subst(base, head)  # não deve levantar
+
+    def test_j_tsa_em_outro_mes_e_reprovada(self):
+        """Negativo: TSA de set/2026 não está autorizada em
+        serie_subst.csv (só em master_monthly.csv, plano separado)."""
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({9: {'tsa': '0.57'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_k_alteracao_de_precipitacao_e_reprovada(self):
+        """Negativo: mesmo com a TSA de julho correta, mudar `prec`
+        no mesmo mês continua reprovando."""
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({7: {'tsa': '0.12', 'prec': '99.9'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_l_alteracao_de_nino34_ou_pdo_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({8: {'tsa': '0.42', 'pdo': '9.99'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_m_inclusao_de_mes_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        linhas = [dict(l) for l in self._LINHAS_SINTETICAS_SERIE_SUBST_BASE]
+        linhas.append({'ano': '2026', 'mes': '10', 'prec': '0.0', 'nino34': '1.4',
+                        'tsa': '0.57', 'pdo': '0.65', 'date': '2026-10-01', 'fonte': 'CHIRPS'})
+        head = self._montar_csv_serie_subst(linhas)
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_n_exclusao_de_mes_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        linhas = [dict(l) for l in self._LINHAS_SINTETICAS_SERIE_SUBST_BASE if l['mes'] != '6']
+        head = self._montar_csv_serie_subst(linhas)
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_o_duplicacao_de_mes_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        linhas = [dict(l) for l in self._LINHAS_SINTETICAS_SERIE_SUBST_BASE]
+        linhas.append(dict(linhas[1]))  # duplica a linha de julho/2026
+        head = self._montar_csv_serie_subst(linhas)
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_p_mudanca_de_fonte_ou_data_e_reprovada(self):
+        base = self._texto_base_serie_subst()
+        head = self._texto_serie_subst_com_mudanca({7: {'tsa': '0.12', 'fonte': 'CHC-Preliminar'}})
+        with self.assertRaises(AssertionError):
+            self._nucleo_cientifico_serie_subst(base, head)
+
+    def test_q_sem_alteracao_nao_levanta(self):
+        """Histórico sem alteração: comportamento original preservado
+        — texto idêntico nunca levanta."""
+        base = self._texto_base_serie_subst()
+        self._nucleo_cientifico_serie_subst(base, base)
 
 
 if __name__ == '__main__':
