@@ -5,3 +5,9 @@ master_monthly.csv,2026,9,tsa,0.57,observado,2026-09,PSL tsa.data (verificado ao
 serie_subst.csv,2026,7,tsa,0.12,observado,2026-07,PSL tsa.data (verificado ao vivo),observacao_direta,2026-11-18T18:07:30.963796+00:00
 serie_subst.csv,2026,8,tsa,0.42,observado,2026-08,PSL tsa.data (verificado ao vivo),observacao_direta,2026-11-18T18:07:30.963804+00:00
 master_monthly.csv,2026,10,tsa,0.57,persistido,2026-09,"PSL tsa.data (verificado ao vivo) — persistência de set/2026, NÃO observação de outubro",persistencia_ultimo_real,2026-11-18T18:07:30.963811+00:00
+serie_subst.csv,2026,9,nino34,2.84,desconhecido,,master_monthly.csv (sem proveniência registrada),copiado_do_master_sem_origem_conhecida,2026-11-21T20:44:20.916763+00:00
+serie_subst.csv,2026,9,tsa,0.57,observado,2026-09,PSL tsa.data (verificado ao vivo),observacao_direta,2026-11-21T20:44:20.917365+00:00
+serie_subst.csv,2026,9,pdo,-2.85,desconhecido,,master_monthly.csv (sem proveniência registrada),copiado_do_master_sem_origem_conhecida,2026-11-21T20:44:20.917831+00:00
+serie_subst.csv,2026,10,nino34,3.25,desconhecido,,master_monthly.csv (sem proveniência registrada),copiado_do_master_sem_origem_conhecida,2026-11-21T20:44:20.919791+00:00
+serie_subst.csv,2026,10,tsa,0.57,persistido,2026-09,"PSL tsa.data (verificado ao vivo) — persistência de set/2026, NÃO observação de outubro",persistencia_ultimo_real,2026-11-21T20:44:20.920276+00:00
+serie_subst.csv,2026,10,pdo,-2.85,desconhecido,,master_monthly.csv (sem proveniência registrada),copiado_do_master_sem_origem_conhecida,2026-11-21T20:44:20.920735+00:00
