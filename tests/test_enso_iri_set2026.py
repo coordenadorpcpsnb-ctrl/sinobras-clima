@@ -706,6 +706,43 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         "                               # sobrevive como 0.0 disfarçado de observação.\n"
     )
 
+    # Terceira exceção escopada — Fase ENSO-INTEGRIDADE 3B.8A: o bloco
+    # que regenerava `nino_seasons` a partir de TODAY.month a cada
+    # execução foi REMOVIDO (não substituído por outra lógica geradora
+    # de dado): era a causa raiz do deslocamento de rótulos da
+    # trajetória IRI preservada (rótulo avançava com o calendário, os
+    # 12 valores por baixo ficavam parados — set/26→nov/26 entre dois
+    # ciclos reais, mesmos valores). Vira comentário explicativo, sem
+    # nenhum código executável no lugar. Aceita bloco antigo OU já
+    # removido, mesma disciplina do PDO acima — nunca assume qual lado
+    # (base/HEAD) tem qual forma.
+    _UD_NINO_SEASONS_ANTIGO = (
+        "# nino_seasons — iniciar no mês atual (igual ao fc_labels)\n"
+        "_meses_pt = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']\n"
+        "_ns = []\n"
+        "_y, _m = TODAY.year, TODAY.month\n"
+        "for _ in range(12):\n"
+        "    _ns.append(f\"'{_meses_pt[_m-1]}/{str(_y)[2:]}'\")\n"
+        "    _m += 1\n"
+        "    if _m > 12: _m, _y = 1, _y + 1\n"
+        "html = re.sub(r'nino_seasons:\\[[^\\]]+\\]', f'nino_seasons:[{\",\".join(_ns)}]', html)\n"
+    )
+    _UD_NINO_SEASONS_NOVO = (
+        "# nino_seasons/iri_nino_mean/iri_nino_p15/iri_nino_p85 — Fase\n"
+        "# ENSO-INTEGRIDADE 3B.8A: este script NUNCA escreve nesses campos.\n"
+        "# É a trajetória do IRI, PRESERVADA de uma emissão fixa (ver\n"
+        "# CPC_IRI._meta.iri_trajetoria_emissao) — rotular pelo \"mês atual\"\n"
+        "# a cada execução (como o código removido aqui fazia) desloca os\n"
+        "# rótulos sem mover os valores, quebrando a associação mês↔valor a\n"
+        "# cada ciclo (achado real: nino_seasons chegou a avançar de set/26\n"
+        "# para nov/26 entre dois ciclos, com os MESMOS 12 valores por baixo).\n"
+        "# nino_seasons só pode mudar quando uma nova extração manual da\n"
+        "# trajetória IRI atualizar rótulos E valores juntos — nunca aqui.\n"
+        "# rebuildCmpNino() (docs/index.html) já alinha por rótulo de mês\n"
+        "# contra SARIMAX_DATA.labels_win, então o horizonte SARIMAX pode\n"
+        "# avançar livremente sem exigir nenhuma mudança neste bloco.\n"
+    )
+
     @classmethod
     def _nucleo_cientifico_update_dashboard(cls, texto):
         """Devolve o conteúdo de update_dashboard.py com a superfície
@@ -741,7 +778,17 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
                 "linha do PDO foram encontradas — marcador da área autorizada mudou; "
                 'revisar esta guarda antes de confiar nela')
 
-        return sem_pdo
+        if cls._UD_NINO_SEASONS_ANTIGO in sem_pdo:
+            sem_nino_seasons = sem_pdo.replace(cls._UD_NINO_SEASONS_ANTIGO, '', 1)
+        elif cls._UD_NINO_SEASONS_NOVO in sem_pdo:
+            sem_nino_seasons = sem_pdo.replace(cls._UD_NINO_SEASONS_NOVO, '', 1)
+        else:
+            raise AssertionError(
+                'nem o bloco antigo que regenerava nino_seasons por TODAY.month nem o '
+                'comentário novo (3B.8A) que o substitui foram encontrados — marcador '
+                'da área autorizada mudou; revisar esta guarda antes de confiar nela')
+
+        return sem_nino_seasons
 
     # ── Fase ENSO-INTEGRIDADE 3B.0 ──────────────────────────────────
     # Segunda exceção escopada, desta vez em `data/serie_subst.csv`
@@ -966,6 +1013,16 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         "d['pdo'] = d['pdo'].ffill().fillna(0)\n"
         "def gtsa(p):\n"
         "    return p\n"
+        "\n"
+        "# nino_seasons — iniciar no mês atual (igual ao fc_labels)\n"
+        "_meses_pt = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']\n"
+        "_ns = []\n"
+        "_y, _m = TODAY.year, TODAY.month\n"
+        "for _ in range(12):\n"
+        "    _ns.append(f\"'{_meses_pt[_m-1]}/{str(_y)[2:]}'\")\n"
+        "    _m += 1\n"
+        "    if _m > 12: _m, _y = 1, _y + 1\n"
+        "html = re.sub(r'nino_seasons:\\[[^\\]]+\\]', f'nino_seasons:[{\",\".join(_ns)}]', html)\n"
     )
 
     def test_e_mudanca_so_na_area_permitida_nao_e_sinalizada(self):

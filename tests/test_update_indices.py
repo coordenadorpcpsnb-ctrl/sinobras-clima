@@ -17,6 +17,7 @@ Roda com:
     python3 -m unittest tests.test_update_indices -v
 """
 
+import re
 import sys
 import unittest
 from datetime import date
@@ -432,6 +433,178 @@ class EscolherNino34ParaCardAgoraTestCase(unittest.TestCase):
     def test_g_wk_lbl_malformado_nao_lanca_cai_para_mensal(self):
         lbl, val = ui._escolher_nino34_para_card_agora('lixo-invalido', 3.10, '09/26', 2.84)
         self.assertEqual((lbl, val), ('09/26', 2.84))
+
+
+# Bloco CPC_IRI mínimo para os testes de dash_proxima/divergencia da Fase
+# ENSO-INTEGRIDADE 3B.8A — réplica da forma real (ver docs/index.html),
+# com cpc_probabilidades_emissao e iri_emissao deliberadamente em meses
+# diferentes (nov/2026 e 21/09/2026), igual ao caso real que motivou a
+# correção (divergencia citava 'out/2026', já desatualizado).
+HTML_CPC_IRI_META_AMOSTRA = """
+const CPC_IRI = {
+  _meta: {
+    cpc_emissao:   '13/ago/2026',
+    cpc_probabilidades_emissao: 'nov/2026',
+    iri_emissao: '21/09/2026',
+    atualizado_em: '21/11/2026',
+    dash_proxima: '21/out/2026',
+    divergencia: 'cpc[] é da tabela estruturada de probabilidades (out/2026); iri[] é da extração externa da emissão de set/2026 (ver iri_extracao) — ASO/26 null em ambos não é coincidência: CPC também não publicou ASO/26 na tabela estruturada (fora do alcance), IRI porque a extração de set/2026 não confirmou esse trimestre',
+  },
+  seasons: ['ASO/26','SON/26','FMA/27'],
+  cpc:{ en:[null,94,82], neu:[null,6,16], ln:[null,0,2] },
+  iri:{ en:[null,97,78], neu:[null,3,22], ln:[null,0,0] },
+};
+"""
+
+
+class ProximaAtualizacaoMensalTestCase(unittest.TestCase):
+    """Seção 4/7 da Fase ENSO-INTEGRIDADE 3B.8A: `_meta.dash_proxima` era
+    texto fixo, escrito uma vez à mão e nunca mais atualizado (chegou a
+    ficar meses no passado frente à própria emissão do dashboard — caso
+    real: dashboard emitido em 21/11/2026 ainda mostrava '21/out/2026').
+    `_proxima_atualizacao_mensal(hoje)` calcula a partir do cron real de
+    update.yml (dia 21 de cada mês) e nunca devolve o próprio dia do
+    ciclo em execução."""
+
+    def test_a_proxima_e_sempre_posterior_ao_dia_de_hoje(self):
+        for hoje in (date(2026, 11, 21), date(2026, 11, 1), date(2026, 11, 20),
+                     date(2026, 11, 22), date(2026, 12, 21), date(2026, 1, 21)):
+            proxima = ui._proxima_atualizacao_mensal(hoje)
+            self.assertGreater(proxima, hoje, f'falhou para hoje={hoje}')
+
+    def test_b_virada_novembro_para_dezembro(self):
+        self.assertEqual(ui._proxima_atualizacao_mensal(date(2026, 11, 21)),
+                          date(2026, 12, 21))
+
+    def test_c_virada_dezembro_para_janeiro_com_virada_de_ano(self):
+        self.assertEqual(ui._proxima_atualizacao_mensal(date(2026, 12, 21)),
+                          date(2027, 1, 21))
+
+    def test_d_antes_do_dia_21_a_proxima_e_ainda_este_mes(self):
+        self.assertEqual(ui._proxima_atualizacao_mensal(date(2026, 11, 1)),
+                          date(2026, 11, 21))
+        self.assertEqual(ui._proxima_atualizacao_mensal(date(2026, 11, 20)),
+                          date(2026, 11, 21))
+
+    def test_e_ciclo_atrasado_apos_o_dia_21_pula_para_o_mes_seguinte(self):
+        # Se o ciclo roda atrasado (ex.: runner indisponível no dia 21 e
+        # só executa no dia 22), a "próxima" não pode ser o dia 21 do
+        # mesmo mês, que já passou — regra explícita do usuário: nunca
+        # afirmar uma execução futura que já ficou no passado.
+        self.assertEqual(ui._proxima_atualizacao_mensal(date(2026, 11, 22)),
+                          date(2026, 12, 21))
+
+    def test_f_dezembro_nunca_avanca_para_mes_13(self):
+        proxima = ui._proxima_atualizacao_mensal(date(2026, 12, 21))
+        self.assertLessEqual(proxima.month, 12)
+        self.assertEqual(proxima.month, 1)
+        self.assertEqual(proxima.year, 2027)
+
+
+class DataNumericaParaDateTestCase(unittest.TestCase):
+    """`_data_numerica_para_date`: formato DD/MM/AAAA usado por
+    `_meta.iri_emissao` — diferente do D/mon/AAAA de `_meta.cpc_emissao`
+    (CLAUDE.md armadilha 9). Nunca lança excessão para texto não
+    reconhecido; devolve None."""
+
+    def test_a_formato_valido(self):
+        self.assertEqual(ui._data_numerica_para_date('21/09/2026'), date(2026, 9, 21))
+
+    def test_b_none_para_vazio(self):
+        self.assertIsNone(ui._data_numerica_para_date(None))
+        self.assertIsNone(ui._data_numerica_para_date(''))
+
+    def test_c_none_para_texto_nao_reconhecido(self):
+        self.assertIsNone(ui._data_numerica_para_date('13/ago/2026'))
+        self.assertIsNone(ui._data_numerica_para_date('lixo'))
+
+    def test_d_none_para_data_invalida_sem_lancar_excecao(self):
+        self.assertIsNone(ui._data_numerica_para_date('31/02/2026'))
+
+
+class GerarDivergenciaCpcIriTestCase(unittest.TestCase):
+    """Seção 5/7 da Fase ENSO-INTEGRIDADE 3B.8A: `_meta.divergencia`
+    citava um mês fixo ('out/2026') escrito à mão, que ficou
+    desatualizado quando `cpc_probabilidades_emissao` avançou para
+    nov/2026 — `_gerar_divergencia_cpc_iri` precisa gerar o texto a
+    partir dos campos de emissão REALMENTE registrados agora, nunca de
+    um mês hardcoded."""
+
+    def test_a_cita_a_emissao_cpc_realmente_registrada_agora(self):
+        bloco = _bloco_cpc_iri_amostra()
+        texto = ui._gerar_divergencia_cpc_iri(bloco)
+        self.assertIn('nov/2026', texto)
+        self.assertNotIn('out/2026', texto)
+
+    def test_b_cita_a_emissao_iri_convertida_para_mes_em_portugues(self):
+        bloco = _bloco_cpc_iri_amostra()
+        texto = ui._gerar_divergencia_cpc_iri(bloco)
+        # iri_emissao = '21/09/2026' -> mês de emissão citado é set/2026
+        self.assertIn('set/2026', texto)
+
+    def test_c_identifica_trimestres_nulos_em_ambas_as_fontes_na_emissao_atual(self):
+        bloco = _bloco_cpc_iri_amostra()
+        nulos = ui._trimestres_nulos_em_ambos_cpc_iri(bloco)
+        self.assertEqual(nulos, ['ASO/26'])
+        texto = ui._gerar_divergencia_cpc_iri(bloco)
+        self.assertIn('ASO/26', texto)
+
+    def test_d_nao_inventa_nulo_que_nao_existe_nos_dados_do_bloco(self):
+        # SON/26 e FMA/27 têm valor em pelo menos uma das duas fontes no
+        # fixture — não podem aparecer na lista de "null em ambos".
+        bloco = _bloco_cpc_iri_amostra()
+        nulos = ui._trimestres_nulos_em_ambos_cpc_iri(bloco)
+        self.assertNotIn('SON/26', nulos)
+        self.assertNotIn('FMA/27', nulos)
+
+
+def _bloco_cpc_iri_amostra():
+    ini = HTML_CPC_IRI_META_AMOSTRA.find('const CPC_IRI = {')
+    fim = HTML_CPC_IRI_META_AMOSTRA.find('\n};', ini) + 3
+    return HTML_CPC_IRI_META_AMOSTRA[ini:fim]
+
+
+class AtualizacaoDashProximaEDivergenciaNaoAlteraOutrosCamposTestCase(unittest.TestCase):
+    """Item 8 da Seção 7 (preservação): a atualização de `dash_proxima`
+    e `divergencia` via `_upsert_campo_meta` deve trocar SOMENTE esses
+    dois campos — nunca o restante do bloco `CPC_IRI` (seasons, cpc[],
+    iri[], outros campos de _meta), reproduzindo o mesmo splice
+    delimitado (`ini`/`fim`/`bloco`) usado em update_html() (CLAUDE.md
+    armadilha 2: nunca re.sub global sobre o HTML inteiro)."""
+
+    def setUp(self):
+        self.bloco_original = _bloco_cpc_iri_amostra()
+        proxima = ui._proxima_atualizacao_mensal(date(2026, 11, 23))
+        bloco = ui._upsert_campo_meta(
+            self.bloco_original, 'dash_proxima',
+            f'{proxima.day}/{ui._NOMES_MESES_PT[proxima.month - 1]}/{proxima.year}')
+        self.bloco_novo = ui._upsert_campo_meta(
+            bloco, 'divergencia', ui._gerar_divergencia_cpc_iri(bloco))
+
+    def test_a_dash_proxima_atualizado(self):
+        self.assertIn("dash_proxima: '21/dez/2026'", self.bloco_novo)
+        self.assertNotIn("dash_proxima:   '21/out/2026'", self.bloco_novo)
+
+    def test_b_divergencia_atualizada(self):
+        self.assertIn('nov/2026', self.bloco_novo)
+
+    def test_c_seasons_e_arrays_cpc_iri_inalterados(self):
+        self.assertIn("seasons: ['ASO/26','SON/26','FMA/27'],", self.bloco_novo)
+        self.assertIn('cpc:{ en:[null,94,82], neu:[null,6,16], ln:[null,0,2] },', self.bloco_novo)
+        self.assertIn('iri:{ en:[null,97,78], neu:[null,3,22], ln:[null,0,0] },', self.bloco_novo)
+
+    def test_d_outros_campos_de_meta_inalterados(self):
+        self.assertIn("cpc_emissao:   '13/ago/2026',", self.bloco_novo)
+        self.assertIn("cpc_probabilidades_emissao: 'nov/2026',", self.bloco_novo)
+        self.assertIn("iri_emissao: '21/09/2026',", self.bloco_novo)
+        self.assertIn("atualizado_em: '21/11/2026',", self.bloco_novo)
+
+    def test_e_resto_do_bloco_fora_dos_dois_campos_e_byte_a_byte_igual(self):
+        def strip_campos(bloco):
+            b = re.sub(r"dash_proxima:\s*'[^']*'", "dash_proxima:''", bloco)
+            b = re.sub(r"divergencia:\s*'[^']*'", "divergencia:''", b)
+            return b
+        self.assertEqual(strip_campos(self.bloco_original), strip_campos(self.bloco_novo))
 
 
 if __name__ == '__main__':

@@ -679,6 +679,79 @@ def _upsert_campo_meta(bloco, nome_campo, valor):
     return re.sub(r'(_meta:\s*\{)', r'\1' + nova_linha, bloco, count=1)
 
 
+def _proxima_atualizacao_mensal(hoje):
+    """Fase ENSO-INTEGRIDADE 3B.8A: data agendada (nunca garantida) da
+    próxima execução de update.yml (cron dia 21 de cada mês). `hoje` é
+    o próprio dia do ciclo que está rodando agora — por isso ele NUNCA
+    é devolvido como "próxima": se `hoje` já é dia 21 (ou depois, caso
+    rode atrasado), a próxima é o dia 21 do mês seguinte, com virada de
+    ano quando necessário. Antes desta fase, `_meta.dash_proxima` era
+    texto fixo, escrito uma vez à mão e nunca mais atualizado."""
+    ano, mes = hoje.year, hoje.month
+    if hoje.day >= 21:
+        mes += 1
+        if mes > 12:
+            mes, ano = 1, ano + 1
+    return date(ano, mes, 21)
+
+
+def _data_numerica_para_date(texto):
+    """'21/09/2026' -> date(2026,9,21). None se não reconhecer — formato
+    numérico DD/MM/AAAA usado por `_meta.iri_emissao` (diferente do
+    D/mon/AAAA usado por `_meta.cpc_emissao`; CLAUDE.md armadilha 9)."""
+    if not texto:
+        return None
+    m = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', texto.strip())
+    if not m:
+        return None
+    dia, mes, ano = (int(x) for x in m.groups())
+    try:
+        return date(ano, mes, dia)
+    except ValueError:
+        return None
+
+
+def _trimestres_nulos_em_ambos_cpc_iri(bloco):
+    """Trimestres 'SEAS/YY' com valor null em cpc.en E iri.en ao mesmo
+    tempo, calculado AGORA sobre o bloco atual — nunca hardcoded, já
+    que o conjunto de trimestres sem cobertura muda a cada emissão."""
+    seasons = _seasons_do_cpc_iri(bloco)
+    m_cpc = re.search(r'cpc:\s*\{\s*en:\s*\[([^\]]*)\]', bloco)
+    m_iri = re.search(r'iri:\s*\{\s*en:\s*\[([^\]]*)\]', bloco)
+    if not seasons or not m_cpc or not m_iri:
+        return []
+    cpc_en = [v.strip() for v in m_cpc.group(1).split(',')]
+    iri_en = [v.strip() for v in m_iri.group(1).split(',')]
+    n = min(len(seasons), len(cpc_en), len(iri_en))
+    return [seasons[i] for i in range(n) if cpc_en[i] == 'null' and iri_en[i] == 'null']
+
+
+def _gerar_divergencia_cpc_iri(bloco):
+    """Fase ENSO-INTEGRIDADE 3B.8A: regenera `_meta.divergencia` a
+    partir dos campos de emissão REALMENTE registrados agora
+    (`cpc_probabilidades_emissao`/`iri_emissao`) e do conjunto de
+    trimestres nulos em ambas as fontes calculado neste momento —
+    nunca a partir de um mês/ano fixo no texto (a versão anterior
+    citava 'out/2026' mesmo já com `cpc_probabilidades_emissao` em
+    'nov/2026'). Nunca inventa um motivo para um null que não possa
+    ser verificado pelos dados já presentes no bloco."""
+    m_cpc_em = re.search(r"cpc_probabilidades_emissao:\s*'([^']*)'", bloco)
+    m_iri_em = re.search(r"iri_emissao:\s*'([^']*)'", bloco)
+    cpc_emissao = m_cpc_em.group(1) if m_cpc_em else None
+    iri_emissao_dt = _data_numerica_para_date(m_iri_em.group(1) if m_iri_em else None)
+    iri_emissao_mmm_aaaa = (f'{_NOMES_MESES_PT[iri_emissao_dt.month - 1]}/{iri_emissao_dt.year}'
+                             if iri_emissao_dt else (m_iri_em.group(1) if m_iri_em else '—'))
+    texto = (f"cpc[] é da tabela estruturada de probabilidades "
+             f"({cpc_emissao or '—'}); iri[] é da extração externa da "
+             f"emissão de {iri_emissao_mmm_aaaa} (ver iri_extracao)")
+    nulos = _trimestres_nulos_em_ambos_cpc_iri(bloco)
+    if nulos:
+        texto += (f" — {', '.join(nulos)} null em ambos nesta emissão: "
+                  f"nenhuma das duas fontes publicou probabilidade para "
+                  f"esse(s) trimestre(s)")
+    return texto
+
+
 def _emissao_e_trimestres_consistentes(emissao, probabilidades):
     """
     Confere se CADA chave 'SEAS/YY' de `probabilidades` é alcançável a
@@ -1121,6 +1194,27 @@ def update_html(series, wk_lbl, wk_val, roni=None):
     html = re.sub(r"data:\s*'[\d/]+'",       f"data:       '{dt_str}'", html)
     html = re.sub(r"atualizado_em:\s*'[\d/]+'",
                   f"atualizado_em: '{dt_str}'", html)
+
+    # _meta.dash_proxima / _meta.divergencia — Fase ENSO-INTEGRIDADE
+    # 3B.8A: os dois eram texto fixo, escritos uma vez à mão e nunca
+    # mais atualizados (dash_proxima chegou a ficar meses no passado
+    # frente à própria emissão do dashboard). Regenerados a cada
+    # execução, dentro do mesmo bloco `const CPC_IRI = {...}` já
+    # delimitado (CLAUDE.md armadilha 2), nunca por re.sub global.
+    ini_meta = html.find('const CPC_IRI = {')
+    fim_meta = html.find('\n};', ini_meta) if ini_meta >= 0 else -1
+    if ini_meta >= 0 and fim_meta >= 0:
+        fim_meta += 3
+        bloco_meta = html[ini_meta:fim_meta]
+        proxima = _proxima_atualizacao_mensal(TODAY)
+        bloco_meta = _upsert_campo_meta(
+            bloco_meta, 'dash_proxima',
+            f'{proxima.day}/{_NOMES_MESES_PT[proxima.month - 1]}/{proxima.year}')
+        bloco_meta = _upsert_campo_meta(
+            bloco_meta, 'divergencia', _gerar_divergencia_cpc_iri(bloco_meta))
+        html = html[:ini_meta] + bloco_meta + html[fim_meta:]
+    else:
+        print('  ⚠ const CPC_IRI não encontrado — dash_proxima/divergencia não atualizados')
 
     changed = html != original
     if changed:
