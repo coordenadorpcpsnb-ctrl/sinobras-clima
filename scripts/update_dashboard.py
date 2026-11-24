@@ -704,15 +704,19 @@ html = html.replace(
     "{m:'Jul', t:'o'}, {m:'Ago', t:'o'}, {m:'Set', t:'v'}, {m:'Out', t:'d'},\n    {m:'Nov', t:'d'}, {m:'Dez', t:'c'}, {m:'Jan', t:'c'}, {m:'Fev', t:'c'},\n    {m:'Mar', t:'c'}, {m:'Abr', t:'d'}, {m:'Mai', t:'v'}, {m:'Jun', t:'o'},"
 )
 
-# nino_seasons — iniciar no mês atual (igual ao fc_labels)
-_meses_pt = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']
-_ns = []
-_y, _m = TODAY.year, TODAY.month
-for _ in range(12):
-    _ns.append(f"'{_meses_pt[_m-1]}/{str(_y)[2:]}'")
-    _m += 1
-    if _m > 12: _m, _y = 1, _y + 1
-html = re.sub(r'nino_seasons:\[[^\]]+\]', f'nino_seasons:[{",".join(_ns)}]', html)
+# nino_seasons/iri_nino_mean/iri_nino_p15/iri_nino_p85 — Fase
+# ENSO-INTEGRIDADE 3B.8A: este script NUNCA escreve nesses campos.
+# É a trajetória do IRI, PRESERVADA de uma emissão fixa (ver
+# CPC_IRI._meta.iri_trajetoria_emissao) — rotular pelo "mês atual"
+# a cada execução (como o código removido aqui fazia) desloca os
+# rótulos sem mover os valores, quebrando a associação mês↔valor a
+# cada ciclo (achado real: nino_seasons chegou a avançar de set/26
+# para nov/26 entre dois ciclos, com os MESMOS 12 valores por baixo).
+# nino_seasons só pode mudar quando uma nova extração manual da
+# trajetória IRI atualizar rótulos E valores juntos — nunca aqui.
+# rebuildCmpNino() (docs/index.html) já alinha por rótulo de mês
+# contra SARIMAX_DATA.labels_win, então o horizonte SARIMAX pode
+# avançar livremente sem exigir nenhuma mudança neste bloco.
 
 # BH_LABELS_HYD — igual ao D.fc_labels (mês atual)
 html = re.sub(

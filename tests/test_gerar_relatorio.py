@@ -17,6 +17,7 @@ Roda com:
     python -m unittest tests.test_gerar_relatorio -v
 """
 
+import re
 import subprocess
 import sys
 import unittest
@@ -26,6 +27,83 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 import gerar_relatorio as gr  # noqa: E402
+
+
+# ══════════════════════════════════════════════════════════════════
+# Fase ENSO-INTEGRIDADE 3B.8A.3 — correção do falso positivo de
+# test_f_null_nunca_aparece_como_zero_no_texto_real: a regex antiga
+# `(?<!\d)0%[,.]` buscava "0%" não precedido por um dígito, pensando
+# em excluir só o caso "100%" (onde o '0' de '0%' É precedido por
+# outro '0', um dígito) — mas um percentual decimal em notação pt-BR
+# como "81,0%" tem uma VÍRGULA antes do '0' de '0%', não um dígito, e
+# a vírgula não é dígito: o lookbehind deixa passar, "0%," bate dentro
+# de "81,0%,", e um valor real (81,0%) era sinalizado como "zero
+# fabricado". Achado confirmado reproduzindo contra a baseline antes
+# desta correção — não é regressão desta fase.
+#
+# Corrigido para reconhecer o TOKEN NUMÉRICO COMPLETO antes do '%'
+# (dígitos + opcionalmente ',' + dígitos, delimitado por não-dígito/
+# não-vírgula dos dois lados) e só then avaliar se o VALOR do token é
+# zero — "81,0%" tokeniza como "81,0" (valor 81.0, não zero, nunca
+# soa alarme); um "0%"/"0,0%" isolado tokeniza com valor 0.0 e
+# continua detectado.
+#
+# O que esta checagem NUNCA pretende provar: que todo "0%" no texto é
+# necessariamente fabricado — um 0% real, comprovado pela fonte (ex.:
+# CPC publicando 0% de probabilidade de La Niña num trimestre de El
+# Niño forte), é um valor legítimo e não deveria ser proibido de
+# aparecer. A garantia de que null nunca é CALCULADO como zero já é
+# feita na camada de dados, não na de texto — ver
+# ResumoDivergenciaCpcIriTestCase.test_f_null_nunca_convertido_em_zero
+# (`resumo_divergencia_cpc_iri()`, que descarta null ANTES de max()/
+# comparação, nunca o trata como 0.0) — esta checagem aqui é só uma
+# rede de segurança textual sobre o DOCX já gerado, não a fonte de
+# verdade sobre proveniência de um zero específico.
+_RE_PERCENTUAL_COMPLETO = re.compile(r'(?<![\d,])(\d+(?:,\d+)?)%')
+
+
+def contem_percentual_zero_fabricado(texto):
+    """True se `texto` contém algum percentual COMPLETO cujo valor é
+    exatamente zero ('0%', '0,0%', ...) — nunca confunde com a cauda
+    de um decimal maior ('81,0%' tokeniza como 81.0, não dispara)."""
+    for tok in _RE_PERCENTUAL_COMPLETO.findall(texto):
+        if float(tok.replace(',', '.')) == 0.0:
+            return True
+    return False
+
+
+class DeteccaoDeZeroFabricadoTestCase(unittest.TestCase):
+    """Fixtures positivas/negativas puras para
+    `contem_percentual_zero_fabricado()`, sem depender de dados reais
+    nem da geração real do relatório — prova que a lógica em si
+    distingue os casos antes de confiar nela sobre o DOCX real."""
+
+    def test_a_zero_isolado_e_detectado(self):
+        self.assertTrue(contem_percentual_zero_fabricado('El Niño: 0%, La Niña: 10%.'))
+
+    def test_b_zero_virgula_zero_e_detectado(self):
+        self.assertTrue(contem_percentual_zero_fabricado('probabilidade de 0,0% neste trimestre.'))
+
+    def test_c_decimal_terminado_em_virgula_zero_nao_e_falso_positivo(self):
+        """O bug real: '81,0%,' não pode disparar — é um percentual
+        legítimo (81,0%), não um zero."""
+        self.assertFalse(contem_percentual_zero_fabricado(
+            'a probabilidade de ano seco de 89,8% para 81,0%, o que redefine...'))
+
+    def test_d_cem_por_cento_nao_e_falso_positivo(self):
+        self.assertFalse(contem_percentual_zero_fabricado('probabilidade de até 100% e 100%.'))
+
+    def test_e_zero_legitimo_comprovado_na_fonte_tambem_e_detectado_pelo_padrao(self):
+        """Esta checagem textual detecta QUALQUER '0%' isolado, mesmo
+        um legítimo (comprovado pela fonte, ex. CPC). Ela não decide
+        sozinha se é fabricado — só sinaliza o padrão para revisão. A
+        garantia de que null nunca é calculado como 0.0 é feita na
+        camada de dados (ResumoDivergenciaCpcIriTestCase), não aqui."""
+        self.assertTrue(contem_percentual_zero_fabricado(
+            'CPC: probabilidade de La Niña 0% (publicado, não é null).'))
+
+    def test_f_nenhum_percentual_no_texto_nao_e_falso_positivo(self):
+        self.assertFalse(contem_percentual_zero_fabricado('nenhum percentual neste trecho.'))
 
 
 def _html(seasons, cpc_en, iri_en):
@@ -218,14 +296,23 @@ class ComDadosReaisTestCase(unittest.TestCase):
         """Os dois centros podem ter trimestres sem valor (null) —
         confirma que a geração real não forjou um 0% em lugar nenhum
         por causa disso (o texto só menciona percentuais que vieram de
-        d['divergencia'], nunca itera cpc[]/iri[] bruto)."""
+        d['divergencia'], nunca itera cpc[]/iri[] bruto).
+
+        Fase ENSO-INTEGRIDADE 3B.8A.3: a regex antiga
+        (`(?<!\\d)0%[,.]`) dava falso positivo em qualquer percentual
+        decimal pt-BR terminado em ',0%' (ex. '81,0%,', um valor real,
+        não um zero) — reproduzido e confirmado na baseline antes
+        desta correção. `contem_percentual_zero_fabricado()` (definida
+        acima, com fixtures próprias) tokeniza o número completo antes
+        de avaliar se o valor é zero, então não confunde mais a cauda
+        de um decimal maior com um '0%' isolado."""
         d = gr.carregar()
         doc = gr.montar(d)
         texto_completo = '\n'.join(p.text for p in doc.paragraphs)
-        # '0%' isolado (não precedido por outro dígito, ex. não "100%")
-        # é o padrão que apareceria se null tivesse sido coagido a 0 em
-        # algum ponto da renderização.
-        self.assertNotRegex(texto_completo, r'(?<!\d)0%[,.]')
+        self.assertFalse(
+            contem_percentual_zero_fabricado(texto_completo),
+            'percentual "0%" isolado encontrado no texto real — revisar se é '
+            'fabricado (null tratado como 0) ou um zero legítimo comprovado pela fonte')
 
     def test_g_trajetoria_iri_preservada_nao_e_chamada_de_nova_previsao(self):
         """A trajetória Niño 3.4 do IRI pode estar preservada de uma

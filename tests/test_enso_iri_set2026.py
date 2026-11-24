@@ -94,6 +94,93 @@ def _sarimax_data(html):
 
 
 # ══════════════════════════════════════════════════════════════════
+# Fase ENSO-INTEGRIDADE 3B.8A.1 — mirror em Python de estadoTrimestre()
+# (docs/index.html, função JS real, fonte de verdade). Existe só para
+# tornar a classificação testável sem um motor JS neste projeto (mesmo
+# princípio das outras suítes: regex/parsing espelhando a lógica real,
+# nunca uma segunda implementação "paralela" em produção). Qualquer
+# mudança em estadoTrimestre() tem que ser replicada aqui — por isso
+# TRI_SEQ e SARIMAX_SCENARIOS_8 são copiados literalmente do HTML, e
+# ComparativoRenderizacaoTestCase/EstadoTrimestreMirrorFielAoJsTestCase
+# (abaixo) comparam as constantes copiadas contra o texto real do JS a
+# cada execução — um drift entre as duas cópias reprova antes de
+# qualquer teste de classificação poder mascará-lo.
+TRI_SEQ = ['JFM', 'FMA', 'MAM', 'AMJ', 'MJJ', 'JJA', 'JAS', 'ASO', 'SON', 'OND', 'NDJ', 'DJF']
+SARIMAX_SCENARIOS_8 = ['El Nino forte', 'El Nino moderado', 'El Nino fraco', 'Neutro',
+                       'La Nina fraca', 'La Nina moderada', 'La Nina forte', 'IRI_mean']
+
+
+def _decode_trimestre_py(season):
+    m = re.fullmatch(r'([A-Za-z]{3})/(\d{2})', str(season or '').strip())
+    if not m:
+        return None
+    tri, yy = m.group(1).upper(), m.group(2)
+    if tri not in TRI_SEQ:
+        return None
+    i = TRI_SEQ.index(tri)
+    mes_inicial = i + 1
+    mes_central = 1 if mes_inicial == 12 else mes_inicial + 1
+    ano_central = 2000 + int(yy)
+    ano_inicial = ano_central - 1 if mes_central == 1 else ano_central
+    meses = []
+    y, mo = ano_inicial, mes_inicial
+    for _ in range(3):
+        meses.append((y, mo))
+        mo += 1
+        if mo > 12:
+            mo, y = 1, y + 1
+    return meses
+
+
+def _mes_label_win_py(y, m):
+    return f'{m:02d}/{str(y)[-2:]}'
+
+
+def _finito(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def estado_trimestre_py(season, trimestres, labels_win):
+    """Mirror 1:1 de estadoTrimestre() — ver bloco de comentário acima."""
+    meses = _decode_trimestre_py(season)
+    if meses is None:
+        return {'estado': 'INDISPONIVEL', 'motivo': 'chave de trimestre não decodificável'}
+    meses_lbl = [_mes_label_win_py(y, m) for y, m in meses]
+
+    existe_em_todos = all(
+        isinstance(trimestres.get(sc), dict) and season in trimestres[sc]
+        for sc in SARIMAX_SCENARIOS_8
+    )
+    if not existe_em_todos:
+        return {'estado': 'INDISPONIVEL', 'meses_lbl': meses_lbl,
+                'motivo': 'trimestre ausente em ao menos um dos 8 cenários obrigatórios'}
+
+    campos_ok = all(
+        isinstance(trimestres[sc][season], dict)
+        and _finito(trimestres[sc][season].get('mean'))
+        and _finito(trimestres[sc][season].get('lo'))
+        and _finito(trimestres[sc][season].get('hi'))
+        for sc in SARIMAX_SCENARIOS_8
+    )
+    if not campos_ok:
+        return {'estado': 'INDISPONIVEL', 'meses_lbl': meses_lbl,
+                'motivo': 'campos mean/lo/hi ausentes, nulos ou não numéricos'}
+
+    if any(l not in labels_win for l in meses_lbl):
+        return {'estado': 'PREVISAO_PARCIAL', 'meses_lbl': meses_lbl}
+
+    estrutural_ok = all(
+        trimestres[sc][season]['lo'] >= 0
+        and trimestres[sc][season]['hi'] >= trimestres[sc][season]['lo']
+        and trimestres[sc][season]['lo'] <= trimestres[sc][season]['mean'] <= trimestres[sc][season]['hi']
+        for sc in SARIMAX_SCENARIOS_8
+    )
+    if not estrutural_ok:
+        return {'estado': 'INVALIDO', 'meses_lbl': meses_lbl}
+    return {'estado': 'PREVISAO_COMPLETA', 'meses_lbl': meses_lbl}
+
+
+# ══════════════════════════════════════════════════════════════════
 # Fase ENSO-INTEGRIDADE 3B.0.4 — a emissão do CPC avança mensalmente
 # de verdade (indices_semanal.yml publica uma nova todo mês), então
 # nenhuma checagem aqui pode fixar um mês/ano específico de emissão
@@ -568,6 +655,22 @@ class TrajetoriaPreservadaTestCase(unittest.TestCase):
 
 
 class CompatibilidadeComSarimaxDataTestCase(unittest.TestCase):
+    """Revisão externa (Fase ENSO-INTEGRIDADE 3B.8A.1): os dois testes
+    originais (`test_a`/`test_b`, removidos aqui) exigiam que os 9
+    trimestres de CPC_IRI.seasons existissem em TODOS os cenários de
+    SARIMAX_DATA.trimestres — uma exigência indevida. O dashboard já
+    suporta, por desenho, trimestres com cobertura regional completa,
+    parcial ou indisponível (`estadoTrimestre()`, docs/index.html), e
+    as funções de renderização (`rebuildCmpTri`/`buildCmpTable`) já
+    tratam os três casos sem lançar exceção nem fabricar dado. O bug
+    real não é a ausência de ASO/26 e SON/26 em SARIMAX_DATA — é só
+    nos dois testes antigos, que não conheciam `estadoTrimestre()`.
+
+    Comprovação de que o bug era dos testes, não do dado: os testes
+    antigos falhavam até neste exato commit (6cc0be7, baseline desta
+    fase) — confirmado via `git stash` antes de qualquer alteração
+    nesta sessão — e nenhuma linha de SARIMAX_DATA foi tocada aqui.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -575,18 +678,121 @@ class CompatibilidadeComSarimaxDataTestCase(unittest.TestCase):
             raise unittest.SkipTest('docs/index.html não disponível nesta árvore')
         cls.html = _html()
         cls.sd = _sarimax_data(cls.html)
+        cls.seasons = _seasons(_bloco_cpc_iri(cls.html))
+        cls.labels_win = cls.sd['labels_win']
+        cls.estados = {s: estado_trimestre_py(s, cls.sd['trimestres'], cls.labels_win) for s in cls.seasons}
 
-    def test_a_todas_as_9_seasons_existem_em_iri_mean_trimestres(self):
-        seasons = _seasons(_bloco_cpc_iri(self.html))
-        tri_iri = self.sd['trimestres']['IRI_mean']
-        faltando = [s for s in seasons if s not in tri_iri]
-        self.assertEqual(faltando, [], f'trimestre(s) ausente(s) em SARIMAX_DATA.trimestres.IRI_mean: {faltando}')
+    # ── item 1: os 8 cenários obrigatórios são a lista exigida pelo JS ──
+    def test_a_os_8_cenarios_obrigatorios_batem_com_a_constante_real_do_js(self):
+        m = re.search(r"const SARIMAX_SCENARIOS\s*=\s*\[(.*?)\];", self.html, re.DOTALL)
+        self.assertIsNotNone(m, 'SARIMAX_SCENARIOS não encontrado em docs/index.html')
+        cenarios_js = [v.strip().strip("'") for v in m.group(1).replace('\n', ' ').split(',')]
+        self.assertEqual(
+            cenarios_js, SARIMAX_SCENARIOS_8,
+            'a cópia Python (SARIMAX_SCENARIOS_8) saiu de sincronia com a '
+            'constante real SARIMAX_SCENARIOS do JS — atualizar as duas juntas')
 
-    def test_b_todas_as_9_seasons_existem_em_todo_cenario_de_trimestres(self):
-        seasons = _seasons(_bloco_cpc_iri(self.html))
-        for cenario, tri in self.sd['trimestres'].items():
-            faltando = [s for s in seasons if s not in tri]
-            self.assertEqual(faltando, [], f'cenário {cenario!r} sem os trimestres: {faltando}')
+    # ── item 2: trimestres com cobertura completa têm dado numérico válido ──
+    def test_b_trimestres_completos_tem_dados_numericos_validos_em_todos_os_cenarios(self):
+        completos = [s for s in self.seasons if self.estados[s]['estado'] == 'PREVISAO_COMPLETA']
+        self.assertGreater(len(completos), 0, 'nenhum trimestre PREVISAO_COMPLETA na emissão atual — inesperado')
+        for s in completos:
+            for sc in SARIMAX_SCENARIOS_8:
+                v = self.sd['trimestres'][sc][s]
+                self.assertTrue(_finito(v['mean']) and _finito(v['lo']) and _finito(v['hi']),
+                                 f'{s}/{sc}: mean/lo/hi não numérico')
+                self.assertLessEqual(v['lo'], v['mean'], f'{s}/{sc}: mean < lo')
+                self.assertLessEqual(v['mean'], v['hi'], f'{s}/{sc}: mean > hi')
+
+    # ── item 3: trimestre parcial é identificado como parcial, sem fabricar dado ──
+    def test_c_trimestre_parcial_e_identificado_e_dado_bruto_nao_foi_fabricado(self):
+        parciais = [s for s in self.seasons if self.estados[s]['estado'] == 'PREVISAO_PARCIAL']
+        self.assertIn('OND/26', parciais,
+                       'OND/26 esperado como PREVISAO_PARCIAL (out/26 fora de labels_win) nesta emissão')
+        for s in parciais:
+            # "sem fabricação" = os 8 cenários continuam com valor bruto
+            # real (nunca null/0 inserido artificialmente só por o
+            # trimestre ser parcial) — PREVISAO_PARCIAL é sobre o eixo
+            # temporal (mês fora do horizonte), nunca sobre o dado existir.
+            for sc in SARIMAX_SCENARIOS_8:
+                v = self.sd['trimestres'][sc][s]
+                self.assertTrue(_finito(v['mean']) and _finito(v['lo']) and _finito(v['hi']),
+                                 f'{s}/{sc}: dado ausente/fabricado como null em trimestre parcial')
+
+    # ── item 4: trimestre ausente de SARIMAX_DATA é identificado como indisponível ──
+    def test_d_trimestres_ausentes_de_sarimax_data_sao_indisponiveis(self):
+        for s in ('ASO/26', 'SON/26'):
+            self.assertIn(s, self.seasons)
+            self.assertEqual(self.estados[s]['estado'], 'INDISPONIVEL',
+                              f'{s} deveria ser INDISPONIVEL (ausente de SARIMAX_DATA.trimestres)')
+            for sc in SARIMAX_SCENARIOS_8:
+                self.assertNotIn(s, self.sd['trimestres'].get(sc, {}),
+                                  f'{s} apareceu em SARIMAX_DATA.trimestres[{sc!r}] — não deveria (nunca fabricar)')
+
+    # ── item 5/6: renderização nunca acessa SARIMAX_DATA sem passar por
+    # estadoTrimestre(), então nunca lança exceção e nunca mostra um
+    # trimestre indisponível/parcial como PREVISAO_COMPLETA ──
+    def test_e_rebuildCmpTri_filtra_por_previsao_completa_antes_de_indexar_sarimax_data(self):
+        trecho = re.search(r'function rebuildCmpTri\(\).*?\n\}', self.html, re.DOTALL)
+        self.assertIsNotNone(trecho)
+        corpo = trecho.group(0)
+        self.assertIn("estadoTrimestre(s).estado === 'PREVISAO_COMPLETA'", corpo)
+        # o filtro tem que vir ANTES de qualquer SARIMAX_DATA.trimestres[...]
+        pos_filtro = corpo.index("estadoTrimestre(s).estado === 'PREVISAO_COMPLETA'")
+        pos_acesso = corpo.index('SARIMAX_DATA.trimestres[')
+        self.assertLess(pos_filtro, pos_acesso,
+                         'rebuildCmpTri acessa SARIMAX_DATA.trimestres antes de filtrar por PREVISAO_COMPLETA')
+
+    def test_f_buildCmpTable_so_le_sarimax_data_quando_estado_e_previsao_completa(self):
+        trecho = re.search(r'function buildCmpTable\(\).*?\n\}', self.html, re.DOTALL)
+        self.assertIsNotNone(trecho)
+        corpo = trecho.group(0)
+        self.assertIn("const completa = info.estado === 'PREVISAO_COMPLETA'", corpo)
+        self.assertIn('ROTULO_INDISP', corpo)
+        # as leituras de SARIMAX_DATA.trimestres são condicionadas por `completa`
+        self.assertRegex(corpo, r"completa\s*\?\s*Math\.round\(SARIMAX_DATA\.trimestres")
+
+    # ── item 7: CPC_IRI.seasons são trimestres contíguos, desde o mês
+    # anterior ao início do horizonte SARIMAX (labels_win) ──
+    def test_g_seasons_sao_contiguos_desde_o_mes_anterior_ao_horizonte(self):
+        decodificados = [_decode_trimestre_py(s) for s in self.seasons]
+        self.assertTrue(all(d is not None for d in decodificados), 'season não decodificável em CPC_IRI.seasons')
+        for anterior, atual in zip(decodificados, decodificados[1:]):
+            y0, m0 = anterior[0]
+            y1, m1 = atual[0]
+            m0_abs = y0 * 12 + m0
+            m1_abs = y1 * 12 + m1
+            self.assertEqual(m1_abs - m0_abs, 1,
+                              f'trimestres não contíguos: {anterior} -> {atual}')
+        primeiro_mes_lbl = _mes_label_win_py(*decodificados[0][-1])  # último mês do 1º trimestre
+        inicio_horizonte = self.labels_win[0]
+        m_h, yy_h = int(inicio_horizonte[:2]), int(inicio_horizonte[3:])
+        y_h = 2000 + yy_h
+        mes_anterior_horizonte = _mes_label_win_py(y_h - 1, 12) if m_h == 1 else _mes_label_win_py(y_h, m_h - 1)
+        self.assertEqual(primeiro_mes_lbl, mes_anterior_horizonte,
+                          'o 1º trimestre de CPC_IRI.seasons deveria terminar no mês imediatamente '
+                          'anterior ao início de SARIMAX_DATA.labels_win (CLAUDE.md armadilha 3)')
+
+    # ── item 8: trimestre declarado completo mas estruturalmente
+    # inválido (ex. mean>hi) é rejeitado — nunca sai como PREVISAO_COMPLETA ──
+    def test_h_trimestre_dentro_do_horizonte_mas_estruturalmente_invalido_e_invalido(self):
+        # Usar um season REAL já classificado PREVISAO_COMPLETA nesta
+        # emissão (totalmente dentro de labels_win), para que a
+        # checagem estrutural seja realmente exercida (não cair em
+        # INDISPONIVEL por chave não reconhecida nem em PARCIAL por
+        # estar fora do horizonte) — só os valores mean/lo/hi são
+        # substituídos por um trio sintético inválido de propósito.
+        completos = [s for s in self.seasons if self.estados[s]['estado'] == 'PREVISAO_COMPLETA']
+        if not completos:
+            raise unittest.SkipTest('nenhum trimestre PREVISAO_COMPLETA nesta emissão para exercer o teste')
+        season_valida = completos[0]
+        trimestres_invalidos = {
+            sc: {season_valida: {'mean': 500.0, 'lo': 100.0, 'hi': 400.0}}
+            for sc in SARIMAX_SCENARIOS_8
+        }
+        resultado = estado_trimestre_py(season_valida, trimestres_invalidos, self.labels_win)
+        self.assertEqual(resultado['estado'], 'INVALIDO',
+                          'trimestre com mean>hi dentro do horizonte deveria ser INVALIDO, nunca PREVISAO_COMPLETA')
 
 
 class ComparativoRenderizacaoTestCase(unittest.TestCase):
@@ -706,6 +912,43 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         "                               # sobrevive como 0.0 disfarçado de observação.\n"
     )
 
+    # Terceira exceção escopada — Fase ENSO-INTEGRIDADE 3B.8A: o bloco
+    # que regenerava `nino_seasons` a partir de TODAY.month a cada
+    # execução foi REMOVIDO (não substituído por outra lógica geradora
+    # de dado): era a causa raiz do deslocamento de rótulos da
+    # trajetória IRI preservada (rótulo avançava com o calendário, os
+    # 12 valores por baixo ficavam parados — set/26→nov/26 entre dois
+    # ciclos reais, mesmos valores). Vira comentário explicativo, sem
+    # nenhum código executável no lugar. Aceita bloco antigo OU já
+    # removido, mesma disciplina do PDO acima — nunca assume qual lado
+    # (base/HEAD) tem qual forma.
+    _UD_NINO_SEASONS_ANTIGO = (
+        "# nino_seasons — iniciar no mês atual (igual ao fc_labels)\n"
+        "_meses_pt = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']\n"
+        "_ns = []\n"
+        "_y, _m = TODAY.year, TODAY.month\n"
+        "for _ in range(12):\n"
+        "    _ns.append(f\"'{_meses_pt[_m-1]}/{str(_y)[2:]}'\")\n"
+        "    _m += 1\n"
+        "    if _m > 12: _m, _y = 1, _y + 1\n"
+        "html = re.sub(r'nino_seasons:\\[[^\\]]+\\]', f'nino_seasons:[{\",\".join(_ns)}]', html)\n"
+    )
+    _UD_NINO_SEASONS_NOVO = (
+        "# nino_seasons/iri_nino_mean/iri_nino_p15/iri_nino_p85 — Fase\n"
+        "# ENSO-INTEGRIDADE 3B.8A: este script NUNCA escreve nesses campos.\n"
+        "# É a trajetória do IRI, PRESERVADA de uma emissão fixa (ver\n"
+        "# CPC_IRI._meta.iri_trajetoria_emissao) — rotular pelo \"mês atual\"\n"
+        "# a cada execução (como o código removido aqui fazia) desloca os\n"
+        "# rótulos sem mover os valores, quebrando a associação mês↔valor a\n"
+        "# cada ciclo (achado real: nino_seasons chegou a avançar de set/26\n"
+        "# para nov/26 entre dois ciclos, com os MESMOS 12 valores por baixo).\n"
+        "# nino_seasons só pode mudar quando uma nova extração manual da\n"
+        "# trajetória IRI atualizar rótulos E valores juntos — nunca aqui.\n"
+        "# rebuildCmpNino() (docs/index.html) já alinha por rótulo de mês\n"
+        "# contra SARIMAX_DATA.labels_win, então o horizonte SARIMAX pode\n"
+        "# avançar livremente sem exigir nenhuma mudança neste bloco.\n"
+    )
+
     @classmethod
     def _nucleo_cientifico_update_dashboard(cls, texto):
         """Devolve o conteúdo de update_dashboard.py com a superfície
@@ -741,7 +984,17 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
                 "linha do PDO foram encontradas — marcador da área autorizada mudou; "
                 'revisar esta guarda antes de confiar nela')
 
-        return sem_pdo
+        if cls._UD_NINO_SEASONS_ANTIGO in sem_pdo:
+            sem_nino_seasons = sem_pdo.replace(cls._UD_NINO_SEASONS_ANTIGO, '', 1)
+        elif cls._UD_NINO_SEASONS_NOVO in sem_pdo:
+            sem_nino_seasons = sem_pdo.replace(cls._UD_NINO_SEASONS_NOVO, '', 1)
+        else:
+            raise AssertionError(
+                'nem o bloco antigo que regenerava nino_seasons por TODAY.month nem o '
+                'comentário novo (3B.8A) que o substitui foram encontrados — marcador '
+                'da área autorizada mudou; revisar esta guarda antes de confiar nela')
+
+        return sem_nino_seasons
 
     # ── Fase ENSO-INTEGRIDADE 3B.0 ──────────────────────────────────
     # Segunda exceção escopada, desta vez em `data/serie_subst.csv`
@@ -966,6 +1219,16 @@ class PreservacaoDeModelosCientificosTestCase(unittest.TestCase):
         "d['pdo'] = d['pdo'].ffill().fillna(0)\n"
         "def gtsa(p):\n"
         "    return p\n"
+        "\n"
+        "# nino_seasons — iniciar no mês atual (igual ao fc_labels)\n"
+        "_meses_pt = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']\n"
+        "_ns = []\n"
+        "_y, _m = TODAY.year, TODAY.month\n"
+        "for _ in range(12):\n"
+        "    _ns.append(f\"'{_meses_pt[_m-1]}/{str(_y)[2:]}'\")\n"
+        "    _m += 1\n"
+        "    if _m > 12: _m, _y = 1, _y + 1\n"
+        "html = re.sub(r'nino_seasons:\\[[^\\]]+\\]', f'nino_seasons:[{\",\".join(_ns)}]', html)\n"
     )
 
     def test_e_mudanca_so_na_area_permitida_nao_e_sinalizada(self):
