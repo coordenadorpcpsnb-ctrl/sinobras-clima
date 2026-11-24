@@ -18,8 +18,10 @@ Roda com:
     python -m unittest tests.test_verificar_dashboard -v
 """
 
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -106,42 +108,143 @@ class PularContinuidadeSerieSubstTestCase(unittest.TestCase):
         vd.falhas.clear()
 
 
+def _serie_subst_fixture_csv(com_lacuna):
+    """Série sintética de `serie_subst.csv` (NUNCA o CSV real) cobrindo
+    de jan/2020 até o mês anterior ao atual — mesmo horizonte que
+    `checar_continuidade()` cobre por padrão (CLAUDE.md: 'checa até o
+    mês anterior ao atual'). Construída relativa a `date.today()`,
+    nunca a um mês/ano hardcoded — continua válida em qualquer ciclo
+    futuro, ao contrário dos testes antigos que dependiam do estado
+    real da série ter uma lacuna (deixou de ser verdade quando a série
+    real alcançou continuidade).
+
+    Com `com_lacuna=True`, omite deliberadamente 03/2020 — bem longe da
+    ponta mais recente, para que nenhuma lógica de 'mês mais recente'
+    (itens 11/12) seja afetada, só a checagem de continuidade (item 9).
+    tsa/pdo ficam vazios de propósito: sem valor, a checagem de
+    proveniência (itens 12/13) não tem nada para avaliar e nunca
+    reprova por um motivo que não é o que este teste quer exercitar."""
+    hoje = date.today()
+    y_fim, m_fim = (hoje.year, hoje.month - 1) if hoje.month > 1 else (hoje.year - 1, 12)
+    linhas = ['ano,mes,prec,nino34,tsa,pdo,date,fonte']
+    y, m = 2020, 1
+    while (y, m) <= (y_fim, m_fim):
+        pular = com_lacuna and (y, m) == (2020, 3)
+        if not pular:
+            linhas.append(f'{y},{m},100.0,0.0,,,{y}-{m:02d}-01,fixture')
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return '\n'.join(linhas) + '\n'
+
+
+def _montar_arvore_isolada_verificador(raiz, serie_subst_csv_texto):
+    """Copia só o que `scripts/verificar_dashboard.py` precisa para
+    rodar como subprocesso real (igual a indices_semanal.yml/
+    update.yml o chamam) — `verificar_dashboard.py` e sua única
+    dependência local `proveniencia_indices.py`, e o `docs/index.html`
+    REAL (não é isso que está sob teste aqui) — com um
+    `data/serie_subst.csv` FIXTURE no lugar do real. Como
+    `verificar_dashboard.py` resolve `ROOT = Path(__file__).parent.parent`,
+    rodar o binário copiado faz `SERIE_SUBST`/`DASHBOARD` apontarem para
+    esta árvore isolada, nunca para o repositório real."""
+    (raiz / 'scripts').mkdir(parents=True)
+    (raiz / 'docs').mkdir()
+    (raiz / 'data').mkdir()
+    for nome in ('verificar_dashboard.py', 'proveniencia_indices.py'):
+        shutil.copy(ROOT / 'scripts' / nome, raiz / 'scripts' / nome)
+    shutil.copy(ROOT / 'docs' / 'index.html', raiz / 'docs' / 'index.html')
+    (raiz / 'data' / 'serie_subst.csv').write_text(serie_subst_csv_texto, encoding='utf-8')
+    return raiz
+
+
 class ComandoExatoDoWorkflowSemanalTestCase(unittest.TestCase):
-    """Revisão externa (2ª rodada, 'Correção 4') — testa o comando
-    exatamente como `.github/workflows/indices_semanal.yml` o executa
-    (subprocesso real, não chamada direta de `main()`), e confirma que
-    `update.yml` continua chamando o verificador sem a flag (bloqueante,
-    comportamento 100% preservado)."""
+    """Revisão externa (2ª rodada, 'Correção 4'; revisada na Fase
+    ENSO-INTEGRIDADE 3B.8A.3): testa o comando exatamente como
+    `.github/workflows/indices_semanal.yml` o executa (subprocesso
+    real, não chamada direta de `main()`), e confirma que `update.yml`
+    continua chamando o verificador sem a flag (bloqueante,
+    comportamento 100% preservado).
+
+    Correção 3B.8A.3: os testes originais (`test_a`/`test_d`) rodavam
+    contra `data/serie_subst.csv` REAL, presumindo que a série real
+    tinha uma lacuna — verdade quando foram escritos, mas não mais
+    (a série real alcançou continuidade; confirmado reproduzindo a
+    falha idêntica na baseline antes desta correção). Substituídos por
+    uma árvore isolada com fixture temporal (`_serie_subst_fixture_csv`),
+    nunca o CSV real, para que o resultado não dependa do mês em que o
+    teste roda nem precise ser fixado a um mês/ano específico."""
 
     @classmethod
     def setUpClass(cls):
         if not vd.SERIE_SUBST.exists() or not vd.DASHBOARD.exists():
             raise unittest.SkipTest("dados reais não disponíveis nesta árvore de trabalho")
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        raiz = Path(cls._tmpdir.name)
+        cls.arvore_completa = _montar_arvore_isolada_verificador(
+            raiz / 'completa', _serie_subst_fixture_csv(com_lacuna=False))
+        cls.arvore_com_lacuna = _montar_arvore_isolada_verificador(
+            raiz / 'com_lacuna', _serie_subst_fixture_csv(com_lacuna=True))
 
-    def test_a_comando_do_workflow_semanal_roda_e_so_a_checagem_9_e_suprimida(self):
-        resultado = subprocess.run(
-            [sys.executable, str(ROOT / 'scripts' / 'verificar_dashboard.py'),
-             '--pular-continuidade-serie-subst'],
-            cwd=ROOT, capture_output=True, text=True,
-        )
-        saida = resultado.stdout
-        self.assertIn('IGNORADO nesta execução', saida)
-        self.assertIn('--pular-continuidade-serie-subst', saida)
-        # Nenhuma OUTRA linha de falha (❌) além, no máximo, da que o
-        # aviso de defasagem do CPC_IRI (item 11, sempre aviso — nunca
-        # ❌) já cobre; aqui confirmamos que não existe NENHUM ❌ no
-        # stdout quando a única causa conhecida de falha é suprimida
-        # pela flag nesta árvore de trabalho real.
-        linhas_falha = [linha for linha in saida.splitlines() if '❌' in linha]
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmpdir.cleanup()
+
+    @staticmethod
+    def _rodar(arvore, com_flag):
+        args = [sys.executable, str(arvore / 'scripts' / 'verificar_dashboard.py')]
+        if com_flag:
+            args.append('--pular-continuidade-serie-subst')
+        return subprocess.run(args, cwd=arvore, capture_output=True, text=True)
+
+    # ── item 1: série completa — aprovado com e sem flag ──
+    def test_a_serie_completa_aprovada_com_e_sem_flag(self):
+        for com_flag in (False, True):
+            with self.subTest(com_flag=com_flag):
+                resultado = self._rodar(self.arvore_completa, com_flag)
+                self.assertEqual(resultado.returncode, 0,
+                                  f'série completa deveria aprovar (com_flag={com_flag}):\n{resultado.stdout}')
+                self.assertIn('APROVADO', resultado.stdout)
+                self.assertNotIn('IGNORADO nesta execução', resultado.stdout,
+                                  'nada deveria precisar ser ignorado numa série sem lacuna')
+
+    # ── item 2: série com lacuna — sem flag, reprovado ──
+    def test_b_serie_com_lacuna_sem_flag_e_reprovada(self):
+        resultado = self._rodar(self.arvore_com_lacuna, com_flag=False)
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn('serie_subst.csv com mês(es) faltando', resultado.stdout)
+        self.assertNotIn('IGNORADO nesta execução', resultado.stdout)
+
+    # ── item 3: série com lacuna — a flag dispensa SÓ a continuidade ──
+    def test_c_serie_com_lacuna_com_flag_dispensa_so_a_continuidade(self):
+        resultado = self._rodar(self.arvore_com_lacuna, com_flag=True)
+        self.assertEqual(resultado.returncode, 0,
+                          f'a única falha conhecida desta árvore é a lacuna; a flag deveria aprovar:\n{resultado.stdout}')
+        self.assertIn('IGNORADO nesta execução', resultado.stdout)
+        self.assertIn('--pular-continuidade-serie-subst', resultado.stdout)
+        linhas_falha = [linha for linha in resultado.stdout.splitlines() if '❌' in linha]
         self.assertEqual(linhas_falha, [], f'flag deveria suprimir só o item 9: {linhas_falha}')
 
-    def test_b_comando_do_workflow_mensal_update_yml_nao_leva_a_flag(self):
-        with open(ROOT / '.github' / 'workflows' / 'update.yml', encoding='utf-8') as f:
-            conteudo = f.read()
-        self.assertIn('run: python scripts/verificar_dashboard.py\n', conteudo)
-        self.assertNotIn('--pular-continuidade-serie-subst', conteudo)
+    # ── item 4: erro em OUTRO controle — a flag não aprova indevidamente ──
+    def test_d_falha_em_outro_controle_nao_e_mascarada_pela_flag(self):
+        """Corrompe o docs/index.html da árvore com lacuna (quebra o
+        objeto D, item 1 — nada a ver com serie_subst.csv) e confirma
+        que a flag, que só existe para o item 9, não aprova a execução
+        mesmo assim."""
+        raiz_corrompida = Path(self._tmpdir.name) / 'com_lacuna_e_html_quebrado'
+        _montar_arvore_isolada_verificador(raiz_corrompida, _serie_subst_fixture_csv(com_lacuna=True))
+        html = (raiz_corrompida / 'docs' / 'index.html').read_text(encoding='utf-8')
+        html_quebrado = html.replace('const D = {', 'const D = { {{{{quebrado', 1)
+        self.assertNotEqual(html, html_quebrado, 'substituição não encontrou o marcador esperado')
+        (raiz_corrompida / 'docs' / 'index.html').write_text(html_quebrado, encoding='utf-8')
+        resultado = self._rodar(raiz_corrompida, com_flag=True)
+        self.assertEqual(resultado.returncode, 1,
+                          f'flag nunca deveria aprovar uma falha fora do item 9:\n{resultado.stdout}')
+        self.assertIn('IGNORADO nesta execução', resultado.stdout)  # item 9 foi suprimido...
+        self.assertIn('❌', resultado.stdout)  # ...mas o item 1 continua reprovando
 
-    def test_c_workflow_semanal_usa_a_flag_exatamente_como_testada_aqui(self):
+    # ── item 5: comando de indices_semanal.yml mantém a flag ──
+    def test_e_workflow_semanal_usa_a_flag_exatamente_como_testada_aqui(self):
         with open(ROOT / '.github' / 'workflows' / 'indices_semanal.yml', encoding='utf-8') as f:
             conteudo = f.read()
         self.assertIn(
@@ -149,13 +252,12 @@ class ComandoExatoDoWorkflowSemanalTestCase(unittest.TestCase):
             conteudo,
         )
 
-    def test_d_sem_a_flag_o_mesmo_comando_continua_bloqueante(self):
-        resultado = subprocess.run(
-            [sys.executable, str(ROOT / 'scripts' / 'verificar_dashboard.py')],
-            cwd=ROOT, capture_output=True, text=True,
-        )
-        self.assertIn('serie_subst.csv com mês(es) faltando', resultado.stdout)
-        self.assertNotIn('IGNORADO nesta execução', resultado.stdout)
+    # ── item 6: comando de update.yml continua sem flag ──
+    def test_f_comando_do_workflow_mensal_update_yml_nao_leva_a_flag(self):
+        with open(ROOT / '.github' / 'workflows' / 'update.yml', encoding='utf-8') as f:
+            conteudo = f.read()
+        self.assertIn('run: python scripts/verificar_dashboard.py\n', conteudo)
+        self.assertNotIn('--pular-continuidade-serie-subst', conteudo)
 
 
 if __name__ == '__main__':

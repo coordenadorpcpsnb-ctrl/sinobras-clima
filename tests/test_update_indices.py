@@ -549,6 +549,18 @@ class GerarDivergenciaCpcIriTestCase(unittest.TestCase):
         texto = ui._gerar_divergencia_cpc_iri(bloco)
         self.assertIn('ASO/26', texto)
 
+    def test_e_descreve_o_que_o_dashboard_registra_nunca_o_que_a_fonte_publicou(self):
+        """Fase ENSO-INTEGRIDADE 3B.8A.3: a frase antiga ('nenhuma das
+        duas fontes publicou probabilidade') afirmava algo sobre CPC/
+        IRI que o código não tem como comprovar — null aqui só prova
+        que ESTE dashboard não tem o valor, não que a fonte não
+        publicou. Reformulado para uma afirmação verificável pelos
+        próprios dados do bloco."""
+        bloco = _bloco_cpc_iri_amostra()
+        texto = ui._gerar_divergencia_cpc_iri(bloco)
+        self.assertIn('sem probabilidades confirmadas nos dados registrados', texto)
+        self.assertNotIn('publicou', texto)
+
     def test_d_nao_inventa_nulo_que_nao_existe_nos_dados_do_bloco(self):
         # SON/26 e FMA/27 têm valor em pelo menos uma das duas fontes no
         # fixture — não podem aparecer na lista de "null em ambos".

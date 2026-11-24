@@ -734,7 +734,17 @@ def _gerar_divergencia_cpc_iri(bloco):
     nunca a partir de um mês/ano fixo no texto (a versão anterior
     citava 'out/2026' mesmo já com `cpc_probabilidades_emissao` em
     'nov/2026'). Nunca inventa um motivo para um null que não possa
-    ser verificado pelos dados já presentes no bloco."""
+    ser verificado pelos dados já presentes no bloco.
+
+    Fase ENSO-INTEGRIDADE 3B.8A.3: a frase para os trimestres nulos
+    dizia "nenhuma das duas fontes publicou probabilidade" — uma
+    afirmação sobre o que CPC/IRI fizeram ou não fizeram, que este
+    código não tem como comprovar (null em cpc.en/iri.en só prova que
+    ESTE dashboard não tem o valor registrado; não prova ausência de
+    publicação na fonte — pode ser lacuna de coleta, por exemplo).
+    Reformulado para uma frase verificável pelos próprios dados do
+    bloco: descreve o que o dashboard REGISTRA (ou não), nunca o que a
+    instituição publicou ou deixou de publicar."""
     m_cpc_em = re.search(r"cpc_probabilidades_emissao:\s*'([^']*)'", bloco)
     m_iri_em = re.search(r"iri_emissao:\s*'([^']*)'", bloco)
     cpc_emissao = m_cpc_em.group(1) if m_cpc_em else None
@@ -746,9 +756,8 @@ def _gerar_divergencia_cpc_iri(bloco):
              f"emissão de {iri_emissao_mmm_aaaa} (ver iri_extracao)")
     nulos = _trimestres_nulos_em_ambos_cpc_iri(bloco)
     if nulos:
-        texto += (f" — {', '.join(nulos)} null em ambos nesta emissão: "
-                  f"nenhuma das duas fontes publicou probabilidade para "
-                  f"esse(s) trimestre(s)")
+        texto += (f" — {', '.join(nulos)}: sem probabilidades confirmadas "
+                  f"nos dados registrados neste dashboard para ambas as fontes")
     return texto
 
 
