@@ -520,10 +520,10 @@
 
       <div class="semaforo-wrap">
         <div class="semaforo-head">
-          <h2>Semáforo ENSO — gatilho operacional</h2>
+          <h2>Semáforo ENSO — gatilho legado <span style="font-size:10px;font-weight:600;color:var(--dry);text-transform:none;letter-spacing:0">(provisório, sob revisão — Fase ENSO-RONI 4B.2)</span></h2>
           <span class="verdict" id="verdict"></span>
         </div>
-        <p class="note" style="margin-bottom:0">ONI atual: fase <strong id="fase-txt"></strong>. Regra: ONI ≥ +1,0 °C em SON → ativar Plano SECA · ONI ≤ −1,0 °C → ativar Plano EXCESSO. <span id="cpc-iri-rule-note" style="color:var(--dry)"></span></p>
+        <p class="note" style="margin-bottom:0">Este gatilho usa o <strong>ONI aproximado local</strong> (não é o RONI oficial — ver card "Situação ENSO oficial" acima). ONI-aprox atual: fase <strong id="fase-txt"></strong>. Regra legada: ONI-aprox ≥ +1,0 °C em SON → ativar Plano SECA · ONI-aprox ≤ −1,0 °C → ativar Plano EXCESSO. Limiares e ativação preservados sem mudança nesta fase. <span id="cpc-iri-rule-note" style="color:var(--dry)"></span></p>
         <div class="rail-wrap">
           <div class="rail" id="rail"></div>
         </div>
@@ -1180,6 +1180,47 @@
    "RONI (oficial NOAA)" e "ONI aprox. (Niño 3,4, 3m)") existem
    justamente para não deixar ler um pelo outro. */
 const RONI = { seas: 'ASO', ano: 2026, valor: 1.97, atualizado: '23/11/2026' };
+
+/* Classificação oficial de fase/intensidade do RONI — 9 categorias em
+   incrementos de 0,5 °C (cpc.ncep.noaa.gov/.../enso/roni/strengths/),
+   Fase ENSO-RONI 4B.1. Fronteiras testadas nos 8 valores exatos
+   -2,0/-1,5/-1,0/-0,5/0,5/1,0/1,5/2,0 em
+   tests/test_enso_roni_fase4b1.py, rodando este MESMO código via Node
+   (nunca uma reimplementação Python separada que poderia divergir).
+
+   Retorna só a classificação PONTUAL do trimestre. NUNCA declara
+   "episódio persistente" — a própria definição do RONI (página
+   oficial, Fase 4A) exige um mínimo de 5 estações consecutivas acima/
+   abaixo de ±0,5 °C para isso; essa contagem não é feita aqui (exigiria
+   a série histórica completa embutida na página, fora do escopo desta
+   fase) e não deve ser inferida de uma única leitura. */
+function classificarRoni(v){
+  if (v === null || v === undefined || !Number.isFinite(v)) return null;
+  if (v >= 2.0) return {classe:'en_muito_forte', fase:'El Niño', intensidade:'muito forte'};
+  if (v >= 1.5) return {classe:'en_forte',       fase:'El Niño', intensidade:'forte'};
+  if (v >= 1.0) return {classe:'en_moderado',    fase:'El Niño', intensidade:'moderado'};
+  if (v >= 0.5) return {classe:'en_fraco',       fase:'El Niño', intensidade:'fraco'};
+  if (v > -0.5) return {classe:'neutro',         fase:'Neutro',  intensidade:null};
+  if (v > -1.0) return {classe:'ln_fraco',       fase:'La Niña', intensidade:'fraco'};
+  if (v > -1.5) return {classe:'ln_moderado',    fase:'La Niña', intensidade:'moderado'};
+  if (v > -2.0) return {classe:'ln_forte',       fase:'La Niña', intensidade:'forte'};
+  return             {classe:'ln_muito_forte', fase:'La Niña', intensidade:'muito forte'};
+}
+
+/* Dias desde uma data em formato DD/MM/AAAA numérico (formato de
+   RONI.atualizado) — _diasDesde() (mais abaixo, em buildMonitor) espera
+   mês como abreviação de 3 letras ("nov"), formato diferente; esta é
+   uma função separada, não uma generalização daquela, para não
+   arriscar quebrar o parsing já usado por CPC/IRI. */
+function _diasDesdeNumerico(txt){
+  if(!txt) return null;
+  const m = /^(\d{1,2})\/(\d{1,2})\/(20\d{2})$/.exec(txt);
+  if(!m) return null;
+  const d = new Date(+m[3], +m[2]-1, +m[1]);
+  if(isNaN(d.getTime())) return null;
+  return Math.round((Date.now() - d.getTime()) / 86400000);
+}
+
 const D = {
   annual:{years:[1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],vals:[1487.9, 1562.2, 1558.8, 1674.9, 2531.5, 1705.5, 1357.9, 1753.7, 2004.2, 1486.4, 1621.4, 1400.9, 1659.0, 1925.1, 1868.6, 2010.0, 1644.4, 1243.7, 1933.7, 1945.5, 1679.3, 1524.4, 1538.2, 1788.8, 1718.6, 1954.9, 1465.5, 2038.4, 1873.2, 1521.3, 1820.2, 1566.9, 1671.6, 1800.5, 1264.4, 1520.3, 1900.5, 1921.9, 1590.4, 2015.5, 2110.8, 1728.9, 1485.7, 1494.4, 1774.4],media:1714.3,dp:245.6,cv:14.3,minimo:[1998,1243.7],maximo:[1985,2531.5]},
   sen:{slope:2.24,p:0.4935,medY:2003,medP:1714.3},
@@ -1462,7 +1503,16 @@ function buildMonitor(){
     if(meta.iri_trajetoria_emissao && meta.iri_trajetoria_emissao !== meta.iri_emissao){
       partes.push(`trajetória Niño3,4 IRI ${meta.iri_trajetoria_emissao}${diasIriTraj!=null && diasIriTraj>LIMIAR_DEFASADO ? ' ⚠ defasada ('+diasIriTraj+'d)' : ''}`);
     }
-    if(meta.roni_trimestral) partes.push(`RONI oficial ${meta.roni_trimestral}`);
+    /* Fase ENSO-RONI 4B.1: lido direto de `const RONI`, nunca mais do
+       texto fixo `meta.roni_trimestral` (achado da auditoria — ficou
+       parado em JAS/2026 enquanto RONI já estava em ASO/2026, mesmo
+       tipo de drift que dash_proxima/divergencia já tiveram antes de
+       serem corrigidos na Fase 3B.8A). */
+    if (typeof RONI !== 'undefined' && RONI.valor !== null && RONI.valor !== undefined) {
+      partes.push(`RONI oficial ${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)}°C (${RONI.seas}/${RONI.ano})`);
+    } else if(meta.roni_trimestral) {
+      partes.push(`RONI oficial ${meta.roni_trimestral}`);
+    }
     ruleNote.textContent = '| ' + partes.join(' · ') + (meta.cpc_status ? ' — ' + meta.cpc_status : '');
     if((diasCpc!=null && diasCpc>LIMIAR_DEFASADO) || (diasIri!=null && diasIri>LIMIAR_DEFASADO) || (diasIriTraj!=null && diasIriTraj>LIMIAR_DEFASADO)){
       ruleNote.style.color = 'var(--dry)';
@@ -1510,11 +1560,35 @@ function buildMonitor(){
 
   /* RONI — card separado, NÃO reaproveitar colFn/on2 daqui (ver
      CLAUDE.md armadilha 9: RONI e ONI-aprox são métricas diferentes,
-     mesmo que pareçam intercambiáveis no layout). */
-  if (typeof RONI !== 'undefined' && RONI.valor !== null) {
-    document.getElementById('d-roni').textContent = `${RONI.seas}/${RONI.ano}`;
-    document.getElementById('k-roni').innerHTML =
-      `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>`;
+     mesmo que pareçam intercambiáveis no layout).
+
+     Fase ENSO-RONI 4B.1: este card passa a ser a "Situação ENSO
+     oficial" — mostra fase/intensidade classificada pela tabela
+     NOAA/CPC (classificarRoni), nunca aciona Plano SECA/EXCESSO (isso
+     continua exclusivamente em `oni`/`secoAtivo`/`excAtivo` abaixo,
+     gatilho legado, Fase 4B.2 decide se migra). RONI ausente ou
+     defasado nunca é mostrado como neutro ou como zero — sempre aviso
+     explícito. LIMIAR_DEFASADO_RONI=40: a própria página oficial do
+     RONI diz que é atualizada "by the 5th of each month"; 40 dias dá
+     margem de ~10 dias sobre um ciclo mensal de ~30 antes de avisar —
+     escolha operacional desta implementação, não um valor publicado
+     pela NOAA. */
+  const kRoniEl = document.getElementById('k-roni');
+  const dRoniEl = document.getElementById('d-roni');
+  if (typeof RONI !== 'undefined' && RONI.valor !== null && RONI.valor !== undefined) {
+    const cls = classificarRoni(RONI.valor);
+    const diasRoni = _diasDesdeNumerico(RONI.atualizado);
+    const LIMIAR_DEFASADO_RONI = 40;
+    const defasado = diasRoni != null && diasRoni > LIMIAR_DEFASADO_RONI;
+    dRoniEl.textContent = `${RONI.seas}/${RONI.ano}` + (defasado ? ` ⚠ defasado (${diasRoni}d)` : ` · atual. ${RONI.atualizado}`);
+    if (defasado) dRoniEl.style.color = 'var(--dry)';
+    const faseTxt = cls ? `${cls.fase}${cls.intensidade ? ' ' + cls.intensidade : ''}` : 'classificação indisponível';
+    kRoniEl.innerHTML =
+      `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>` +
+      `<div style="font-size:11px;font-weight:600;color:var(--txt2);margin-top:2px">${faseTxt}</div>`;
+  } else {
+    dRoniEl.textContent = '';
+    kRoniEl.innerHTML = `<span style="color:var(--txt3);font-size:13px">⚠ RONI indisponível nesta emissão</span>`;
   }
 
   /* gráfico índices */
