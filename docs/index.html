@@ -523,7 +523,7 @@
           <h2>Semáforo ENSO — gatilho legado <span style="font-size:10px;font-weight:600;color:var(--dry);text-transform:none;letter-spacing:0">(provisório, sob revisão — Fase ENSO-RONI 4B.2)</span></h2>
           <span class="verdict" id="verdict"></span>
         </div>
-        <p class="note" style="margin-bottom:0">Este gatilho usa o <strong>ONI aproximado local</strong> (não é o RONI oficial — ver card "Situação ENSO oficial" acima). ONI-aprox atual: fase <strong id="fase-txt"></strong>. Regra legada: ONI-aprox ≥ +1,0 °C em SON → ativar Plano SECA · ONI-aprox ≤ −1,0 °C → ativar Plano EXCESSO. Limiares e ativação preservados sem mudança nesta fase. <span id="cpc-iri-rule-note" style="color:var(--dry)"></span></p>
+        <p class="note" style="margin-bottom:0">Este gatilho usa o <strong>ONI aproximado local</strong> (não é o RONI oficial — ver card "RONI (oficial NOAA)" abaixo). ONI-aprox atual: fase <strong id="fase-txt"></strong>. Regra legada: ONI-aprox ≥ +1,0 °C em SON → ativar Plano SECA · ONI-aprox ≤ −1,0 °C → ativar Plano EXCESSO. Limiares e ativação preservados sem mudança nesta fase. <span id="cpc-iri-rule-note" style="color:var(--dry)"></span></p>
         <div class="rail-wrap">
           <div class="rail" id="rail"></div>
         </div>
@@ -1233,6 +1233,33 @@ const _SEAS_ULTIMO_MES = {
   JJA:[8,0], JAS:[9,0], ASO:[10,0], SON:[11,0], OND:[12,0], NDJ:[1,1]
 };
 
+/* Faixa de ano plausível para RONI.ano — mesmo intervalo documentado
+   já usado por scripts/update_indices.py::parse_roni() (coerência
+   entre os dois lados, Python e JS, do mesmo dado). */
+const _ANO_MIN_RONI = 1900, _ANO_MAX_RONI = 2100;
+
+/* Fase ENSO-RONI 4B.1.3 (correção da revisão externa): guarda ÚNICA
+   e compartilhada antes de qualquer `.toFixed()`/formatação de
+   `RONI.valor` — achado real: a renderização anterior só checava
+   `RONI.valor !== null && RONI.valor !== undefined`, nunca se o valor
+   era de fato um número finito. Uma string ("1.97"), um objeto ou um
+   array passavam dessa guarda e quebravam em `.toFixed()` (TypeError,
+   método inexistente em tipos que não são Number) — e nem precisava
+   chegar lá: NaN/Infinity/-Infinity são `typeof 'number'`, então não
+   quebrariam o `.toFixed()` em si, mas produziriam "NaN °C"/"Infinity
+   °C" no card, sem nenhum aviso, o oposto de "nunca apresentar dado
+   inválido como se fosse uma leitura real". `classificarRoni()` já
+   rejeitava todos esses casos corretamente (retornando null) — o
+   problema nunca foi a classificação, foi a renderização ao redor
+   dela, que usava `RONI.valor` diretamente antes/depois de chamar a
+   função de classificação. Usada tanto pelo card quanto pela nota
+   CPC/IRI, para as duas pararem de quebrar com a mesma causa. */
+function _roniValido(r){
+  return !!r && typeof r === 'object' && Number.isFinite(r.valor) &&
+    typeof r.seas === 'string' && !!_SEAS_ULTIMO_MES[r.seas] &&
+    Number.isInteger(r.ano) && r.ano >= _ANO_MIN_RONI && r.ano <= _ANO_MAX_RONI;
+}
+
 /* Fase ENSO-RONI 4B.1.1 (correção da revisão externa): a defasagem do
    RONI NUNCA pode ser decidida pela data em que nosso pipeline
    consultou a fonte (`RONI.atualizado`) — em `scripts/update_indices.py`
@@ -1257,7 +1284,7 @@ const _SEAS_ULTIMO_MES = {
 const TOLERANCIA_DIAS_RONI = 10;
 function defasagemRoni(seas, ano, agora){
   const info = _SEAS_ULTIMO_MES[seas];
-  if(!info || !Number.isFinite(ano)) return null;
+  if(!info || !Number.isInteger(ano) || ano < _ANO_MIN_RONI || ano > _ANO_MAX_RONI) return null;
   const [ultimoMes, deslocAno] = info;
   const anoUltimoMes = ano + deslocAno;
   let mesProx = ultimoMes + 2, anoProx = anoUltimoMes;
@@ -1553,8 +1580,14 @@ function buildMonitor(){
        texto fixo `meta.roni_trimestral` (achado da auditoria — ficou
        parado em JAS/2026 enquanto RONI já estava em ASO/2026, mesmo
        tipo de drift que dash_proxima/divergencia já tiveram antes de
-       serem corrigidos na Fase 3B.8A). */
-    if (typeof RONI !== 'undefined' && RONI.valor !== null && RONI.valor !== undefined) {
+       serem corrigidos na Fase 3B.8A).
+
+       Fase 4B.1.3: `_roniValido()` — nunca `RONI.valor !== null` sozinho —
+       é a mesma guarda do card abaixo, para esta nota nunca quebrar em
+       `.toFixed()` antes do card ser renderizado (achado real: uma
+       exceção aqui interrompia todo buildMonitor(), e o card nem
+       chegava a rodar). */
+    if (typeof RONI !== 'undefined' && _roniValido(RONI)) {
       partes.push(`RONI oficial ${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)}°C (${RONI.seas}/${RONI.ano})`);
     } else if(meta.roni_trimestral) {
       partes.push(`RONI oficial ${meta.roni_trimestral}`);
@@ -1620,23 +1653,33 @@ function buildMonitor(){
      a partir do TRIMESTRE oficial, nunca de `RONI.atualizado` (que é
      só a data da nossa última consulta, não da publicação — ver
      comentário de `defasagemRoni`). `RONI.atualizado` continua exibido
-     como "consultado em ...", nunca usado para decidir o aviso. */
+     como "consultado em ...", nunca usado para decidir o aviso.
+
+     Fase 4B.1.3: guarda trocada de `RONI.valor !== null` para
+     `_roniValido(RONI)` — rejeita string, NaN, Infinito, objeto/array
+     e seas/ano fora dos 12 códigos/faixa plausível, antes de qualquer
+     `.toFixed()`. Nunca presume "atualizado" quando a defasagem não é
+     calculável (`diasAtraso === null` após já ter passado por
+     `_roniValido`, defensivo — não deveria ocorrer, mas se ocorrer não
+     é tratado como "sem atraso"). */
   const kRoniEl = document.getElementById('k-roni');
   const dRoniEl = document.getElementById('d-roni');
-  if (typeof RONI !== 'undefined' && RONI.valor !== null && RONI.valor !== undefined) {
+  if (typeof RONI !== 'undefined' && _roniValido(RONI)) {
     const cls = classificarRoni(RONI.valor);
     const diasAtraso = defasagemRoni(RONI.seas, RONI.ano);
-    const defasado = diasAtraso != null && diasAtraso > TOLERANCIA_DIAS_RONI;
-    dRoniEl.textContent = `${RONI.seas}/${RONI.ano}` + (defasado ? ` ⚠ defasado (${diasAtraso}d após o esperado)` : '') +
+    const metadadosInvalidos = diasAtraso == null;
+    const defasado = !metadadosInvalidos && diasAtraso > TOLERANCIA_DIAS_RONI;
+    dRoniEl.textContent = `${RONI.seas}/${RONI.ano}` +
+      (metadadosInvalidos ? ' ⚠ defasagem não calculável' : (defasado ? ` ⚠ defasado (${diasAtraso}d após o esperado)` : '')) +
       (RONI.atualizado ? ` · consultado em ${RONI.atualizado}` : '');
-    if (defasado) dRoniEl.style.color = 'var(--dry)';
+    if (defasado || metadadosInvalidos) dRoniEl.style.color = 'var(--dry)';
     const faseTxt = cls ? `${cls.fase}${cls.intensidade ? ' ' + cls.intensidade : ''}` : 'classificação indisponível';
     kRoniEl.innerHTML =
       `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>` +
       `<div style="font-size:11px;font-weight:600;color:var(--txt2);margin-top:2px">${faseTxt}</div>`;
   } else {
     dRoniEl.textContent = '';
-    kRoniEl.innerHTML = `<span style="color:var(--txt3);font-size:13px">⚠ RONI indisponível nesta emissão</span>`;
+    kRoniEl.innerHTML = `<span style="color:var(--txt3);font-size:13px">⚠ RONI indisponível ou inválido nesta emissão</span>`;
   }
 
   /* gráfico índices */

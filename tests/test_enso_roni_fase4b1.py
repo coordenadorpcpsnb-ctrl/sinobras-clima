@@ -99,6 +99,66 @@ def _node_defasagem(seas, ano, agora_iso=None):
     return json.loads(r.stdout)
 
 
+def _node_roni_valido(roni_literal):
+    """Roda _roniValido(RONI) do JS real contra um literal de objeto
+    já escrito em JS (não JSON — para poder expressar NaN/Infinity/{}
+    sem ambiguidade)."""
+    script = _JS_CORE + f'\nconsole.log(JSON.stringify(_roniValido({roni_literal})));'
+    r = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f'node falhou ao avaliar _roniValido({roni_literal}): {r.stderr}')
+    return json.loads(r.stdout)
+
+
+class RoniValidoTestCase(unittest.TestCase):
+    """Item 3 da entrega (Fase 4B.1.3): `_roniValido` é a guarda ÚNICA
+    usada tanto pelo card quanto pela nota CPC/IRI antes de qualquer
+    `.toFixed()` — garante que `defasagemRoni() === null` nunca seja
+    interpretado como "índice atualizado": na prática, qualquer objeto
+    que passe por `_roniValido` já tem seas/ano que `defasagemRoni`
+    aceita, então o `null` só pode significar "nunca chegou a ser
+    validado" (ou um bug), nunca "sem atraso"."""
+
+    def test_a_objeto_valido_passa(self):
+        self.assertTrue(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: 1.97 }"))
+
+    def test_b_valor_string_numerica_reprovado(self):
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: '1.97' }"))
+
+    def test_c_valor_nan_infinito_reprovados(self):
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: NaN }"))
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: Infinity }"))
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: -Infinity }"))
+
+    def test_d_valor_objeto_ou_array_reprovado(self):
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: {} }"))
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026, valor: [1,2] }"))
+
+    def test_e_seas_invalido_reprovado(self):
+        self.assertFalse(_node_roni_valido("{ seas: 'XYZ', ano: 2026, valor: 1.97 }"))
+
+    def test_f_ano_nao_inteiro_ou_fora_de_faixa_reprovado(self):
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 'abc', valor: 1.97 }"))
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 2026.5, valor: 1.97 }"))
+        self.assertFalse(_node_roni_valido("{ seas: 'ASO', ano: 3026, valor: 1.97 }"))
+
+    def test_g_nulo_ou_ausente_reprovado_sem_erro(self):
+        self.assertFalse(_node_roni_valido('null'))
+        self.assertFalse(_node_roni_valido('undefined'))
+
+    def test_h_todo_objeto_aprovado_tem_defasagem_calculavel(self):
+        # Elo entre _roniValido e defasagemRoni: nada que passe por
+        # _roniValido pode fazer defasagemRoni retornar null — ou
+        # seja, defasagemRoni()===null nunca pode ser confundido com
+        # "índice atualizado", porque todo objeto validado tem
+        # defasagem numérica calculável (negativa, zero ou positiva).
+        casos_validos = [('ASO', 2026), ('NDJ', 2025), ('DJF', 1950)]
+        for seas, ano in casos_validos:
+            with self.subTest(seas=seas, ano=ano):
+                self.assertTrue(_node_roni_valido(f"{{ seas: '{seas}', ano: {ano}, valor: 1.0 }}"))
+                self.assertIsNotNone(_node_defasagem(seas, ano, '2026-11-25'))
+
+
 class ClassificacaoRoniFronteirasTestCase(unittest.TestCase):
     """Item 1 da entrega: as 9 categorias e as 8 fronteiras exatas,
     rodando o JS real (classificarRoni), nunca uma cópia Python."""
@@ -388,6 +448,33 @@ class RenderizacaoRoniTestCase(unittest.TestCase):
     def test_f_painel_legado_visivel_no_cabecalho(self):
         r = _run_fixture("{ seas: 'ASO', ano: 2026, valor: 1.97, atualizado: '23/11/2026' }")
         self.assertIn('legado', r['semaforoHeadText'])
+
+    def test_g_entradas_invalidas_dos_10_cenarios_obrigatorios_nunca_quebram(self):
+        # Fase ENSO-RONI 4B.1.3, Seção 6, itens 1-7 (8/9/10 já cobertos
+        # pelos testes b/a/d acima). Achado real corrigido: a guarda
+        # anterior só checava `!== null && !== undefined` — uma string
+        # ("1.97"), um objeto ou um array passavam e quebravam em
+        # `.toFixed()` (TypeError, método inexistente fora de Number).
+        casos = {
+            "RONI.valor = '1.97' (string numérica)": "{ seas: 'ASO', ano: 2026, valor: '1.97', atualizado: '23/11/2026' }",
+            'RONI.valor = NaN': "{ seas: 'ASO', ano: 2026, valor: NaN, atualizado: '23/11/2026' }",
+            'RONI.valor = Infinity': "{ seas: 'ASO', ano: 2026, valor: Infinity, atualizado: '23/11/2026' }",
+            'RONI.valor = -Infinity': "{ seas: 'ASO', ano: 2026, valor: -Infinity, atualizado: '23/11/2026' }",
+            'RONI.valor = {}': "{ seas: 'ASO', ano: 2026, valor: {}, atualizado: '23/11/2026' }",
+            "RONI.seas = 'XYZ'": "{ seas: 'XYZ', ano: 2026, valor: 1.97, atualizado: '23/11/2026' }",
+            "RONI.ano inválido ('abc')": "{ seas: 'ASO', ano: 'abc', valor: 1.97, atualizado: '23/11/2026' }",
+        }
+        for nome, literal in casos.items():
+            with self.subTest(caso=nome):
+                r = _run_fixture(literal)
+                self.assertEqual(r['consoleErrors'], [], f'{nome}: consoleErrors inesperado')
+                self.assertEqual(r['pageErrors'], [], f'{nome}: pageErrors inesperado (provável TypeError em .toFixed())')
+                self.assertIn('indisponível', r['kRoniHTML'], f'{nome}: precisa do aviso explícito')
+                self.assertNotIn('NaN °C', r['kRoniHTML'], f'{nome}: nunca mostrar "NaN °C"')
+                self.assertNotIn('Infinity', r['kRoniHTML'], f'{nome}: nunca mostrar "Infinity" como se fosse leitura real')
+                self.assertNotIn('Neutro', r['kRoniHTML'], f'{nome}: dado inválido nunca é Neutro')
+                self.assertNotIn('El Niño', r['kRoniHTML'], f'{nome}: dado inválido nunca é classificado')
+                self.assertNotIn('La Niña', r['kRoniHTML'], f'{nome}: dado inválido nunca é classificado')
 
 
 if __name__ == '__main__':

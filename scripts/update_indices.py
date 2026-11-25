@@ -22,6 +22,7 @@ como figura, sem ascii algum.
 import re, sys, shutil
 import hashlib
 import html as html_mod
+import math
 import os
 from pathlib import Path
 from datetime import date, datetime
@@ -969,6 +970,12 @@ def extrair_emissao_cpc_probabilidades(html):
     return f'{nomes_pt[mes_num - 1]}/{m.group(2)}'
 
 
+SEASONS_RONI_VALIDAS = {
+    'DJF', 'JFM', 'FMA', 'MAM', 'AMJ', 'MJJ',
+    'JJA', 'JAS', 'ASO', 'SON', 'OND', 'NDJ',
+}
+
+
 def parse_roni(text):
     """
     CPC RONI.ascii.txt — cabeçalho 'SEAS YR ANOM', uma linha por
@@ -984,6 +991,25 @@ def parse_roni(text):
     (ver CLAUDE.md, armadilha 9). Os dois precisam de rótulo que os
     distinga claramente sempre que aparecerem juntos.
 
+    Fase ENSO-RONI 4B.1.3 (correção da revisão externa): duas barreiras
+    que pareciam suficientes não eram.
+    1. `re.match(r'^[A-Z]{3}$', seas)` aceitava QUALQUER sigla de 3
+       letras maiúsculas ('XYZ', 'ABC', ...) — trocado pelos 12 códigos
+       trimestrais reais de CPC/RONI (`SEASONS_RONI_VALIDAS`, mesmo
+       conjunto usado no espelho JS `_SEAS_ULTIMO_MES` de
+       docs/index.html).
+    2. `abs(val) > 5` não rejeita `NaN`: em Python, qualquer comparação
+       com NaN é `False`, então `abs(float('nan')) > 5` também é
+       `False` — a linha passava pela barreira física como se fosse um
+       valor plausível. Trocado por `not math.isfinite(val)` checado
+       ANTES do limite físico (mesma ordem de ideias do
+       `parse_psl_anual`/armadilha 6 do CLAUDE.md: nunca confiar só no
+       limite físico quando o valor pode nem ser um número finito).
+
+    Uma linha malformada/inválida é descartada (`continue`) e NUNCA
+    sobrescreve `ultimo` — a última observação válida já encontrada é
+    preservada, exatamente como antes desta correção.
+
     Retorna (temporada, ano, valor) do último registro válido, ou
     (None, None, None).
     """
@@ -993,14 +1019,14 @@ def parse_roni(text):
         if len(parts) != 3:
             continue
         seas, yr_s, val_s = parts
-        if not re.match(r'^[A-Z]{3}$', seas):
+        if seas not in SEASONS_RONI_VALIDAS:
             continue
         try:
             yr  = int(yr_s)
             val = float(val_s)
         except ValueError:
             continue
-        if not (1900 <= yr <= 2100) or abs(val) > 5:
+        if not (1900 <= yr <= 2100) or not math.isfinite(val) or abs(val) > 5:
             continue
         ultimo = (seas, yr, round(val, 2))
     return ultimo

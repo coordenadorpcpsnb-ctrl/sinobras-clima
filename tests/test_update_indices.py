@@ -114,6 +114,58 @@ class ParseRoniTestCase(unittest.TestCase):
         self.assertNotEqual(val, oni_aprox_exemplo)
 
 
+class ParseRoniEntradasInvalidasTestCase(unittest.TestCase):
+    """Fase ENSO-RONI 4B.1.3 (correção da revisão externa): duas
+    barreiras que pareciam suficientes não eram — `re.match(r'^[A-Z]{3}$')`
+    aceitava qualquer sigla de 3 letras (não só os 12 códigos reais de
+    trimestre), e `abs(val) > 5` não rejeita NaN (comparação com NaN é
+    sempre False em Python). Cada teste aqui isola uma dessas lacunas e
+    confirma que a linha inválida é descartada SEM corromper
+    `ultimo` — a última observação válida já encontrada antes dela
+    continua sendo o retorno."""
+
+    def test_a_trimestre_de_tres_letras_invalido_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nXYZ  2026  9.99\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36),
+                          'XYZ não é um dos 12 códigos de trimestre — não pode ser aceito nem sobrescrever o último válido')
+
+    def test_b_nan_literal_e_rejeitado_mesmo_dentro_do_limite_fisico_aparente(self):
+        # abs(float('nan')) > 5 é False em Python — por isso o teste
+        # existe: sem math.isfinite(), essa linha passaria.
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  2026  nan\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_c_infinito_literal_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  2026  inf\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_d_infinito_negativo_literal_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  2026  -inf\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_e_ano_fora_da_faixa_plausivel_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  3026  1.50\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_f_linha_invalida_no_meio_nao_corrompe_o_resto_do_arquivo(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nXYZ  2026  nan\nJAS  2026  1.69\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JAS', 2026, 1.69),
+                          'a linha inválida no meio é descartada, e o parser continua até o último trimestre REALMENTE válido')
+
+    def test_g_os_12_codigos_oficiais_sao_todos_aceitos(self):
+        for seas_valida in sorted(ui.SEASONS_RONI_VALIDAS):
+            with self.subTest(seas=seas_valida):
+                texto = f"SEAS   YR  ANOM\n{seas_valida}  2026  0.50\n"
+                seas, ano, val = ui.parse_roni(texto)
+                self.assertEqual((seas, ano, val), (seas_valida, 2026, 0.50))
+
+
 # Trecho real da tabela HTML de
 # https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities/
 # (baixado ao vivo 15/10/2026, Fase ENSO-DADOS) — ordem de colunas
