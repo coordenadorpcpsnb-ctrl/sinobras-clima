@@ -1006,6 +1006,16 @@ def parse_roni(text):
     return ultimo
 
 
+def _formatar_roni_trimestral_meta(roni):
+    """Fase ENSO-RONI 4B.1.1: texto de `_meta.roni_trimestral` formatado
+    a partir do MESMO dict `{'seas', 'ano', 'valor'}` que grava
+    `const RONI` — nunca mais escrito à mão separadamente (achado da
+    auditoria: o texto fixo anterior ficou congelado em JAS/2026
+    enquanto `const RONI` já estava em ASO/2026)."""
+    valor_fmt = f"{roni['valor']:+.2f}".replace('.', ',')
+    return f"{valor_fmt}°C ({roni['seas']}/{roni['ano']}, oficial NOAA/CPC, ERSSTv6)"
+
+
 # ══════════════════════════════════════════════════════
 # ONI
 # ══════════════════════════════════════════════════════
@@ -1221,6 +1231,16 @@ def update_html(series, wk_lbl, wk_val, roni=None):
             f'{proxima.day}/{_NOMES_MESES_PT[proxima.month - 1]}/{proxima.year}')
         bloco_meta = _upsert_campo_meta(
             bloco_meta, 'divergencia', _gerar_divergencia_cpc_iri(bloco_meta))
+        # Fase ENSO-RONI 4B.1.1: `roni_trimestral` regenerado a partir
+        # do MESMO `roni` dict que grava `const RONI` acima — nunca
+        # mais um texto fixo escrito à mão (achado da auditoria: ficou
+        # congelado em JAS/2026 enquanto `const RONI` já avançava para
+        # ASO/2026). Mesma disciplina de preservar o último valor real
+        # quando o fetch desta execução falha (roni is None): não
+        # sobrescreve com nada, não apaga o que já estava lá.
+        if roni is not None:
+            bloco_meta = _upsert_campo_meta(
+                bloco_meta, 'roni_trimestral', _formatar_roni_trimestral_meta(roni))
         html = html[:ini_meta] + bloco_meta + html[fim_meta:]
     else:
         print('  ⚠ const CPC_IRI não encontrado — dash_proxima/divergencia não atualizados')

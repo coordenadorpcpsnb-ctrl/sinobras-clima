@@ -82,6 +82,23 @@ def _node_dias_desde(txt):
     return json.loads(r.stdout)
 
 
+def _node_defasagem(seas, ano, agora_iso=None):
+    """Roda defasagemRoni(seas, ano[, agora]) do JS real. `agora_iso`,
+    quando dado, é 'AAAA-MM-DD' — construído como `new Date(...)` local
+    no próprio script Node, nunca calculado em Python, para não
+    arriscar um fuso-horário diferente do que o navegador usaria."""
+    agora_js = 'undefined'
+    if agora_iso is not None:
+        y, m, d = agora_iso.split('-')
+        agora_js = f'new Date({int(y)}, {int(m)-1}, {int(d)})'
+    script = (_JS_CORE +
+              f'\nconsole.log(JSON.stringify(defasagemRoni({json.dumps(seas)}, {json.dumps(ano)}, {agora_js})));')
+    r = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f'node falhou ao calcular defasagemRoni({seas!r},{ano!r}): {r.stderr}')
+    return json.loads(r.stdout)
+
+
 class ClassificacaoRoniFronteirasTestCase(unittest.TestCase):
     """Item 1 da entrega: as 9 categorias e as 8 fronteiras exatas,
     rodando o JS real (classificarRoni), nunca uma cópia Python."""
@@ -150,6 +167,74 @@ class ClassificacaoRoniFronteirasTestCase(unittest.TestCase):
         r = _node_classifica(1.97)
         self.assertEqual(r['classe'], 'en_forte')
         self.assertEqual(r['intensidade'], 'forte')
+
+    def test_f_nan_infinito_e_string_invalida_nunca_lancam_erro_e_retornam_null(self):
+        # Item explícito da revisão (Fase 4B.1.1, Seção 3): NaN,
+        # Infinito e valores inválidos nunca podem gerar erro JS nem
+        # ser classificados como neutro/qualquer categoria.
+        for valor in (float('nan'), float('inf'), float('-inf'), 'lixo', '', [], {}):
+            with self.subTest(valor=valor):
+                self.assertIsNone(_node_classifica(valor))
+
+    def test_g_undefined_explicito_tambem_retorna_null(self):
+        script = _JS_CORE + '\nconsole.log(JSON.stringify(classificarRoni(undefined)));'
+        r = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), 'null')
+
+
+class DefasagemRoniTestCase(unittest.TestCase):
+    """Item 3 da entrega da Fase 4B.1.1: a defasagem é calculada a
+    partir do TRIMESTRE oficial (seas/ano), NUNCA da data em que nosso
+    pipeline consultou a fonte — `scripts/update_indices.py` grava
+    `RONI.atualizado` com a data da execução mesmo quando o trimestre
+    retornado pela NOAA não avança, então basear a defasagem nessa data
+    mascararia um trimestre antigo atrás de uma consulta recente."""
+
+    def test_a_trimestre_atual_dentro_da_tolerancia(self):
+        # ASO/2026 (último mês: out/2026) — a próxima atualização
+        # (SON/26) só é esperada em 05/dez/2026. Em qualquer data entre
+        # o fim de ASO e essa data, a defasagem deve ser <= 0 (ainda
+        # dentro do prazo esperado) ou, no máximo, pouco acima, nunca
+        # disparando o aviso com a tolerância de 10 dias.
+        dias = _node_defasagem('ASO', 2026, '2026-11-25')
+        self.assertLessEqual(dias, 10)
+
+    def test_b_trimestre_realmente_atrasado_dispara_mesmo_com_tolerancia(self):
+        # Simula exatamente o cenário da revisão: mesmo que a consulta
+        # tenha sido feita "hoje", um trimestre de 2023 (muito além da
+        # tolerância) precisa aparecer como MUITO defasado — a função
+        # nem recebe a data da consulta como parâmetro, então não há
+        # como ela mascarar isso.
+        dias = _node_defasagem('JAS', 2023, '2026-11-25')
+        self.assertGreater(dias, 365 * 2)
+
+    def test_c_consulta_recente_nao_mascara_trimestre_antigo(self):
+        # Teste obrigatório explícito da Seção 3: uma "consulta" de
+        # hoje (simulada como RONI.atualizado = hoje) que devolve um
+        # trimestre antigo (JAS/2023) TEM que ser marcada como
+        # defasada — defasagemRoni() não recebe RONI.atualizado como
+        # argumento algum, então é estruturalmente impossível que a
+        # data da consulta mascare isso (ver também o teste de
+        # renderização equivalente em RenderizacaoRoniTestCase).
+        dias = _node_defasagem('JAS', 2023, '2026-11-25')
+        self.assertGreater(dias, 10, 'TOLERANCIA_DIAS_RONI')
+
+    def test_d_virada_dezembro_janeiro_ndj(self):
+        # NDJ/2025 = nov/dez-2025 + jan/2026 (último mês: jan/2026,
+        # ano seguinte ao rotulado). Próxima atualização (DJF/26,
+        # último mês fev/2026) esperada em 05/mar/2026.
+        dias_antes = _node_defasagem('NDJ', 2025, '2026-03-01')  # antes do prazo
+        dias_depois = _node_defasagem('NDJ', 2025, '2026-03-20')  # depois do prazo
+        self.assertLess(dias_antes, 0)
+        self.assertGreater(dias_depois, 10)
+
+    def test_e_codigo_de_trimestre_invalido_retorna_null(self):
+        self.assertIsNone(_node_defasagem('XYZ', 2026, '2026-11-25'))
+
+    def test_f_ano_nao_finito_retorna_null(self):
+        self.assertIsNone(_node_defasagem('ASO', float('nan'), '2026-11-25'))
+        self.assertIsNone(_node_defasagem('ASO', float('inf'), '2026-11-25'))
 
 
 class DiasDesdeNumericoTestCase(unittest.TestCase):
@@ -274,6 +359,20 @@ class RenderizacaoRoniTestCase(unittest.TestCase):
         self.assertEqual(r['pageErrors'], [])
         self.assertIn('defasado', r['dRoniText'])
         self.assertIn('1.10', r['kRoniHTML'].replace(',', '.'))  # valor continua visível, não escondido
+
+    def test_d2_consulta_de_hoje_nao_mascara_trimestre_antigo(self):
+        # Teste obrigatório explícito da Fase 4B.1.1 (Seção 3): fixa
+        # `atualizado` em uma data de hoje (consulta "recente"), mas
+        # `seas/ano` num trimestre de 2023 — tem que aparecer como
+        # defasado mesmo assim, porque a decisão nunca olha para
+        # `atualizado` (achado real: update_indices.py grava essa data
+        # sempre que o fetch funciona, mesmo sem o trimestre avançar).
+        import datetime
+        hoje_br = datetime.date.today().strftime('%d/%m/%Y')
+        r = _run_fixture(f"{{ seas: 'JAS', ano: 2023, valor: 0.79, atualizado: '{hoje_br}' }}")
+        self.assertEqual(r['pageErrors'], [])
+        self.assertIn('defasado', r['dRoniText'])
+        self.assertIn(hoje_br, r['dRoniText'])  # a data da consulta aparece, mas não decide o aviso
 
     def test_e_roni_extremo_nao_muda_planos_legados(self):
         # Mesmo com RONI fixado num valor que ativaria Plano SECA se

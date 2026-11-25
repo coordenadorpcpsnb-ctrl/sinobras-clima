@@ -134,7 +134,8 @@ jobs:
             tests.test_regressao_cientifica_enso_ci \
             tests.test_cpc_sarimax_disponibilidade \
             tests.test_cpc_sarimax_render \
-            tests.test_ui_listener_orfao
+            tests.test_ui_listener_orfao \
+            tests.test_enso_roni_fase4b1
 
       # ── Continuidade de serie_subst.csv: NUNCA pular a flag
       # indiscriminadamente (pedido explícito da Fase ENSO-CI).
