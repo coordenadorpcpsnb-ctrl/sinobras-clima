@@ -30,6 +30,7 @@ import urllib.request
 import pandas as pd
 
 import proveniencia_indices as prov
+import roni_historico as roni_hist
 
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
@@ -1543,16 +1544,30 @@ def main():
     except Exception as e:
         print(f"  ⚠ Semanal indisponível: {e}")
 
-    # 5. CPC RONI (trimestral, índice oficial — distinto do ONI-aprox)
-    print("\n[5/7] CPC RONI.ascii.txt…")
+    # 5. CPC RONI — série histórica oficial, snapshot imutável e
+    # proveniência (Fase ENSO-RONI-MIGRAÇÃO 2). `parse_roni()` acima
+    # permanece intocado (parser tolerante legado — mantém seu
+    # contrato para quem ainda o chama/testa). O CARD do dashboard
+    # agora é alimentado pelo MESMO pipeline estrito que grava
+    # data/roni_historico.csv (ver scripts/roni_historico.py) — nunca
+    # por um valor que esse mecanismo tenha rejeitado; em falha de
+    # coleta ou rejeição, `roni_hist.processar_aquisicao()` já devolve
+    # o último trimestre válido persistido, preservando o comportamento
+    # informativo que o dashboard já tinha.
+    print("\n[5/7] CPC RONI — série histórica, snapshot e proveniência…")
     roni = None
     try:
-        text = fetch(RONI_URL)
-        seas, yr, val = parse_roni(text)
-        if val is not None:
-            roni = {'seas': seas, 'ano': yr, 'valor': val}
-            print(f"  ✅ RONI: {seas}/{yr} → {val:+.2f}°C "
-                  f"(oficial NOAA — não é o mesmo número que nosso ONI-aprox)")
+        resultado_roni = roni_hist.processar_aquisicao()
+        for aviso in resultado_roni['avisos']:
+            print(f"  ⚠ RONI: {aviso}")
+        if resultado_roni['estado_promocao'] not in ('promovida', 'reaproveitada_sem_mudanca'):
+            print(f"  ⚠ RONI: aquisição rejeitada ({resultado_roni['estado_promocao']}) — "
+                  f"série histórica e card preservam o último valor válido")
+        if resultado_roni['ultimo'] is not None:
+            roni = resultado_roni['ultimo']
+            print(f"  ✅ RONI: {roni['seas']}/{roni['ano']} → {roni['valor']:+.2f}°C "
+                  f"(oficial NOAA, série histórica validada — não é o mesmo número que "
+                  f"nosso ONI-aprox)")
     except Exception as e:
         print(f"  ⚠ RONI indisponível: {e}")
 
