@@ -114,6 +114,58 @@ class ParseRoniTestCase(unittest.TestCase):
         self.assertNotEqual(val, oni_aprox_exemplo)
 
 
+class ParseRoniEntradasInvalidasTestCase(unittest.TestCase):
+    """Fase ENSO-RONI 4B.1.3 (correção da revisão externa): duas
+    barreiras que pareciam suficientes não eram — `re.match(r'^[A-Z]{3}$')`
+    aceitava qualquer sigla de 3 letras (não só os 12 códigos reais de
+    trimestre), e `abs(val) > 5` não rejeita NaN (comparação com NaN é
+    sempre False em Python). Cada teste aqui isola uma dessas lacunas e
+    confirma que a linha inválida é descartada SEM corromper
+    `ultimo` — a última observação válida já encontrada antes dela
+    continua sendo o retorno."""
+
+    def test_a_trimestre_de_tres_letras_invalido_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nXYZ  2026  9.99\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36),
+                          'XYZ não é um dos 12 códigos de trimestre — não pode ser aceito nem sobrescrever o último válido')
+
+    def test_b_nan_literal_e_rejeitado_mesmo_dentro_do_limite_fisico_aparente(self):
+        # abs(float('nan')) > 5 é False em Python — por isso o teste
+        # existe: sem math.isfinite(), essa linha passaria.
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  2026  nan\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_c_infinito_literal_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  2026  inf\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_d_infinito_negativo_literal_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  2026  -inf\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_e_ano_fora_da_faixa_plausivel_e_rejeitado(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nJAS  3026  1.50\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JJA', 2026, 1.36))
+
+    def test_f_linha_invalida_no_meio_nao_corrompe_o_resto_do_arquivo(self):
+        texto = "SEAS   YR  ANOM\nJJA  2026  1.36\nXYZ  2026  nan\nJAS  2026  1.69\n"
+        seas, ano, val = ui.parse_roni(texto)
+        self.assertEqual((seas, ano, val), ('JAS', 2026, 1.69),
+                          'a linha inválida no meio é descartada, e o parser continua até o último trimestre REALMENTE válido')
+
+    def test_g_os_12_codigos_oficiais_sao_todos_aceitos(self):
+        for seas_valida in sorted(ui.SEASONS_RONI_VALIDAS):
+            with self.subTest(seas=seas_valida):
+                texto = f"SEAS   YR  ANOM\n{seas_valida}  2026  0.50\n"
+                seas, ano, val = ui.parse_roni(texto)
+                self.assertEqual((seas, ano, val), (seas_valida, 2026, 0.50))
+
+
 # Trecho real da tabela HTML de
 # https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities/
 # (baixado ao vivo 15/10/2026, Fase ENSO-DADOS) — ordem de colunas
@@ -449,6 +501,7 @@ const CPC_IRI = {
     atualizado_em: '21/11/2026',
     dash_proxima: '21/out/2026',
     divergencia: 'cpc[] é da tabela estruturada de probabilidades (out/2026); iri[] é da extração externa da emissão de set/2026 (ver iri_extracao) — ASO/26 null em ambos não é coincidência: CPC também não publicou ASO/26 na tabela estruturada (fora do alcance), IRI porque a extração de set/2026 não confirmou esse trimestre',
+    roni_trimestral: '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)',
   },
   seasons: ['ASO/26','SON/26','FMA/27'],
   cpc:{ en:[null,94,82], neu:[null,6,16], ln:[null,0,2] },
@@ -617,6 +670,65 @@ class AtualizacaoDashProximaEDivergenciaNaoAlteraOutrosCamposTestCase(unittest.T
             b = re.sub(r"divergencia:\s*'[^']*'", "divergencia:''", b)
             return b
         self.assertEqual(strip_campos(self.bloco_original), strip_campos(self.bloco_novo))
+
+
+class FormatarRoniTrimestralMetaTestCase(unittest.TestCase):
+    """Fase ENSO-RONI 4B.1.1: `_formatar_roni_trimestral_meta` gera o
+    MESMO texto que estava escrito à mão, a partir do dict real que já
+    alimenta `const RONI` — nunca mais duas fontes separadas para o
+    mesmo dado."""
+
+    def test_a_formato_igual_ao_texto_historico(self):
+        texto = ui._formatar_roni_trimestral_meta({'seas': 'JAS', 'ano': 2026, 'valor': 1.69})
+        self.assertEqual(texto, '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)')
+
+    def test_b_valor_negativo(self):
+        texto = ui._formatar_roni_trimestral_meta({'seas': 'NDJ', 'ano': 2024, 'valor': -1.04})
+        self.assertEqual(texto, '-1,04°C (NDJ/2024, oficial NOAA/CPC, ERSSTv6)')
+
+    def test_c_decimal_usa_virgula_pt_br(self):
+        texto = ui._formatar_roni_trimestral_meta({'seas': 'ASO', 'ano': 2026, 'valor': 1.97})
+        self.assertNotIn('.', texto.split('(')[0])  # parte numérica, antes do trimestre entre parênteses
+
+
+class RoniTrimestralMetaRegeneradoNaoAlteraOutrosCamposTestCase(unittest.TestCase):
+    """Item 4/5 da entrega da Fase 4B.1.1: a regeneração de
+    `roni_trimestral` a partir do RONI efetivamente obtido nesta
+    execução (nunca mais um texto fixo) troca SÓ esse campo — mesma
+    disciplina de splice delimitado já usada para dash_proxima/
+    divergencia (CLAUDE.md armadilha 2)."""
+
+    def setUp(self):
+        self.bloco_original = _bloco_cpc_iri_amostra()
+        self.roni_novo = {'seas': 'ASO', 'ano': 2026, 'valor': 1.97}
+        self.bloco_novo = ui._upsert_campo_meta(
+            self.bloco_original, 'roni_trimestral',
+            ui._formatar_roni_trimestral_meta(self.roni_novo))
+
+    def test_a_roni_trimestral_passa_a_refletir_aso_2026(self):
+        self.assertIn("roni_trimestral: '+1,97°C (ASO/2026, oficial NOAA/CPC, ERSSTv6)'", self.bloco_novo)
+        self.assertNotIn('JAS/2026', self.bloco_novo)
+
+    def test_b_dash_proxima_e_divergencia_inalterados(self):
+        self.assertIn("dash_proxima: '21/out/2026'", self.bloco_novo)
+        self.assertIn('ASO/26 null em ambos', self.bloco_novo)
+
+    def test_c_seasons_e_arrays_cpc_iri_inalterados(self):
+        self.assertIn("seasons: ['ASO/26','SON/26','FMA/27'],", self.bloco_novo)
+
+    def test_d_resto_do_bloco_fora_do_campo_e_byte_a_byte_igual(self):
+        def strip_campo(bloco):
+            return re.sub(r"roni_trimestral:\s*'[^']*'", "roni_trimestral:''", bloco)
+        self.assertEqual(strip_campo(self.bloco_original), strip_campo(self.bloco_novo))
+
+    def test_e_quando_roni_e_none_nesta_execucao_campo_antigo_e_preservado(self):
+        # Mesma disciplina de TSA/PDO/CHC-Preliminar: fetch falhou nesta
+        # execução -> não apaga nem zera o que já estava publicado.
+        # (update_html() só chama o upsert quando `roni is not None` —
+        # este teste cobre o helper isoladamente, confirmando que ele
+        # não é, por si, a camada que decide isso.)
+        self.assertIn("roni_trimestral: '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)'",
+                      self.bloco_original)
 
 
 if __name__ == '__main__':

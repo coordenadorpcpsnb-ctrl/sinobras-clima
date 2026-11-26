@@ -520,10 +520,10 @@
 
       <div class="semaforo-wrap">
         <div class="semaforo-head">
-          <h2>Semáforo ENSO — gatilho operacional</h2>
+          <h2>Semáforo ENSO — gatilho legado <span style="font-size:10px;font-weight:600;color:var(--dry);text-transform:none;letter-spacing:0">(provisório, sob revisão — Fase ENSO-RONI 4B.2)</span></h2>
           <span class="verdict" id="verdict"></span>
         </div>
-        <p class="note" style="margin-bottom:0">ONI atual: fase <strong id="fase-txt"></strong>. Regra: ONI ≥ +1,0 °C em SON → ativar Plano SECA · ONI ≤ −1,0 °C → ativar Plano EXCESSO. <span id="cpc-iri-rule-note" style="color:var(--dry)"></span></p>
+        <p class="note" style="margin-bottom:0">Este gatilho usa o <strong>ONI aproximado local</strong> (não é o RONI oficial — ver card "RONI (oficial NOAA)" abaixo). ONI-aprox atual: fase <strong id="fase-txt"></strong>. Regra legada: ONI-aprox ≥ +1,0 °C em SON → ativar Plano SECA · ONI-aprox ≤ −1,0 °C → ativar Plano EXCESSO. Limiares e ativação preservados sem mudança nesta fase. <span id="cpc-iri-rule-note" style="color:var(--dry)"></span></p>
         <div class="rail-wrap">
           <div class="rail" id="rail"></div>
         </div>
@@ -1180,6 +1180,120 @@
    "RONI (oficial NOAA)" e "ONI aprox. (Niño 3,4, 3m)") existem
    justamente para não deixar ler um pelo outro. */
 const RONI = { seas: 'ASO', ano: 2026, valor: 1.97, atualizado: '23/11/2026' };
+
+/* Classificação oficial de fase/intensidade do RONI — 9 categorias em
+   incrementos de 0,5 °C (cpc.ncep.noaa.gov/.../enso/roni/strengths/),
+   Fase ENSO-RONI 4B.1. Fronteiras testadas nos 8 valores exatos
+   -2,0/-1,5/-1,0/-0,5/0,5/1,0/1,5/2,0 em
+   tests/test_enso_roni_fase4b1.py, rodando este MESMO código via Node
+   (nunca uma reimplementação Python separada que poderia divergir).
+
+   Retorna só a classificação PONTUAL do trimestre. NUNCA declara
+   "episódio persistente" — a própria definição do RONI (página
+   oficial, Fase 4A) exige um mínimo de 5 estações consecutivas acima/
+   abaixo de ±0,5 °C para isso; essa contagem não é feita aqui (exigiria
+   a série histórica completa embutida na página, fora do escopo desta
+   fase) e não deve ser inferida de uma única leitura. */
+function classificarRoni(v){
+  if (v === null || v === undefined || !Number.isFinite(v)) return null;
+  if (v >= 2.0) return {classe:'en_muito_forte', fase:'El Niño', intensidade:'muito forte'};
+  if (v >= 1.5) return {classe:'en_forte',       fase:'El Niño', intensidade:'forte'};
+  if (v >= 1.0) return {classe:'en_moderado',    fase:'El Niño', intensidade:'moderado'};
+  if (v >= 0.5) return {classe:'en_fraco',       fase:'El Niño', intensidade:'fraco'};
+  if (v > -0.5) return {classe:'neutro',         fase:'Neutro',  intensidade:null};
+  if (v > -1.0) return {classe:'ln_fraco',       fase:'La Niña', intensidade:'fraco'};
+  if (v > -1.5) return {classe:'ln_moderado',    fase:'La Niña', intensidade:'moderado'};
+  if (v > -2.0) return {classe:'ln_forte',       fase:'La Niña', intensidade:'forte'};
+  return             {classe:'ln_muito_forte', fase:'La Niña', intensidade:'muito forte'};
+}
+
+/* Dias desde uma data em formato DD/MM/AAAA numérico (formato de
+   RONI.atualizado) — _diasDesde() (mais abaixo, em buildMonitor) espera
+   mês como abreviação de 3 letras ("nov"), formato diferente; esta é
+   uma função separada, não uma generalização daquela, para não
+   arriscar quebrar o parsing já usado por CPC/IRI.
+
+   Usada SÓ para exibir "consultado em ..." — nunca para decidir
+   defasagem (ver defasagemRoni abaixo e o achado da Fase 4B.1.1). */
+function _diasDesdeNumerico(txt){
+  if(!txt) return null;
+  const m = /^(\d{1,2})\/(\d{1,2})\/(20\d{2})$/.exec(txt);
+  if(!m) return null;
+  const d = new Date(+m[3], +m[2]-1, +m[1]);
+  if(isNaN(d.getTime())) return null;
+  return Math.round((Date.now() - d.getTime()) / 86400000);
+}
+
+/* Último mês (1-12) de cada trimestre móvel do RONI/CPC, e o
+   deslocamento de ano em relação ao ano rotulado (RONI.ano é o ano do
+   mês CENTRAL da convenção CPC — ver Fase ENSO-RONI 4A.1 — exceto NDJ,
+   cujo último mês, janeiro, cai no ano seguinte ao rotulado). */
+const _SEAS_ULTIMO_MES = {
+  DJF:[2,0], JFM:[3,0], FMA:[4,0], MAM:[5,0], AMJ:[6,0], MJJ:[7,0],
+  JJA:[8,0], JAS:[9,0], ASO:[10,0], SON:[11,0], OND:[12,0], NDJ:[1,1]
+};
+
+/* Faixa de ano plausível para RONI.ano — mesmo intervalo documentado
+   já usado por scripts/update_indices.py::parse_roni() (coerência
+   entre os dois lados, Python e JS, do mesmo dado). */
+const _ANO_MIN_RONI = 1900, _ANO_MAX_RONI = 2100;
+
+/* Fase ENSO-RONI 4B.1.3 (correção da revisão externa): guarda ÚNICA
+   e compartilhada antes de qualquer `.toFixed()`/formatação de
+   `RONI.valor` — achado real: a renderização anterior só checava
+   `RONI.valor !== null && RONI.valor !== undefined`, nunca se o valor
+   era de fato um número finito. Uma string ("1.97"), um objeto ou um
+   array passavam dessa guarda e quebravam em `.toFixed()` (TypeError,
+   método inexistente em tipos que não são Number) — e nem precisava
+   chegar lá: NaN/Infinity/-Infinity são `typeof 'number'`, então não
+   quebrariam o `.toFixed()` em si, mas produziriam "NaN °C"/"Infinity
+   °C" no card, sem nenhum aviso, o oposto de "nunca apresentar dado
+   inválido como se fosse uma leitura real". `classificarRoni()` já
+   rejeitava todos esses casos corretamente (retornando null) — o
+   problema nunca foi a classificação, foi a renderização ao redor
+   dela, que usava `RONI.valor` diretamente antes/depois de chamar a
+   função de classificação. Usada tanto pelo card quanto pela nota
+   CPC/IRI, para as duas pararem de quebrar com a mesma causa. */
+function _roniValido(r){
+  return !!r && typeof r === 'object' && Number.isFinite(r.valor) &&
+    typeof r.seas === 'string' && !!_SEAS_ULTIMO_MES[r.seas] &&
+    Number.isInteger(r.ano) && r.ano >= _ANO_MIN_RONI && r.ano <= _ANO_MAX_RONI;
+}
+
+/* Fase ENSO-RONI 4B.1.1 (correção da revisão externa): a defasagem do
+   RONI NUNCA pode ser decidida pela data em que nosso pipeline
+   consultou a fonte (`RONI.atualizado`) — em `scripts/update_indices.py`
+   esse campo é gravado com a data da execução sempre que a busca
+   funciona, MESMO se o trimestre retornado pela NOAA não tiver
+   avançado. Uma consulta de hoje que devolve um trimestre antigo
+   pareceria "em dia" se a defasagem fosse medida pela data da
+   consulta — exatamente o mascaramento que esta função evita,
+   calculando a defasagem a partir do TRIMESTRE OFICIAL em si.
+
+   A página oficial do RONI diz que a atualização é mensal, "até o
+   quinto dia" de cada mês, e que pode haver revisão retrospectiva dos
+   valores mais recentes (cpc.ncep.noaa.gov/.../enso/roni/). A partir
+   disso: se o trimestre atual termina no mês/ano (ultimoMes,anoUltimoMes),
+   o PRÓXIMO trimestre (que teria esse ultimoMes+1 como seu próprio
+   último mês) é esperado até o dia 5 de ultimoMes+2 — dois meses
+   depois do fim do trimestre atual. TOLERANCIA_DIAS_RONI é um prazo de
+   tolerância OPERACIONAL desta implementação (cobre o aviso da própria
+   NOAA sobre revisões retrospectivas — não é um prazo publicado pela
+   NOAA, nunca confundir os dois). Devolve null se `seas`/`ano` forem
+   inválidos — nunca um número que pareça "em dia" por acidente. */
+const TOLERANCIA_DIAS_RONI = 10;
+function defasagemRoni(seas, ano, agora){
+  const info = _SEAS_ULTIMO_MES[seas];
+  if(!info || !Number.isInteger(ano) || ano < _ANO_MIN_RONI || ano > _ANO_MAX_RONI) return null;
+  const [ultimoMes, deslocAno] = info;
+  const anoUltimoMes = ano + deslocAno;
+  let mesProx = ultimoMes + 2, anoProx = anoUltimoMes;
+  if(mesProx > 12){ mesProx -= 12; anoProx += 1; }
+  const dataEsperada = new Date(anoProx, mesProx - 1, 5);
+  const hoje = (agora instanceof Date) ? agora : new Date();
+  return Math.round((hoje.getTime() - dataEsperada.getTime()) / 86400000);
+}
+
 const D = {
   annual:{years:[1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],vals:[1487.9, 1562.2, 1558.8, 1674.9, 2531.5, 1705.5, 1357.9, 1753.7, 2004.2, 1486.4, 1621.4, 1400.9, 1659.0, 1925.1, 1868.6, 2010.0, 1644.4, 1243.7, 1933.7, 1945.5, 1679.3, 1524.4, 1538.2, 1788.8, 1718.6, 1954.9, 1465.5, 2038.4, 1873.2, 1521.3, 1820.2, 1566.9, 1671.6, 1800.5, 1264.4, 1520.3, 1900.5, 1921.9, 1590.4, 2015.5, 2110.8, 1728.9, 1485.7, 1494.4, 1774.4],media:1714.3,dp:245.6,cv:14.3,minimo:[1998,1243.7],maximo:[1985,2531.5]},
   sen:{slope:2.24,p:0.4935,medY:2003,medP:1714.3},
@@ -1462,7 +1576,22 @@ function buildMonitor(){
     if(meta.iri_trajetoria_emissao && meta.iri_trajetoria_emissao !== meta.iri_emissao){
       partes.push(`trajetória Niño3,4 IRI ${meta.iri_trajetoria_emissao}${diasIriTraj!=null && diasIriTraj>LIMIAR_DEFASADO ? ' ⚠ defasada ('+diasIriTraj+'d)' : ''}`);
     }
-    if(meta.roni_trimestral) partes.push(`RONI oficial ${meta.roni_trimestral}`);
+    /* Fase ENSO-RONI 4B.1: lido direto de `const RONI`, nunca mais do
+       texto fixo `meta.roni_trimestral` (achado da auditoria — ficou
+       parado em JAS/2026 enquanto RONI já estava em ASO/2026, mesmo
+       tipo de drift que dash_proxima/divergencia já tiveram antes de
+       serem corrigidos na Fase 3B.8A).
+
+       Fase 4B.1.3: `_roniValido()` — nunca `RONI.valor !== null` sozinho —
+       é a mesma guarda do card abaixo, para esta nota nunca quebrar em
+       `.toFixed()` antes do card ser renderizado (achado real: uma
+       exceção aqui interrompia todo buildMonitor(), e o card nem
+       chegava a rodar). */
+    if (typeof RONI !== 'undefined' && _roniValido(RONI)) {
+      partes.push(`RONI oficial ${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)}°C (${RONI.seas}/${RONI.ano})`);
+    } else if(meta.roni_trimestral) {
+      partes.push(`RONI oficial ${meta.roni_trimestral}`);
+    }
     ruleNote.textContent = '| ' + partes.join(' · ') + (meta.cpc_status ? ' — ' + meta.cpc_status : '');
     if((diasCpc!=null && diasCpc>LIMIAR_DEFASADO) || (diasIri!=null && diasIri>LIMIAR_DEFASADO) || (diasIriTraj!=null && diasIriTraj>LIMIAR_DEFASADO)){
       ruleNote.style.color = 'var(--dry)';
@@ -1510,11 +1639,47 @@ function buildMonitor(){
 
   /* RONI — card separado, NÃO reaproveitar colFn/on2 daqui (ver
      CLAUDE.md armadilha 9: RONI e ONI-aprox são métricas diferentes,
-     mesmo que pareçam intercambiáveis no layout). */
-  if (typeof RONI !== 'undefined' && RONI.valor !== null) {
-    document.getElementById('d-roni').textContent = `${RONI.seas}/${RONI.ano}`;
-    document.getElementById('k-roni').innerHTML =
-      `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>`;
+     mesmo que pareçam intercambiáveis no layout).
+
+     Fase ENSO-RONI 4B.1: este card passa a ser a "Situação ENSO
+     oficial" — mostra fase/intensidade classificada pela tabela
+     NOAA/CPC (classificarRoni), nunca aciona Plano SECA/EXCESSO (isso
+     continua exclusivamente em `oni`/`secoAtivo`/`excAtivo` abaixo,
+     gatilho legado, Fase 4B.2 decide se migra). RONI ausente ou
+     defasado nunca é mostrado como neutro ou como zero — sempre aviso
+     explícito.
+
+     Fase 4B.1.1: defasagem calculada por `defasagemRoni(seas, ano)` —
+     a partir do TRIMESTRE oficial, nunca de `RONI.atualizado` (que é
+     só a data da nossa última consulta, não da publicação — ver
+     comentário de `defasagemRoni`). `RONI.atualizado` continua exibido
+     como "consultado em ...", nunca usado para decidir o aviso.
+
+     Fase 4B.1.3: guarda trocada de `RONI.valor !== null` para
+     `_roniValido(RONI)` — rejeita string, NaN, Infinito, objeto/array
+     e seas/ano fora dos 12 códigos/faixa plausível, antes de qualquer
+     `.toFixed()`. Nunca presume "atualizado" quando a defasagem não é
+     calculável (`diasAtraso === null` após já ter passado por
+     `_roniValido`, defensivo — não deveria ocorrer, mas se ocorrer não
+     é tratado como "sem atraso"). */
+  const kRoniEl = document.getElementById('k-roni');
+  const dRoniEl = document.getElementById('d-roni');
+  if (typeof RONI !== 'undefined' && _roniValido(RONI)) {
+    const cls = classificarRoni(RONI.valor);
+    const diasAtraso = defasagemRoni(RONI.seas, RONI.ano);
+    const metadadosInvalidos = diasAtraso == null;
+    const defasado = !metadadosInvalidos && diasAtraso > TOLERANCIA_DIAS_RONI;
+    dRoniEl.textContent = `${RONI.seas}/${RONI.ano}` +
+      (metadadosInvalidos ? ' ⚠ defasagem não calculável' : (defasado ? ` ⚠ defasado (${diasAtraso}d após o esperado)` : '')) +
+      (RONI.atualizado ? ` · consultado em ${RONI.atualizado}` : '');
+    if (defasado || metadadosInvalidos) dRoniEl.style.color = 'var(--dry)';
+    const faseTxt = cls ? `${cls.fase}${cls.intensidade ? ' ' + cls.intensidade : ''}` : 'classificação indisponível';
+    kRoniEl.innerHTML =
+      `<span style="color:${colFn(RONI.valor)}">${RONI.valor>=0?'+':''}${RONI.valor.toFixed(2)} °C</span>` +
+      `<div style="font-size:11px;font-weight:600;color:var(--txt2);margin-top:2px">${faseTxt}</div>`;
+  } else {
+    dRoniEl.textContent = '';
+    kRoniEl.innerHTML = `<span style="color:var(--txt3);font-size:13px">⚠ RONI indisponível ou inválido nesta emissão</span>`;
   }
 
   /* gráfico índices */
@@ -2348,7 +2513,7 @@ const CPC_IRI = {
     iri_trajetoria_status: 'PRESERVADA, defasada em relação à emissão de probabilidades acima (set/2026) — nino_seasons/iri_nino_mean/iri_nino_p15/iri_nino_p85 são os mesmos valores de 19/ago/2026; a extração de set/2026 não trouxe média/percentis mensais do Niño 3.4 verificáveis equivalentes, então não foram estimados nem recalculados (CLAUDE.md armadilha 4)',
     oni_mensal:    '+1,51°C (MJJ/2026, fonte IRI defasada — ver iri_trajetoria_status)',
     nino34_semana: '+3,10°C (semana 23/set/2026, CPC wksst9120.for)',
-    roni_trimestral: '+1,69°C (JAS/2026, oficial NOAA/CPC, ERSSTv6)',
+    roni_trimestral: '+1,97°C (ASO/2026, oficial NOAA/CPC, ERSSTv6)',
     divergencia: 'cpc[] é da tabela estruturada de probabilidades (nov/2026); iri[] é da extração externa da emissão de set/2026 (ver iri_extracao) — ASO/26: sem probabilidades confirmadas nos dados registrados neste dashboard para ambas as fontes',
     dash_proxima: '21/dez/2026',
     atualizado_em: '23/11/2026',
