@@ -1316,7 +1316,32 @@ def _pdo_estimado(pdo):
     return round(sum(pdo[k] for k in base) / 3, 2), base
 
 
-def _recalcular_oni_de_lacunas(df, nino34, oni):
+def _valor_numerico_finito(v):
+    """Converte `v` — possivelmente vindo direto de uma célula do CSV já
+    lida pelo pandas (float, NaN, ou até string, se alguma célula
+    corrompida fez a coluna inteira virar dtype object) — num float
+    finito, ou devolve `None` se não for um número real finito. Nunca
+    lança exceção: achado da Fase ENSO-ONI-FIX 1.2 (Cenário "componente
+    existente com valor não numérico") — `math.isfinite()` sozinho
+    lança `TypeError` para string, o que derrubaria a atualização
+    inteira por causa de uma única célula histórica corrompida. Um
+    componente corrompido deve ser tratado como ausente, nunca como
+    erro fatal."""
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _recalcular_oni_de_lacunas(df, nino34, oni, novas_linhas):
     """
     Fase ENSO-ONI-FIX 1 (achado da Fase ENSO-RONI 4B.2A.1): `oni` é uma
     média centrada de 3 meses — uma linha só pode ser gravada com `oni`
@@ -1330,21 +1355,38 @@ def _recalcular_oni_de_lacunas(df, nino34, oni):
     recém-buscado, sem ler este CSV — só o registro histórico ficava
     com lacunas evitáveis.
 
-    Esta função só PREENCHE células `oni` hoje vazias, usando o mesmo
-    `oni = calc_oni(nino34)` já calculado pelo chamador. Nunca
-    sobrescreve uma célula já preenchida, nunca toca `nino34`/`tsa`/
-    `pdo`/outras colunas. Antes de preencher, confirma que os 3 meses
-    da janela centrada (anterior, central, posterior) têm o mesmo
-    `nino34` já persistido (quando esse mês já estiver na série) e no
-    dict `nino34` desta execução — uma fonte nunca é garantida imutável
-    (CLAUDE.md: TSA/PDO já tiveram revisão/sentinela de origem), então
-    presumir equivalência sem checar seria o mesmo erro de novo. Em
-    caso de divergência, a lacuna NÃO é preenchida e o caso é só
-    sinalizado no log — uma revisão histórica de verdade é um fluxo
-    separado, já existente (corrigir_indices_historicos.py), não esta
-    função. Mês que ainda não existe na série persistida (vai ser
-    inserido nesta mesma execução, mais abaixo) não conta como
-    divergência — não há nada ainda para divergir.
+    Fase ENSO-ONI-FIX 1.2 (achado da revisão 1.1, Cenário 6): a versão
+    anterior construía `nino34_persistido` excluindo linhas com nino34
+    ausente/inválido — mas então, para uma linha HISTÓRICA já existente
+    nessa condição, `persistido` virava `None` pelo motivo ERRADO (não
+    porque a linha ainda não existe, mas porque existe e está
+    incompleta), e o laço tratava os dois casos como a mesma coisa
+    ("nada a comparar, segue em frente"). Resultado: uma linha já
+    persistida com nino34 ausente podia receber `oni` calculado com um
+    nino34 da fonte atual que NUNCA foi confirmado/persistido para essa
+    linha. Corrigido construindo a "visão efetiva" da série que vai
+    resultar desta execução — linhas já existentes com nino34 válido,
+    MAIS as linhas novas que serão efetivamente inseridas mais abaixo
+    (`novas_linhas`, já preparadas pelo chamador antes desta chamada) —
+    e exigindo que cada um dos 3 meses da janela apareça nessa visão
+    efetiva, com um valor que bate com `nino34` (a mesma fonte usada
+    para calcular `oni`). Uma linha que existe mas não tem valor válido
+    não entra na visão efetiva por nenhum dos dois caminhos — não é
+    tratada como "ainda não existe", é rejeitada como inconsistente.
+
+    `novas_linhas`: a lista `novas` já montada pelo chamador (mesmo
+    formato: dicts com pelo menos 'year'/'month'/'nino34'), representando
+    as linhas que SERÃO inseridas nesta mesma execução — por isso esta
+    função deve ser chamada depois de `novas` estar pronta, e antes de
+    concatená-la/persistir.
+
+    Esta função só PREENCHE células `oni` hoje vazias. Nunca sobrescreve
+    uma célula já preenchida, nunca toca `nino34`/`tsa`/`pdo`/outras
+    colunas. Em caso de rejeição (janela incompleta, mês existente
+    inválido, ou divergência), a lacuna NÃO é preenchida e o caso é
+    sinalizado no log com o período e a razão — uma revisão histórica
+    de verdade é um fluxo separado, já existente
+    (corrigir_indices_historicos.py), não esta função.
 
     Devolve (df, número de células preenchidas).
     """
@@ -1352,10 +1394,23 @@ def _recalcular_oni_de_lacunas(df, nino34, oni):
     if not vazio.any():
         return df, 0
 
-    nino34_persistido = {
-        (int(r.year), int(r.month)): r.nino34
-        for r in df.itertuples() if not pd.isna(r.nino34)
-    }
+    existentes_chaves = {(int(r.year), int(r.month)) for r in df.itertuples()}
+
+    # Visão efetiva da série ao final desta execução: só meses com um
+    # valor numérico finito que VAI estar persistido — seja porque já
+    # está numa linha existente válida, seja porque é uma linha nova
+    # confirmada nesta mesma execução. Nunca presumida a partir só de
+    # `nino34` (a fonte) — um mês só entra aqui se também vai virar
+    # célula real do CSV.
+    persistido_efetivo = {}
+    for r in df.itertuples():
+        v = _valor_numerico_finito(r.nino34)
+        if v is not None:
+            persistido_efetivo[(int(r.year), int(r.month))] = v
+    for linha in novas_linhas:
+        v = _valor_numerico_finito(linha.get('nino34'))
+        if v is not None:
+            persistido_efetivo[(int(linha['year']), int(linha['month']))] = v
 
     preenchidos = 0
     for idx in df.index[vazio]:
@@ -1367,21 +1422,29 @@ def _recalcular_oni_de_lacunas(df, nino34, oni):
         janela = [(y - 1, 12) if m == 1 else (y, m - 1),
                   (y, m),
                   (y + 1, 1) if m == 12 else (y, m + 1)]
-        divergente = False
+        rejeitada = False
         for (yy, mm) in janela:
-            persistido = nino34_persistido.get((yy, mm))
+            efetivo = persistido_efetivo.get((yy, mm))
             atual = nino34.get((yy, mm))
-            if persistido is None or atual is None:
-                continue  # mês ainda não persistido (chega nesta mesma
-                          # execução, ou segue ausente) — nada a comparar
-            if round(persistido, 2) != round(atual, 2):
-                divergente = True
+            if efetivo is None:
+                rejeitada = True
+                if (yy, mm) in existentes_chaves:
+                    print(f"  ⚠ master_monthly {m:02d}/{y}: linha de {mm:02d}/{yy} "
+                          f"já existe mas seu nino34 está ausente/inválido — "
+                          f"lacuna de oni NÃO preenchida")
+                else:
+                    print(f"  ⚠ master_monthly {m:02d}/{y}: {mm:02d}/{yy} ainda não "
+                          f"tem nino34 válido disponível — janela incompleta, "
+                          f"lacuna de oni NÃO preenchida")
+                break
+            if atual is None or round(efetivo, 2) != round(atual, 2):
+                rejeitada = True
                 print(f"  ⚠ master_monthly {m:02d}/{y}: nino34 de {mm:02d}/{yy} "
-                      f"divergente entre o persistido ({persistido}) e a fonte "
+                      f"divergente entre o valor efetivo ({efetivo}) e a fonte "
                       f"atual ({atual}) — lacuna de oni NÃO preenchida; "
                       f"revisão histórica de nino34 exige fluxo separado")
                 break
-        if divergente:
+        if rejeitada:
             continue
 
         df.loc[idx, 'oni'] = novo_valor
@@ -1414,12 +1477,18 @@ def atualizar_master_monthly(nino34, tsa, pdo):
     para um recálculo feito sobre dados já conhecidos); formalizar isso
     exigiria alterar proveniencia_indices.py, fora do escopo autorizado
     desta fase.
+
+    Fase ENSO-ONI-FIX 1.2: `_recalcular_oni_de_lacunas` é chamada
+    DEPOIS que `novas` já está pronta (mais abaixo), nunca antes — ela
+    precisa saber exatamente quais linhas novas serão inseridas e com
+    que nino34, para distinguir "mês ainda não é uma linha, mas vai
+    virar uma válida nesta execução" de "mês já é uma linha, mas está
+    sem nino34 válido" (achado da revisão 1.1: a versão anterior tratava
+    os dois casos como a mesma coisa).
     """
     df = pd.read_csv(MASTER_PATH)
     existentes = set(zip(df['year'].astype(int), df['month'].astype(int)))
     oni = calc_oni(nino34)
-
-    df, n_preenchidos = _recalcular_oni_de_lacunas(df, nino34, oni)
 
     tsa_val, tsa_key        = _tsa_persistido(tsa)
     pdo_media3, pdo_meses_b = _pdo_estimado(pdo)
@@ -1466,6 +1535,10 @@ def atualizar_master_monthly(nino34, tsa, pdo):
             'nino34': nino34[(y, m)], 'oni': oni.get((y, m)),
             'tsa': t, 'pdo': p,
         })
+
+    # Só agora `novas` está completa — chamada depois de pronta, nunca
+    # antes (ver docstring e Fase ENSO-ONI-FIX 1.2).
+    df, n_preenchidos = _recalcular_oni_de_lacunas(df, nino34, oni, novas)
 
     if not novas and n_preenchidos == 0:
         return 0

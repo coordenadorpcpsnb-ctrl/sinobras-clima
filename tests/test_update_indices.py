@@ -906,7 +906,7 @@ class AtualizarMasterMonthlyBackfillOniTestCase(unittest.TestCase):
         df = pd.DataFrame([self._linha(2026, 8, 2.52, None)])
         oni = {(2026, 8): float('nan')}  # calc_oni nunca produz isto, mas a
         nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}  # guarda é defensiva
-        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni)
+        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni, [])
         self.assertEqual(n, 0)
         self.assertTrue(pd.isna(df2.iloc[0]['oni']))
 
@@ -930,7 +930,7 @@ class AtualizarMasterMonthlyBackfillOniTestCase(unittest.TestCase):
         df = pd.DataFrame([self._linha(2026, 8, 2.52, None)])
         oni = {(2026, 8): float('inf')}
         nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
-        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni)
+        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni, [])
         self.assertEqual(n, 0)
         self.assertTrue(pd.isna(df2.iloc[0]['oni']))
 
@@ -938,7 +938,7 @@ class AtualizarMasterMonthlyBackfillOniTestCase(unittest.TestCase):
         df = pd.DataFrame([self._linha(2026, 8, 2.52, None)])
         oni = {(2026, 8): float('-inf')}
         nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
-        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni)
+        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni, [])
         self.assertEqual(n, 0)
         self.assertTrue(pd.isna(df2.iloc[0]['oni']))
 
@@ -1112,6 +1112,168 @@ class AtualizarMasterMonthlyBackfillOniTestCase(unittest.TestCase):
         df = self._ler_master()
         self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']),
             "uma divergência de origem nunca deve ser 'resolvida' preenchendo a lacuna")
+
+    # ────────────────────────────────────────────────────────────
+    # Reprodução do defeito residual (Fase ENSO-ONI-FIX 1.2, Cenário 6):
+    # `nino34_persistido` excluía explicitamente linhas com nino34 NaN,
+    # então uma linha HISTÓRICA já existente com nino34 ausente/inválido
+    # era tratada como "nada a comparar" — igual a um mês que ainda nem
+    # é uma linha — e a lacuna de oni era preenchida mesmo assim. Isto
+    # roda igual antes e depois da correção: antes, a asserção de
+    # rejeição falha.
+    # ────────────────────────────────────────────────────────────
+    def test_reproducao_f_mes_central_existente_com_nino34_ausente_nao_preenche(self):
+        self._escrever_master([
+            self._linha(2026, 7, 2.03, 2.03),
+            self._linha(2026, 8, None, None),   # linha EXISTE, nino34 ausente
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']),
+            "linha de agosto já existe com nino34 ausente — oni NÃO deveria "
+            "ser preenchido usando um nino34 da fonte atual que nunca foi "
+            "persistido/confirmado para essa linha")
+
+    # ────────────────────────────────────────────────────────────
+    # Grupo F — componentes históricos inconsistentes (Fase 1.2)
+    # ────────────────────────────────────────────────────────────
+    def test_f1_mes_anterior_existente_com_nino34_ausente_nao_preenche(self):
+        self._escrever_master([
+            self._linha(2026, 7, None, None),   # mês anterior: linha existe, nino34 ausente
+            self._linha(2026, 8, 2.52, None),   # lacuna a avaliar
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']))
+
+    # F2 (mês central existente com nino34 ausente) = mesmo cenário da
+    # reprodução acima (test_reproducao_f_...) — reutilizado, não duplicado.
+
+    def test_f3_mes_posterior_existente_com_nino34_ausente_nao_preenche(self):
+        self._escrever_master([
+            self._linha(2026, 7, 2.03, 2.03),
+            self._linha(2026, 8, 2.52, None),   # lacuna a avaliar
+            self._linha(2026, 9, None, None),   # mês posterior: linha existe, nino34 ausente
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']))
+
+    def test_f4_componente_existente_nao_numerico_nao_preenche(self):
+        # Simula uma célula nino34 corrompida com texto não numérico —
+        # pandas lê a coluna inteira como object/str nesse caso; a linha
+        # vira NaN só depois de pd.to_numeric, que a função NÃO aplica
+        # por conta própria (ela só filtra `math.isfinite`, que lança
+        # TypeError para string). Por isso o teste escreve o CSV bruto
+        # (não via _escrever_master/pandas) para reproduzir fielmente
+        # uma célula de texto real no arquivo.
+        with open(self.master_path, 'w') as f:
+            f.write('year,month,date,nino34,oni,tsa,pdo\n')
+            f.write('2026,7,2026-07-01,"N/D",,,\n')
+            f.write('2026,8,2026-08-01,2.52,,,\n')
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        # pandas lê a coluna 'nino34' inteira como object (string) quando
+        # qualquer célula não é numérica — 'N/D' permanece string, não NaN.
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']),
+            "componente não numérico ('N/D') não deveria permitir preenchimento")
+
+    # F5 (NaN) = já coberto por test_reproducao_f_.../test_f1/test_f3.
+
+    def test_f6_componente_existente_infinito_positivo_nao_preenche(self):
+        self._escrever_master([
+            self._linha(2026, 7, float('inf'), None),
+            self._linha(2026, 8, 2.52, None),
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']))
+
+    def test_f7_componente_existente_infinito_negativo_nao_preenche(self):
+        self._escrever_master([
+            self._linha(2026, 7, float('-inf'), None),
+            self._linha(2026, 8, 2.52, None),
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertTrue(pd.isna(df[df.month == 8].iloc[0]['oni']))
+
+    def test_f8_registro_existente_ausente_do_dicionario_de_valores_validos(self):
+        # Verifica diretamente a construção interna de `persistido_efetivo`
+        # (via comportamento observável, não acessando o dict privado):
+        # uma linha existente com nino34 inválido nunca "empresta" um
+        # valor de reposição vindo só da fonte atual, mesmo chamando a
+        # função isoladamente (sem passar por atualizar_master_monthly).
+        df = pd.DataFrame([
+            self._linha(2026, 7, float('nan'), 2.03),  # nino34 já era NaN, oni pré-existente — não deveria mesmo ser sobrescrito
+            self._linha(2026, 8, 2.52, None),
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        oni = ui.calc_oni(nino34)
+        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni, [])
+        self.assertEqual(n, 0)
+        self.assertTrue(pd.isna(df2[df2.month == 8].iloc[0]['oni']))
+        # e o oni pré-existente de julho (mesmo "órfão" de um nino34 NaN)
+        # continua intocado — esta função nunca mexe em célula já preenchida
+        self.assertEqual(df2[df2.month == 7].iloc[0]['oni'], 2.03)
+
+    def test_f9_linhas_duplicadas_mesmo_mes_comportamento_documentado(self):
+        # Estado que NUNCA deveria ocorrer via atualizar_master_monthly()
+        # (chave (ano,mês) é única por construção), mas testado para
+        # documentar o comportamento efetivo caso um CSV corrompido
+        # externamente chegue a ter isso: o dict interno é construído por
+        # iteração do DataFrame, então a ÚLTIMA linha com a mesma chave
+        # prevalece silenciosamente — nenhuma exceção é lançada.
+        df = pd.DataFrame([
+            self._linha(2026, 7, 1.00, 1.00),   # duplicata 1 (seria rejeitada: diverge de nino34 atual)
+            self._linha(2026, 7, 2.03, 2.03),   # duplicata 2, mesma chave (ano,mês) — prevalece
+            self._linha(2026, 8, 2.52, None),
+            self._linha(2026, 9, 2.84, 2.87),   # mês posterior, já persistido e válido
+        ])
+        nino34 = {(2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84}
+        oni = ui.calc_oni(nino34)
+        # não deve lançar exceção
+        df2, n = ui._recalcular_oni_de_lacunas(df, nino34, oni, [])
+        # a última duplicata (2.03, consistente com a fonte) prevalece —
+        # resultado determinístico, documentado, não necessariamente
+        # "correto" num sentido mais amplo (um CSV com chave duplicada já
+        # é, por si, uma corrupção fora do que esta função se propõe a
+        # detectar).
+        self.assertEqual(n, 1)
+        self.assertAlmostEqual(df2[df2.month == 8].iloc[0]['oni'], 2.46, places=2)
+
+    # ────────────────────────────────────────────────────────────
+    # Grupo G — preservação do comportamento correto (Fase 1.2)
+    # ────────────────────────────────────────────────────────────
+    # G10 (mês posterior inexistente, inserido validamente) = test_a7.
+    # G11 (janela completa, 3 componentes válidos e consistentes) =
+    #     test_reproducao_lacuna_e_preenchida_quando_janela_completa / test_a2.
+
+    def test_g12_janela_valida_e_janela_invalida_na_mesma_execucao(self):
+        self._escrever_master([
+            self._linha(2026, 6, 1.55, 1.51),
+            self._linha(2026, 7, 2.03, 2.03),
+            self._linha(2026, 8, 2.52, None),   # válida: deve preencher
+            self._linha(2027, 1, None, None),   # inválida: nino34 ausente, não deve preencher
+        ])
+        nino34 = {(2026, 6): 1.55, (2026, 7): 2.03, (2026, 8): 2.52, (2026, 9): 2.84,
+                  (2026, 12): 1.10, (2027, 1): 1.20, (2027, 2): 1.30}
+        ui.atualizar_master_monthly(nino34, tsa={}, pdo={})
+        df = self._ler_master()
+        self.assertAlmostEqual(df[(df.year == 2026) & (df.month == 8)].iloc[0]['oni'],
+                                2.46, places=2)
+        self.assertTrue(pd.isna(df[(df.year == 2027) & (df.month == 1)].iloc[0]['oni']))
+
+    # G13 (mudança de ano) = test_c17/test_c18.
+    # G14 (sem sobrescrever oni válido) = test_a2 / test_d21_a_d27.
+    # G15 (sem alteração em outras variáveis) = test_d21_a_d27.
+    # G16 (idempotência) = test_e28.
 
 
 if __name__ == '__main__':
