@@ -1316,6 +1316,80 @@ def _pdo_estimado(pdo):
     return round(sum(pdo[k] for k in base) / 3, 2), base
 
 
+def _recalcular_oni_de_lacunas(df, nino34, oni):
+    """
+    Fase ENSO-ONI-FIX 1 (achado da Fase ENSO-RONI 4B.2A.1): `oni` é uma
+    média centrada de 3 meses — uma linha só pode ser gravada com `oni`
+    quando o mês seguinte já existe em `nino34`. Antes desta correção,
+    `atualizar_master_monthly()` pulava QUALQUER (ano,mês) já presente
+    no CSV (`if (y, m) in existentes: continue`), então uma célula `oni`
+    vazia nunca era revisitada — mesmo depois que o mês seguinte já
+    tinha chegado em uma execução posterior e o cálculo já era possível.
+    Confirmado que isso NUNCA afetou o dashboard: `build_series()`
+    recalcula `oni` do zero a cada execução a partir do `nino34`
+    recém-buscado, sem ler este CSV — só o registro histórico ficava
+    com lacunas evitáveis.
+
+    Esta função só PREENCHE células `oni` hoje vazias, usando o mesmo
+    `oni = calc_oni(nino34)` já calculado pelo chamador. Nunca
+    sobrescreve uma célula já preenchida, nunca toca `nino34`/`tsa`/
+    `pdo`/outras colunas. Antes de preencher, confirma que os 3 meses
+    da janela centrada (anterior, central, posterior) têm o mesmo
+    `nino34` já persistido (quando esse mês já estiver na série) e no
+    dict `nino34` desta execução — uma fonte nunca é garantida imutável
+    (CLAUDE.md: TSA/PDO já tiveram revisão/sentinela de origem), então
+    presumir equivalência sem checar seria o mesmo erro de novo. Em
+    caso de divergência, a lacuna NÃO é preenchida e o caso é só
+    sinalizado no log — uma revisão histórica de verdade é um fluxo
+    separado, já existente (corrigir_indices_historicos.py), não esta
+    função. Mês que ainda não existe na série persistida (vai ser
+    inserido nesta mesma execução, mais abaixo) não conta como
+    divergência — não há nada ainda para divergir.
+
+    Devolve (df, número de células preenchidas).
+    """
+    vazio = df['oni'].isna()
+    if not vazio.any():
+        return df, 0
+
+    nino34_persistido = {
+        (int(r.year), int(r.month)): r.nino34
+        for r in df.itertuples() if not pd.isna(r.nino34)
+    }
+
+    preenchidos = 0
+    for idx in df.index[vazio]:
+        y, m = int(df.at[idx, 'year']), int(df.at[idx, 'month'])
+        novo_valor = oni.get((y, m))
+        if novo_valor is None or not math.isfinite(novo_valor):
+            continue  # janela ainda incompleta — nada a fazer (não é bug)
+
+        janela = [(y - 1, 12) if m == 1 else (y, m - 1),
+                  (y, m),
+                  (y + 1, 1) if m == 12 else (y, m + 1)]
+        divergente = False
+        for (yy, mm) in janela:
+            persistido = nino34_persistido.get((yy, mm))
+            atual = nino34.get((yy, mm))
+            if persistido is None or atual is None:
+                continue  # mês ainda não persistido (chega nesta mesma
+                          # execução, ou segue ausente) — nada a comparar
+            if round(persistido, 2) != round(atual, 2):
+                divergente = True
+                print(f"  ⚠ master_monthly {m:02d}/{y}: nino34 de {mm:02d}/{yy} "
+                      f"divergente entre o persistido ({persistido}) e a fonte "
+                      f"atual ({atual}) — lacuna de oni NÃO preenchida; "
+                      f"revisão histórica de nino34 exige fluxo separado")
+                break
+        if divergente:
+            continue
+
+        df.loc[idx, 'oni'] = novo_valor
+        preenchidos += 1
+
+    return df, preenchidos
+
+
 def atualizar_master_monthly(nino34, tsa, pdo):
     """
     Acrescenta a data/master_monthly.csv os meses com Niño 3.4 real
@@ -1328,10 +1402,24 @@ def atualizar_master_monthly(nino34, tsa, pdo):
     ou estimado) também é registrado em proveniencia_indices.py, no
     MOMENTO exato em que a origem é conhecida — nunca inferido depois
     por quem só lê o master_monthly.csv.
+
+    Fase ENSO-ONI-FIX 1: além de acrescentar meses novos, revisita as
+    linhas já existentes com `oni` vazio e preenche as que a janela
+    centrada de 3 meses já torna calculáveis — ver
+    `_recalcular_oni_de_lacunas`. `oni` não é registrado em
+    `indices_proveniencia.csv` (nunca foi, antes ou depois desta
+    correção) — é um índice derivado, sem uma classificação que se
+    encaixe no esquema atual (observado/persistido/estimado/
+    desconhecido foram desenhados para dado de origem externa, não
+    para um recálculo feito sobre dados já conhecidos); formalizar isso
+    exigiria alterar proveniencia_indices.py, fora do escopo autorizado
+    desta fase.
     """
     df = pd.read_csv(MASTER_PATH)
     existentes = set(zip(df['year'].astype(int), df['month'].astype(int)))
     oni = calc_oni(nino34)
+
+    df, n_preenchidos = _recalcular_oni_de_lacunas(df, nino34, oni)
 
     tsa_val, tsa_key        = _tsa_persistido(tsa)
     pdo_media3, pdo_meses_b = _pdo_estimado(pdo)
@@ -1379,13 +1467,18 @@ def atualizar_master_monthly(nino34, tsa, pdo):
             'tsa': t, 'pdo': p,
         })
 
-    if not novas:
+    if not novas and n_preenchidos == 0:
         return 0
 
     backup_csv(MASTER_PATH)
-    df = pd.concat([df, pd.DataFrame(novas)], ignore_index=True, sort=False)
+    if novas:
+        df = pd.concat([df, pd.DataFrame(novas)], ignore_index=True, sort=False)
     df = df.sort_values(['year', 'month']).reset_index(drop=True)
     df.to_csv(MASTER_PATH, index=False)
+
+    if n_preenchidos:
+        print(f"  ✅ {n_preenchidos} lacuna(s) de oni preenchida(s) retroativamente "
+              f"(janela centrada completada por dado publicado posteriormente)")
 
     # Fase ENSO-INTEGRIDADE 3A.1: caminho derivado de MASTER_PATH (lido
     # do módulo em tempo de chamada) — um teste que já faz
