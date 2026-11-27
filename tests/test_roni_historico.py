@@ -301,7 +301,8 @@ class SnapshotsEProveniemciaTestCase(IsolamentoMixin, unittest.TestCase):
         hash_ = rh.calcular_hash(conteudo)
         rh.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         rh.caminho_snapshot(hash_).write_bytes(b'conteudo adulterado')
-        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                    autorizar_inicializacao_com_snapshot_orfao=True)
         self.assertEqual(r['estado_promocao'], 'rejeitada_snapshot_corrompido')
 
     def test_b10_hoje_controlado_por_fixture_afeta_janela_de_revisao(self):
@@ -395,11 +396,16 @@ class RevisoesEIntegridadeTestCase(IsolamentoMixin, unittest.TestCase):
 class PersistenciaERecuperacaoTestCase(IsolamentoMixin, unittest.TestCase):
 
     def test_d1_snapshot_corrompido_nao_promove(self):
+        """Autoriza explicitamente a inicialização com snapshot órfão
+        (Fase 2.3, requisitos 4/5) para alcançar o teste original desta
+        função — a colisão de hash no Passo 3 — sem ser bloqueado antes
+        pela nova guarda de ambiguidade."""
         conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
         hash_ = rh.calcular_hash(conteudo)
         rh.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         rh.caminho_snapshot(hash_).write_bytes(b'lixo')
-        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                    autorizar_inicializacao_com_snapshot_orfao=True)
         self.assertEqual(r['estado_promocao'], 'rejeitada_snapshot_corrompido')
         self.assertFalse(rh.HISTORICO_PATH.exists())
 
@@ -1468,6 +1474,153 @@ class CenariosDeAceitacaoTestCase(IsolamentoMixin, unittest.TestCase):
         with patch.object(rh, 'serie_ativa_corresponde_ao_snapshot',
                            return_value=(False, ['simulado'])):
             r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_inconsistencia_pos_escrita')
+        self.assertIsNone(r['ultimo'])
+
+
+# ══════════════════════════════════════════════════════
+# Fase ENSO-RONI-MIGRAÇÃO 2.3 — correção residual: nenhum
+# retorno entrega valor não comprovado; inicialização
+# controlada distinta de atualização operacional
+# ══════════════════════════════════════════════════════
+class CenariosDeAceitacaoFase23TestCase(IsolamentoMixin, unittest.TestCase):
+
+    def test_falha_de_rede_com_base_integra_preserva_ultimo_comprovado(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        ultimo_esperado = rh.ultimo_da_serie_ativa()
+        with patch.object(rh, 'buscar_bytes_brutos', side_effect=TimeoutError('rede indisponível')):
+            r = rh.processar_aquisicao(hoje=date(2026, 1, 20))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_falha_coleta')
+        self.assertEqual(r['ultimo'], ultimo_esperado)
+
+    def test_falha_de_rede_com_base_adulterada_nunca_entrega_valor_nao_comprovado(self):
+        """Fase 2.3, requisito 2: falha de rede normal preserva o
+        último RONI COMPROVADAMENTE válido — nunca um valor lido de uma
+        série presa numa promoção já superada (ou qualquer outra
+        inconsistência detectável por verificar_integridade_roni())."""
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        conteudo_historico_apos_aq1 = rh.HISTORICO_PATH.read_bytes()
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.88)]
+        c2 = _serie_sintetica(revisada).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c2, hoje=date(2026, 1, 20), aquisicao_id='AQ-2')
+        rh.HISTORICO_PATH.write_bytes(conteudo_historico_apos_aq1)  # presa na promoção antiga
+
+        with patch.object(rh, 'buscar_bytes_brutos', side_effect=TimeoutError('rede indisponível')):
+            r = rh.processar_aquisicao(hoje=date(2026, 1, 25))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_falha_coleta')
+        self.assertIsNone(r['ultimo'])
+
+    def test_reprocessamento_com_serie_ativa_integra_entrega_valor(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        ultimo_esperado = rh.ultimo_da_serie_ativa()
+        r = rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        self.assertEqual(r['estado_promocao'], 'promovida')
+        self.assertEqual(r['ultimo'], ultimo_esperado)
+
+    def test_reprocessamento_com_serie_ativa_inconsistente_preserva_historico_mas_nao_entrega_valor(self):
+        """Fase 2.3, requisito 3: reprocessar uma aquisição já concluída
+        preserva o resultado HISTÓRICO original (estado_promocao), mas
+        só entrega o valor da série ativa se a integridade dela estiver
+        comprovada."""
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        conteudo_historico_apos_aq1 = rh.HISTORICO_PATH.read_bytes()
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.88)]
+        c2 = _serie_sintetica(revisada).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c2, hoje=date(2026, 1, 20), aquisicao_id='AQ-2')
+        rh.HISTORICO_PATH.write_bytes(conteudo_historico_apos_aq1)  # presa na promoção antiga
+
+        r = rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        self.assertEqual(r['estado_promocao'], 'promovida')  # resultado histórico preservado
+        self.assertIsNone(r['ultimo'])  # mas nunca entrega valor não comprovado
+
+    def test_conflito_de_identidade_com_base_integra_entrega_valor(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-X')
+        ultimo_esperado = rh.ultimo_da_serie_ativa()
+        c2 = _serie_sintetica(SERIE_BASE[:-1] + [('DJF', 2026, 4.90)]).encode('utf-8')
+        r = rh.processar_aquisicao(conteudo_bytes=c2, hoje=date(2026, 1, 15), aquisicao_id='AQ-X')
+        self.assertEqual(r['estado_promocao'], 'rejeitada_conflito_aquisicao')
+        self.assertEqual(r['ultimo'], ultimo_esperado)
+
+    def test_conflito_de_identidade_com_base_inconsistente_nunca_entrega_valor(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        conteudo_historico_apos_aq1 = rh.HISTORICO_PATH.read_bytes()
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.88)]
+        c2 = _serie_sintetica(revisada).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c2, hoje=date(2026, 1, 20), aquisicao_id='AQ-2')
+        rh.HISTORICO_PATH.write_bytes(conteudo_historico_apos_aq1)  # presa na promoção antiga
+
+        c_conflitante = _serie_sintetica(SERIE_BASE[:-1] + [('DJF', 2026, 9.99)]).encode('utf-8')
+        r = rh.processar_aquisicao(conteudo_bytes=c_conflitante, hoje=date(2026, 1, 25),
+                                    aquisicao_id='AQ-1')
+        self.assertEqual(r['estado_promocao'], 'rejeitada_conflito_aquisicao')
+        self.assertIsNone(r['ultimo'])
+
+    def test_snapshot_orfao_sem_manifesto_e_sem_serie_e_rejeitado_por_padrao(self):
+        """Fase 2.3, requisitos 4/5: um snapshot existente sem manifesto
+        e sem série NÃO autoriza reinicialização operacional silenciosa
+        — rejeitado por padrão, distinguindo inicialização controlada
+        de atualização operacional comum."""
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        hash_ = rh.calcular_hash(conteudo)
+        rh.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        rh.caminho_snapshot(hash_).write_bytes(conteudo)  # snapshot "limpo", sem relação alguma
+
+        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_snapshot_orfao_sem_autorizacao')
+        self.assertIsNone(r['ultimo'])
+        self.assertFalse(rh.HISTORICO_PATH.exists())
+        self.assertFalse(rh.PROVENIENCIA_PATH.exists())
+
+    def test_inicializacao_legitima_e_explicitamente_autorizada_promove_normalmente(self):
+        """Fase 2.3, requisito 5: a MESMA situação do teste anterior,
+        mas com autorização explícita do chamador — inicialização
+        controlada, nunca o comportamento padrão."""
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        hash_ = rh.calcular_hash(conteudo)
+        rh.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        rh.caminho_snapshot(hash_).write_bytes(conteudo)
+
+        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                    autorizar_inicializacao_com_snapshot_orfao=True)
+        self.assertEqual(r['estado_promocao'], 'promovida')
+        self.assertIsNotNone(r['ultimo'])
+        self.assertTrue(rh.HISTORICO_PATH.exists())
+
+    def test_reconstrucao_recusa_quando_manifesto_tem_problema_estrutural(self):
+        """Fase 2.3, requisito 6 — já atendido, demonstrado por teste:
+        `reconstruir_serie_a_partir_do_manifesto()` reutiliza
+        `ler_proveniencia_seguro()` (que já valida estrutura do
+        manifesto — Fase 2.2A, Seção 7) antes de recuperar; nunca
+        recupera a partir de um manifesto estruturalmente inválido."""
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15), aquisicao_id='AQ-DUP')
+        rh.HISTORICO_PATH.unlink()
+        df = pd.read_csv(rh.PROVENIENCIA_PATH)
+        duplicada = pd.concat([df, df.iloc[[0]]], ignore_index=True)  # aquisicao_id duplicado
+        duplicada.to_csv(rh.PROVENIENCIA_PATH, index=False)
+
+        ok_rec, avisos_rec = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertFalse(ok_rec, avisos_rec)
+        self.assertFalse(rh.HISTORICO_PATH.exists())
+
+    def test_verificacao_completa_apos_reaproveitamento_sem_mudanca_tambem_roda(self):
+        """Fase 2.3, requisito 7: a verificação final de consistência
+        (`verificar_integridade_roni()` completa) roda para QUALQUER
+        estado aceito, não só 'promovida' — aqui simulada para o
+        segundo ponto de chamada (Passo 6) dentro de um fluxo de
+        'reaproveitada_sem_mudanca', que nunca reescreve a série."""
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        resultado_saudavel = rh.verificar_integridade_roni()  # o que o Passo 1b realmente vê
+        with patch.object(rh, 'verificar_integridade_roni',
+                           side_effect=[resultado_saudavel, (False, ['simulado'])]):
+            r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 16))
         self.assertEqual(r['estado_promocao'], 'rejeitada_inconsistencia_pos_escrita')
         self.assertIsNone(r['ultimo'])
 

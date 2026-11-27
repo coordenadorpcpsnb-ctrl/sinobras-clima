@@ -893,11 +893,27 @@ def verificar_integridade_roni():
     return True, msgs
 
 
+def _ultimo_se_integro():
+    """Fase 2.3, requisito 1: NENHUM caminho de retorno de
+    `processar_aquisicao()` pode entregar como confiável um valor lido
+    de uma base cuja integridade não foi comprovada — reaproveita
+    `verificar_integridade_roni()` (a mesma barreira usada por
+    `scripts/verificar_dashboard.py`) em vez de ler
+    `ultimo_da_serie_ativa()` diretamente. Se a base ainda não foi
+    inicializada (nada a verificar), `verificar_integridade_roni()`
+    devolve `ok=True` e esta função se comporta como antes (devolve o
+    que houver, tipicamente `None`). Se a base existe mas está
+    inconsistente, devolve `None` — nunca o valor não comprovado."""
+    ok, _ = verificar_integridade_roni()
+    return ultimo_da_serie_ativa() if ok else None
+
+
 # ══════════════════════════════════════════════════════
 # PONTO DE ENTRADA ÚNICO
 # ══════════════════════════════════════════════════════
 def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_bytes=None,
-                         datas_publicacao_informadas=None):
+                         datas_publicacao_informadas=None,
+                         autorizar_inicializacao_com_snapshot_orfao=False):
     """
     Busca a fonte (ou usa `conteudo_bytes` já obtido, para testes/
     reaproveitamento — nunca consulta a fonte de novo só para gerar o
@@ -919,20 +935,34 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
       3. Persistir o snapshot (imutável, verificado).
       4. Registrar atomicamente a promoção no manifesto.
       5. Gerar a série normalizada, só se `estado == 'promovida'`.
-      6. Verificar a consistência final antes de devolver sucesso —
-         nunca entrega ao chamador (e ao card) um valor que a própria
-         verificação de integridade reprovaria.
+      6. Verificar a consistência COMPLETA (`verificar_integridade_roni()`,
+         nunca apenas a série contra seu próprio snapshot) antes de
+         devolver sucesso — aplicada a QUALQUER estado aceito, nunca só
+         ao que de fato reescreveu a série (Fase 2.3, requisito 7).
 
     `datas_publicacao_informadas`: ver `_referencia_disponibilidade` —
     opcional, só repassado por um chamador que já comprovou uma data de
     publicação real; produção não passa nada aqui hoje (limitação
     documentada: a fonte não expõe essa data).
 
+    `autorizar_inicializacao_com_snapshot_orfao` (Fase 2.3, requisitos
+    4/5): por padrão, se NEM a série normalizada NEM o manifesto
+    existem mas HÁ pelo menos um snapshot em `data/roni_snapshots/`,
+    isso NÃO é tratado como primeira inicialização limpa — é um estado
+    ambíguo (evidência de que algo já foi escrito antes, sem registro
+    correspondente) e a aquisição é rejeitada. Só prossegue como
+    inicialização se o chamador passar `True` explicitamente — uma
+    decisão deliberada e controlada, nunca o comportamento padrão de
+    uma atualização operacional automática.
+
     Nunca lança para o chamador em falha de rede, de estrutura ou de
     integridade do próprio histórico/manifesto — qualquer problema é
     reportado no dict de retorno; o card, nesse caso, recebe o último
-    valor válido já persistido (nunca None só porque esta aquisição
-    falhou, e nunca um valor rejeitado pelo mecanismo histórico).
+    valor COMPROVADAMENTE válido já persistido (nunca None só porque
+    esta aquisição falhou, mas também nunca um valor lido de uma base
+    cuja integridade não foi confirmada — Fase 2.3, requisito 1: nenhum
+    caminho de retorno entrega como confiável um RONI de base
+    inconsistente; ver `_ultimo_se_integro()`).
 
     Retorna {'ultimo': {...} ou None, 'estado_promocao': str,
              'avisos': [...], 'aquisicao_id': str}.
@@ -945,7 +975,7 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
         try:
             conteudo_bytes = buscar_bytes_brutos(url)
         except Exception as e:
-            return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_falha_coleta',
+            return {'ultimo': _ultimo_se_integro(), 'estado_promocao': 'rejeitada_falha_coleta',
                     'avisos': [f'falha ao buscar {url}: {e}'], 'aquisicao_id': aquisicao_id}
 
     hash_sha256 = calcular_hash(conteudo_bytes)
@@ -955,7 +985,7 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
     # se não estiver, nada mais é tentado.
     prov, avisos_manifesto_leitura = ler_proveniencia_seguro()
     if avisos_manifesto_leitura:
-        return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_problema',
+        return {'ultimo': _ultimo_se_integro(), 'estado_promocao': 'rejeitada_manifesto_problema',
                 'avisos': avisos_manifesto_leitura, 'aquisicao_id': aquisicao_id}
 
     if not prov.empty:
@@ -964,16 +994,17 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
             existente = ja_existe.iloc[0]
             if str(existente['url']) == str(url) and str(existente['hash_sha256']) == str(hash_sha256):
                 # Reprocessamento idempotente de uma aquisição já
-                # CONCLUÍDA: devolve o resultado ORIGINAL, sem
-                # reclassificar como conflito só porque a base já a
-                # incorporou, e sem nenhuma escrita. Se for antiga (já
-                # superada por uma promoção posterior), 'ultimo' é a
-                # série ATUALMENTE ativa — nunca restaura uma versão
-                # anterior nem altera a versão ativa.
-                return {'ultimo': ultimo_da_serie_ativa(),
+                # CONCLUÍDA: preserva o resultado histórico ORIGINAL
+                # (`estado_promocao`), sem reclassificar como conflito
+                # só porque a base já a incorporou, e sem nenhuma
+                # escrita — mas só entrega o valor da série ATIVA se a
+                # integridade dela estiver comprovada (Fase 2.3,
+                # requisito 3); nunca restaura uma versão anterior nem
+                # altera a versão ativa.
+                return {'ultimo': _ultimo_se_integro(),
                         'estado_promocao': existente['estado_promocao'],
                         'avisos': [], 'aquisicao_id': aquisicao_id}
-            return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_conflito_aquisicao',
+            return {'ultimo': _ultimo_se_integro(), 'estado_promocao': 'rejeitada_conflito_aquisicao',
                     'avisos': [f'aquisicao_id {aquisicao_id!r} já registrado com url/hash '
                                f'incompatíveis — registro original preservado, nenhuma escrita '
                                f'realizada por esta tentativa'],
@@ -982,10 +1013,8 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
     # Passo 1b (Seção 6): saúde do estado JÁ EXISTENTE, independente do
     # conteúdo desta aquisição — nunca usa uma base já inconsistente
     # como referência de comparação nem promove por cima dela. Cada
-    # cenário (B/C/D/E) tem seu próprio rótulo, nunca um genérico só —
-    # um snapshot órfão sem manifesto nem série (sem nenhuma promoção
-    # jamais concluída) não é "estado inconsistente": é só uma possível
-    # colisão de hash desta própria aquisição, tratada no Passo 3.
+    # cenário (A-ambígua/B/C/D/E) tem seu próprio rótulo, nunca um
+    # genérico só.
     try:
         antiga_df = _ler_serie_persistida()
     except BaseCorrompida as e:
@@ -998,12 +1027,32 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
     # confundido com primeira inicialização (os dois sempre nascem
     # juntos na primeira promoção).
     if serie_existe and not PROVENIENCIA_PATH.exists():
-        return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_perdido',
+        return {'ultimo': _ultimo_se_integro(), 'estado_promocao': 'rejeitada_manifesto_perdido',
                 'avisos': ['data/roni_historico.csv existe mas data/roni_proveniencia.csv '
                            'está ausente — evidência de aquisições anteriores foi perdida; '
                            'nunca reinicializado silenciosamente como se fosse a primeira '
                            'aquisição; use reconstruir_serie_a_partir_do_manifesto() só se o '
                            'manifesto for recuperado por outro meio'],
+                'aquisicao_id': aquisicao_id}
+
+    # Cenário A-ambígua (Fase 2.3, requisitos 4/5): nem série nem
+    # manifesto existem, mas HÁ pelo menos um snapshot em disco —
+    # evidência de que algo já foi escrito antes, sem o registro
+    # correspondente no manifesto. Isso NÃO é a mesma coisa que uma
+    # base totalmente virgem (Cenário A puro, sem nenhum artefato) e
+    # nunca é interpretado silenciosamente como primeira inicialização
+    # numa chamada operacional comum — só prossegue se o chamador
+    # autorizar explicitamente uma inicialização controlada.
+    if (not serie_existe and not PROVENIENCIA_PATH.exists()
+            and SNAPSHOTS_DIR.exists() and any(SNAPSHOTS_DIR.iterdir())
+            and not autorizar_inicializacao_com_snapshot_orfao):
+        return {'ultimo': None, 'estado_promocao': 'rejeitada_snapshot_orfao_sem_autorizacao',
+                'avisos': ['há snapshot(s) em data/roni_snapshots/ sem manifesto e sem série '
+                           'normalizada correspondentes — não é uma primeira inicialização '
+                           'limpa; nunca tratado silenciosamente como tal numa atualização '
+                           'operacional comum; chame com '
+                           'autorizar_inicializacao_com_snapshot_orfao=True, numa decisão '
+                           'explícita e controlada, se esse estado for de fato intencional'],
                 'aquisicao_id': aquisicao_id}
 
     # Cenário B: manifesto já com promoção registrada, mas série
@@ -1112,13 +1161,19 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
     if estado == 'promovida':
         _gravar_serie_historico(lista)
 
-        # Passo 6: verificar a consistência final antes de devolver
-        # sucesso — nunca entrega um valor que a própria verificação de
-        # integridade reprovaria.
-        ok_final, avisos_final = serie_ativa_corresponde_ao_snapshot()
-        if not ok_final:
-            return {'ultimo': None, 'estado_promocao': 'rejeitada_inconsistencia_pos_escrita',
-                    'avisos': avisos + avisos_final, 'aquisicao_id': aquisicao_id}
+    # Passo 6 (Fase 2.3, requisito 7): verificação COMPLETA de
+    # consistência antes de devolver sucesso — `verificar_integridade_
+    # roni()`, nunca apenas `serie_ativa_corresponde_ao_snapshot()`
+    # (que só confere a série contra seu próprio snapshot e não
+    # detectaria, por exemplo, uma série presa numa promoção já
+    # superada pelo manifesto). Aplicada a QUALQUER estado aceito
+    # (promovida/reaproveitada_sem_mudanca/observada_texto_diferente_
+    # valor_identico), não só ao que de fato reescreveu a série —
+    # nenhum caminho de sucesso escapa dela.
+    ok_final, avisos_final = verificar_integridade_roni()
+    if not ok_final:
+        return {'ultimo': None, 'estado_promocao': 'rejeitada_inconsistencia_pos_escrita',
+                'avisos': avisos + avisos_final, 'aquisicao_id': aquisicao_id}
 
     return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': estado,
             'avisos': avisos, 'aquisicao_id': aquisicao_id}

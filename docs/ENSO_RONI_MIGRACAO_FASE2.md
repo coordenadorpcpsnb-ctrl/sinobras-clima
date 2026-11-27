@@ -501,6 +501,65 @@ ASO/2026`. `data/roni_historico.csv`, `data/roni_proveniencia.csv` e o
 snapshot inicial (`1297887f...`) permanecem byte a byte idênticos — `git
 diff --name-only data/` vazio durante toda a fase.
 
+## 10.4. Fase 2.3 — correção residual: nenhum valor não comprovado, inicialização controlada
+
+Correção residual localizada (não uma nova arquitetura), identificada
+por revisão independente após a CI do commit `047ee82`/`6ffc1e4`
+aprovar 2.321 testes. Confirmado: `processar_aquisicao()` ainda tinha
+retornos antecipados que entregavam `ultimo_da_serie_ativa()`
+diretamente — sem confirmar que a base persistida estava íntegra —
+nos caminhos de falha de rede, reprocessamento, conflito de
+identidade e manifesto perdido.
+
+**Correções**:
+1. Nova `_ultimo_se_integro()` — só devolve `ultimo_da_serie_ativa()`
+   se `verificar_integridade_roni()` aprovar a base atual; caso
+   contrário devolve `None`. Substitui todo uso de
+   `ultimo_da_serie_ativa()` nos retornos antecipados (falha de
+   coleta, manifesto problema, reprocessamento idempotente, conflito
+   de identidade, Cenário C).
+2. Reprocessamento idempotente agora preserva o `estado_promocao`
+   HISTÓRICO original (nunca reclassifica), mas só entrega `ultimo`
+   se a integridade da série ativa estiver comprovada no momento da
+   chamada — os dois podem divergir (ex.: a série foi corrompida
+   *depois* da promoção original).
+3. Novo parâmetro `autorizar_inicializacao_com_snapshot_orfao=False`:
+   quando nem série nem manifesto existem mas HÁ snapshot(s) em
+   `data/roni_snapshots/`, isso não é mais tratado silenciosamente
+   como primeira inicialização — rejeitado por padrão
+   (`rejeitada_snapshot_orfao_sem_autorizacao`), só prossegue com
+   autorização explícita do chamador. Distingue inicialização
+   controlada de atualização operacional automática;
+   `scripts/update_indices.py` nunca passa esse parâmetro, preservando
+   o padrão seguro em produção.
+4. Passo 6 (verificação final antes de devolver sucesso) passou de
+   `serie_ativa_corresponde_ao_snapshot()` (self-check) para
+   `verificar_integridade_roni()` completa, e passou a rodar para
+   QUALQUER estado aceito (`promovida`/`reaproveitada_sem_mudanca`/
+   `observada_texto_diferente_valor_identico`), não só para o que
+   reescreveu a série.
+5. `reconstruir_serie_a_partir_do_manifesto()` já reutilizava
+   `ler_proveniencia_seguro()` (validação estrutural, Fase 2.2A) e
+   `reconstruir_da_snapshot()` (hash) antes de recuperar — confirmado
+   por teste novo, sem necessidade de alteração.
+
+**Testes**: suíte RONI 117 → **127** (10 novos, cobrindo os 9 cenários
+pedidos: falha de rede com base íntegra/adulterada, reprocessamento com
+série íntegra/inconsistente, conflito com base íntegra/inconsistente,
+snapshot órfão sem autorização, inicialização legítima autorizada,
+recuperação bloqueada por manifesto estruturalmente inválido,
+verificação completa após estado não-promovido). Os 2 testes que
+simulavam colisão de hash num snapshot órfão (`test_d1`, `test_b9b`)
+foram ajustados para autorizar explicitamente a inicialização, sem
+alterar seu propósito original. Regressão combinada: `test_roni_historico`
+127/127, `test_update_indices` 74/74, demais suítes de preservação
+84/84 — **285/285 OK**. `verificar_dashboard.py` aprovado com e sem
+`--pular-continuidade-serie-subst`. Nenhuma mudança em
+`scripts/update_indices.py`/`scripts/verificar_dashboard.py` (API
+pública inalterada, parâmetro novo com default seguro). Dados reais
+RONI (série, manifesto, snapshot inicial) permanecem byte a byte
+idênticos.
+
 ## 11. Limitações conhecidas
 
 - **(Fase 2.2A)** Os 2 registros iniciais do manifesto real têm o
