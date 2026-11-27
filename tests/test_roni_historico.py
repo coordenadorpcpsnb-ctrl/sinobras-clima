@@ -125,13 +125,27 @@ class ParseRoniSerieCompletaTestCase(unittest.TestCase):
         lista, avisos = rh.parse_roni_serie_completa(texto)
         self.assertIsNone(lista)
 
-    def test_a10_duplicata_identica_colapsada(self):
+    def test_a10_duplicata_identica_e_sempre_rejeitada(self):
+        # Fase ENSO-RONI-MIGRAÇÃO 2.2, Correção 4: a regra aprovada
+        # exige rejeição de QUALQUER duplicidade na série oficial —
+        # mesmo com valor idêntico. Nenhuma linha é escolhida
+        # arbitrariamente; o documento inteiro é rejeitado.
         texto = _serie_sintetica([('DJF', 2025, 0.10)])
         texto += 'DJF  2025   0.10\n'
         lista, avisos = rh.parse_roni_serie_completa(texto)
-        self.assertIsNotNone(lista)
-        self.assertEqual(len(lista), 1)
-        self.assertTrue(any('duplicada' in a for a in avisos))
+        self.assertIsNone(lista)
+
+    def test_a10b_duplicata_coincidente_so_apos_arredondamento_rejeitada(self):
+        texto = _serie_sintetica([('DJF', 2025, 0.101)])
+        texto += 'DJF  2025   0.104\n'  # ambos arredondam para 0.10, mas são valores distintos
+        lista, avisos = rh.parse_roni_serie_completa(texto)
+        self.assertIsNone(lista)
+
+    def test_a10c_duplicata_com_ordem_invertida_tambem_rejeitada(self):
+        texto = _serie_sintetica([('DJF', 2025, 0.20)])
+        texto += 'DJF  2025   0.10\n'  # segunda ocorrência com valor MENOR, ordem irrelevante
+        lista, avisos = rh.parse_roni_serie_completa(texto)
+        self.assertIsNone(lista)
 
     def test_a11_duplicata_divergente_rejeitada(self):
         texto = _serie_sintetica([('DJF', 2025, 0.10)])
@@ -403,20 +417,40 @@ class PersistenciaERecuperacaoTestCase(IsolamentoMixin, unittest.TestCase):
         self.assertTrue(avisos)
         self.assertGreaterEqual(len(df), 1)
 
-    def test_d3_interrupcao_entre_operacoes_detectada_e_recuperavel(self):
+    def test_d3_manifesto_perdido_com_serie_presente_nunca_e_recuperado_silenciosamente(self):
+        # Fase 2.2, Correção 5 (Cenário C): apagar o manifesto INTEIRO
+        # enquanto a série normalizada continua presente NÃO é o mesmo
+        # que "primeira aquisição" — representa perda de evidência de
+        # aquisições anteriores, sem recuperação inequívoca possível
+        # (não sabemos quantas aquisições existiram nem seus fatos).
+        # `serie_ativa_corresponde_ao_snapshot()` sozinha não basta para
+        # detectar este cenário específico (a série continua
+        # autoconsistente com seu próprio snapshot) — por isso
+        # `verificar_integridade_roni()` cruza com o manifesto
+        # (Cenário F) e `processar_aquisicao()` recusa explicitamente
+        # processar qualquer coisa nessa condição.
         conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
         rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
-        # Simula perda do registro de proveniência (ex.: processo
-        # interrompido entre a gravação da série e a do manifesto).
+        hash_antes = rh.calcular_hash(rh.HISTORICO_PATH.read_bytes())
+
         rh.PROVENIENCIA_PATH.unlink()
-        ok, avisos = rh.serie_ativa_corresponde_ao_snapshot()
-        self.assertFalse(ok)  # inconsistência DETECTADA
-        # Recuperação determinística: reprocessar a mesma aquisição
-        # (mesmo conteúdo) restaura a consistência, sem reescrever a
-        # série (já idêntica) e sem duplicar snapshot.
-        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 16))
-        ok2, avisos2 = rh.serie_ativa_corresponde_ao_snapshot()
-        self.assertTrue(ok2, avisos2)
+
+        ok, avisos = rh.verificar_integridade_roni()
+        self.assertFalse(ok, avisos)  # inconsistência DETECTADA via verificar_integridade_roni
+
+        # NUNCA recuperado silenciosamente por um simples reprocessamento
+        # — mesmo com o MESMO conteúdo de antes.
+        r = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 16))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_manifesto_perdido')
+        # A série ativa permanece exatamente como estava — nada foi
+        # reescrito por essa tentativa.
+        self.assertEqual(hash_antes, rh.calcular_hash(rh.HISTORICO_PATH.read_bytes()))
+
+        # A recuperação explícita (Cenário B) também falha aqui, porque
+        # este NÃO é o Cenário B — é o Cenário C (manifesto ausente),
+        # para o qual não há reconstrução segura.
+        ok_rec, avisos_rec = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertFalse(ok_rec, avisos_rec)
 
     def test_d4_arquivo_historico_nunca_fica_parcial(self):
         # _gravar_serie_historico usa escrita em .tmp + replace atômico
@@ -552,7 +586,11 @@ class VerificarIntegridadeRoniTestCase(IsolamentoMixin, unittest.TestCase):
         rh.PROVENIENCIA_PATH.unlink()
         ok, msgs = rh.verificar_integridade_roni()
         self.assertFalse(ok)
-        self.assertIn('nenhuma aquisição promovida', ' '.join(msgs))
+        # Fase 2.2: a série ainda se autovalida contra seu próprio
+        # snapshot (Correção 2/3) — o que a reprova aqui é o cruzamento
+        # com o manifesto (Cenário F, Seção 8.3): nenhuma promoção
+        # registrada para o hash que a série referencia.
+        self.assertIn('não registra nenhuma promoção', ' '.join(msgs))
 
     def test_serie_adulterada_valor_alterado_reprovada(self):
         rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
@@ -600,6 +638,533 @@ class VerificarIntegridadeRoniTestCase(IsolamentoMixin, unittest.TestCase):
         self.assertEqual(hash_historico_antes, rh.calcular_hash(rh.HISTORICO_PATH.read_bytes()))
         self.assertEqual(hash_prov_antes, rh.calcular_hash(rh.PROVENIENCIA_PATH.read_bytes()))
         self.assertEqual(n_snapshots_antes, len(list(rh.SNAPSHOTS_DIR.glob('*.txt'))))
+
+
+# ══════════════════════════════════════════════════════
+# Fase ENSO-RONI-MIGRAÇÃO 2.2 — Correção 1: janela de revisão oficial
+# ══════════════════════════════════════════════════════
+class JanelaRevisaoOficialTestCase(IsolamentoMixin, unittest.TestCase):
+    """Mês central, mês final, publicação inicial e primeira
+    observação pelo sistema são eventos distintos (Seção 4.1). Estes
+    testes identificam explicitamente, em cada cenário, se a data usada
+    é COMPROVADA (passada via `datas_publicacao_informadas`, uma
+    fixture hipotética — nunca uma data real do CPC, que esta fonte não
+    publica) ou ESTIMADA (calendário: mês final + 1)."""
+
+    _BASE_ATE_ASO = [
+        ('DJF', 2025, 0.10), ('JFM', 2025, 0.20), ('FMA', 2025, 0.30),
+        ('MAM', 2025, 0.40), ('AMJ', 2025, 0.50), ('MJJ', 2025, 0.60),
+        ('JJA', 2025, 0.70), ('JAS', 2025, 0.80), ('ASO', 2025, 0.90),
+        ('SON', 2025, 1.00), ('OND', 2025, 1.10), ('NDJ', 2025, 1.20),
+        ('DJF', 2026, 1.30), ('JFM', 2026, 1.35), ('FMA', 2026, 1.40),
+        ('MAM', 2026, 1.45), ('AMJ', 2026, 1.50), ('MJJ', 2026, 1.55),
+        ('JJA', 2026, 1.60), ('JAS', 2026, 1.65), ('ASO', 2026, 1.97),
+    ]
+
+    def test_reproducao_regra_antiga_rejeitava_revisao_legitima_de_dezembro(self):
+        """Seção 4.2: ASO/2026 — mês central set/2026, mês final
+        out/2026, publicação inicial (fixture hipotética) nov/2026,
+        revisão em dez/2026. A fórmula ANTIGA (mês central, sem +1 mês)
+        teria contado 3 meses (set→dez) e rejeitado uma revisão que,
+        pela janela real do CPC a partir da publicação (nov→dez = 1
+        mês), é legítima."""
+        hoje = date(2026, 12, 10)
+        mes_central = rh._SEAS_PARA_MES_CENTRAL['ASO']  # 9 (setembro)
+        meses_pela_regra_antiga = (hoje.year - 2026) * 12 + (hoje.month - mes_central)
+        self.assertEqual(meses_pela_regra_antiga, 3)
+        self.assertGreater(meses_pela_regra_antiga, rh.JANELA_REVISAO_RECENTE_MESES)  # a regra antiga rejeitaria
+
+        # A correção: usando a publicação informada (fixture
+        # hipotética) de nov/2026, só decorreu 1 mês até dez/2026.
+        ano_pub, mes_pub, origem = rh._referencia_disponibilidade(
+            2026, 'ASO', '2026-10', datas_publicacao_informadas={(2026, 'ASO'): (2026, 11)})
+        self.assertEqual((ano_pub, mes_pub, origem), (2026, 11, 'informada'))
+        meses_corrigido = (hoje.year - ano_pub) * 12 + (hoje.month - mes_pub)
+        self.assertEqual(meses_corrigido, 1)
+        self.assertLessEqual(meses_corrigido, rh.JANELA_REVISAO_RECENTE_MESES)
+
+    def test_correcao_aceita_revisao_de_dezembro_com_novo_trimestre_simultaneo(self):
+        """Mesmo cenário da reprodução, mas através do pipeline
+        completo: revisão de ASO/2026 (dentro da janela, usando a data
+        de publicação informada) + inclusão simultânea de SON/2026
+        (trimestre novo) — a aquisição inteira deve ser promovida, não
+        rejeitada por causa da revisão."""
+        base = _serie_sintetica(self._BASE_ATE_ASO).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=base, hoje=date(2026, 11, 20))
+
+        revisada = self._BASE_ATE_ASO[:-1] + [('ASO', 2026, 2.01), ('SON', 2026, 2.10)]
+        r = rh.processar_aquisicao(
+            conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+            hoje=date(2026, 12, 10),
+            datas_publicacao_informadas={(2026, 'ASO'): (2026, 11)})
+        self.assertEqual(r['estado_promocao'], 'promovida')
+        self.assertEqual(r['ultimo'], {'seas': 'SON', 'ano': 2026, 'valor': 2.10})
+
+    def test_revisao_no_mes_da_publicacao_inicial_estimada(self):
+        # ASO/2026: mês final out/2026 → publicação ESTIMADA nov/2026.
+        # Revisão no PRÓPRIO mês da publicação estimada (0 meses).
+        base = _serie_sintetica(self._BASE_ATE_ASO).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=base, hoje=date(2026, 11, 5))
+        revisada = self._BASE_ATE_ASO[:-1] + [('ASO', 2026, 2.00)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2026, 11, 20))
+        self.assertEqual(r['estado_promocao'], 'promovida')
+
+    def test_revisao_no_mes_seguinte_a_publicacao_estimada(self):
+        base = _serie_sintetica(self._BASE_ATE_ASO).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=base, hoje=date(2026, 11, 5))
+        revisada = self._BASE_ATE_ASO[:-1] + [('ASO', 2026, 2.02)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2026, 12, 15))
+        self.assertEqual(r['estado_promocao'], 'promovida')
+
+    def test_revisao_no_segundo_mes_posterior_a_publicacao_estimada(self):
+        base = _serie_sintetica(self._BASE_ATE_ASO).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=base, hoje=date(2026, 11, 5))
+        revisada = self._BASE_ATE_ASO[:-1] + [('ASO', 2026, 2.03)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2027, 1, 10))
+        self.assertEqual(r['estado_promocao'], 'promovida')
+
+    def test_revisao_fora_da_janela_sinalizada_nao_promovida(self):
+        base = _serie_sintetica(self._BASE_ATE_ASO).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=base, hoje=date(2026, 11, 5))
+        revisada = self._BASE_ATE_ASO[:-1] + [('ASO', 2026, 2.04)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2027, 2, 1))  # 3 meses após nov/2026
+        self.assertEqual(r['estado_promocao'], 'rejeitada_revisao_historica_inesperada')
+        # A série ativa preserva o valor original (2026, não 2.04).
+        self.assertEqual(r['ultimo']['valor'], 1.97)
+
+    def test_virada_de_ano_djf(self):
+        # DJF/2026: mês final fev/2026 → publicação estimada mar/2026.
+        base = [('NDJ', 2025, 1.20), ('DJF', 2026, 1.30), ('JFM', 2026, 1.35)]
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(base).encode('utf-8'),
+                                hoje=date(2026, 3, 5))
+        revisada = [('NDJ', 2025, 1.20), ('DJF', 2026, 1.32), ('JFM', 2026, 1.35)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2026, 4, 15))  # 1 mês após mar/2026
+        self.assertEqual(r['estado_promocao'], 'promovida')
+
+    def test_virada_de_ano_ndj(self):
+        # NDJ/2025: mês final jan/2026 → publicação estimada fev/2026.
+        base = [('OND', 2025, 1.10), ('NDJ', 2025, 1.20), ('DJF', 2026, 1.30)]
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(base).encode('utf-8'),
+                                hoje=date(2026, 2, 5))
+        revisada = [('OND', 2025, 1.10), ('NDJ', 2025, 1.22), ('DJF', 2026, 1.30)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2026, 3, 20))  # 1 mês após fev/2026
+        self.assertEqual(r['estado_promocao'], 'promovida')
+
+    def test_revisao_historica_inesperada_com_novo_trimestre_simultaneo_tambem_nao_promove(self):
+        # Mesmo com um trimestre novo legítimo incluído, uma revisão
+        # fora da janela ainda bloqueia a aquisição INTEIRA (mesmo
+        # comportamento de antes — nunca promove parcialmente).
+        base = _serie_sintetica(self._BASE_ATE_ASO).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=base, hoje=date(2026, 11, 5))
+        revisada = self._BASE_ATE_ASO[:-1] + [('ASO', 2026, 2.05), ('SON', 2026, 2.10)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                    hoje=date(2027, 3, 1))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_revisao_historica_inesperada')
+        self.assertEqual(r['ultimo']['seas'], 'ASO')  # SON/2026 NÃO foi adicionado
+
+    def test_serie_inicial_com_periodos_antigos_nunca_elegivel_a_revisao_recente(self):
+        """A aquisição inicial contém dados desde 1950 (fixture real),
+        mas isso não significa que esses trimestres estejam "recém-
+        publicados" — a primeira aquisição nunca passa pela lógica de
+        janela de revisão, porque `comparar_series` não tem base
+        anterior para detectar "revisão" nenhuma (todos entram como
+        `trimestres_novos`, nunca `valores_revisados`)."""
+        lista, _ = rh.parse_roni_serie_completa(FIXTURE_TEXTO)
+        comp = rh.comparar_series(None, lista)
+        self.assertEqual(comp['valores_revisados'], [])
+        self.assertEqual(len(comp['trimestres_novos']), 921)
+        estado, _ = rh.decidir_promocao(comp, date(2026, 11, 27))
+        self.assertEqual(estado, 'promovida')
+
+
+# ══════════════════════════════════════════════════════
+# Fase ENSO-RONI-MIGRAÇÃO 2.2 — Correção 2: alterações exclusivamente
+# textuais nunca trocam a âncora de reconstrução sem reescrever a série
+# ══════════════════════════════════════════════════════
+class AlteracoesTextuaisTestCase(IsolamentoMixin, unittest.TestCase):
+
+    def _conteudo_com_espacamento_alterado(self, pares):
+        linhas = ['SEAS   YR  ANOM']  # cabeçalho idêntico (exigido)
+        for seas, ano, val in pares:
+            linhas.append(f'{seas}    {ano}  {val:>7.3f}')  # espaçamento diferente
+        return ('\n'.join(linhas) + '\n\n').encode('utf-8')  # linha em branco extra ao final
+
+    def test_a_conteudo_e_valores_identicos_reaproveita_sem_mudanca(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        r2 = rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 16))
+        self.assertEqual(r2['estado_promocao'], 'reaproveitada_sem_mudanca')
+
+    def test_b_texto_diferente_valores_identicos_nao_troca_ancora(self):
+        conteudo1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        r1 = rh.processar_aquisicao(conteudo_bytes=conteudo1, hoje=date(2026, 1, 15))
+        hash1 = rh.calcular_hash(conteudo1)
+
+        conteudo2 = self._conteudo_com_espacamento_alterado(SERIE_BASE)
+        self.assertNotEqual(rh.calcular_hash(conteudo2), hash1)  # hash realmente diferente
+        r2 = rh.processar_aquisicao(conteudo_bytes=conteudo2, hoje=date(2026, 1, 16))
+
+        self.assertEqual(r2['estado_promocao'], 'observada_texto_diferente_valor_identico')
+        # A série ativa NUNCA trocou de âncora — continua referenciando
+        # o hash ORIGINAL, nunca o novo.
+        df = rh._ler_serie_persistida()
+        self.assertEqual(set(df['snapshot_sha256'].unique()), {hash1})
+        # Mas os dois snapshots foram preservados (nunca descartados).
+        self.assertTrue(rh.caminho_snapshot(hash1).exists())
+        self.assertTrue(rh.caminho_snapshot(rh.calcular_hash(conteudo2)).exists())
+        # E a série continua íntegra e reconstruível.
+        ok, avisos = rh.serie_ativa_corresponde_ao_snapshot()
+        self.assertTrue(ok, avisos)
+        ok2, avisos2 = rh.verificar_integridade_roni()
+        self.assertTrue(ok2, avisos2)
+
+    def test_c_texto_diferente_e_valor_revisado_promove_normalmente(self):
+        conteudo1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo1, hoje=date(2026, 1, 15))
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.99)]
+        conteudo2 = self._conteudo_com_espacamento_alterado(revisada)
+        r2 = rh.processar_aquisicao(conteudo_bytes=conteudo2, hoje=date(2026, 1, 20))
+        self.assertEqual(r2['estado_promocao'], 'promovida')
+        self.assertEqual(r2['ultimo']['valor'], 1.99)
+        df = rh._ler_serie_persistida()
+        self.assertEqual(set(df['snapshot_sha256'].unique()), {rh.calcular_hash(conteudo2)})
+
+    def test_d_retorno_a_conteudo_previamente_observado(self):
+        conteudo_a = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        conteudo_b = self._conteudo_com_espacamento_alterado(SERIE_BASE)
+        rh.processar_aquisicao(conteudo_bytes=conteudo_a, hoje=date(2026, 1, 15))
+        rh.processar_aquisicao(conteudo_bytes=conteudo_b, hoje=date(2026, 1, 16))
+        r3 = rh.processar_aquisicao(conteudo_bytes=conteudo_a, hoje=date(2026, 1, 17))
+        # Retorno ao conteúdo A (já observado, e é o hash ATIVO) — nada
+        # de novo a fazer.
+        self.assertEqual(r3['estado_promocao'], 'reaproveitada_sem_mudanca')
+        ok, avisos = rh.verificar_integridade_roni()
+        self.assertTrue(ok, avisos)
+
+    def test_e_alteracao_de_quebra_de_linha_tambem_detectada(self):
+        conteudo1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo1, hoje=date(2026, 1, 15))
+        conteudo_crlf = conteudo1.replace(b'\n', b'\r\n')
+        self.assertNotEqual(rh.calcular_hash(conteudo_crlf), rh.calcular_hash(conteudo1))
+        r2 = rh.processar_aquisicao(conteudo_bytes=conteudo_crlf, hoje=date(2026, 1, 16))
+        self.assertEqual(r2['estado_promocao'], 'observada_texto_diferente_valor_identico')
+
+    def test_f_alterou_texto_reflete_comparacao_com_ativo_nao_criacao_de_arquivo(self):
+        conteudo1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        conteudo2 = self._conteudo_com_espacamento_alterado(SERIE_BASE)
+        rh.processar_aquisicao(conteudo_bytes=conteudo1, hoje=date(2026, 1, 15))
+        rh.processar_aquisicao(conteudo_bytes=conteudo2, hoje=date(2026, 1, 16))
+        # Reobservar o conteúdo2 (já existe como snapshot, não seria
+        # "criado" de novo) ainda deve reportar alterou_texto=True,
+        # porque DIFERE do hash ativo (que continua sendo o de conteudo1).
+        r3 = rh.processar_aquisicao(conteudo_bytes=conteudo2, hoje=date(2026, 1, 17))
+        prov, _ = rh.ler_proveniencia_seguro()
+        linha = prov[prov['aquisicao_id'] == r3['aquisicao_id']].iloc[0]
+        self.assertEqual(bool(linha['alterou_texto']), True)
+
+
+# ══════════════════════════════════════════════════════
+# Fase ENSO-RONI-MIGRAÇÃO 2.2 — Correção 3: verificação efetiva de hash
+# ══════════════════════════════════════════════════════
+class VerificacaoEfetivaDeHashTestCase(IsolamentoMixin, unittest.TestCase):
+
+    def test_snapshot_ativo_integro_reconstroi(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        lista, avisos = rh.reconstruir_da_snapshot(rh.calcular_hash(conteudo))
+        self.assertIsNotNone(lista, avisos)
+
+    def test_snapshot_ativo_alterado_so_nos_espacos_e_detectado(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        hash_ = rh.calcular_hash(conteudo)
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        # Adultera o ARQUIVO do snapshot sob o mesmo nome — só espaços,
+        # os valores climáticos resultantes seriam os mesmos, mas o
+        # hash do conteúdo não bate mais.
+        rh.caminho_snapshot(hash_).write_bytes(conteudo.replace(b' ', b'  '))
+        lista, avisos = rh.reconstruir_da_snapshot(hash_)
+        self.assertIsNone(lista)
+        self.assertTrue(any('CORROMPIDO' in a for a in avisos))
+
+    def test_snapshot_ativo_com_alteracao_climatica_e_detectada(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        hash_ = rh.calcular_hash(conteudo)
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        rh.caminho_snapshot(hash_).write_bytes(
+            _serie_sintetica(SERIE_BASE[:-1] + [('DJF', 2026, 4.99)]).encode('utf-8'))
+        lista, avisos = rh.reconstruir_da_snapshot(hash_)
+        self.assertIsNone(lista)
+
+    def test_snapshot_antigo_aceito_ausente_reprova_verificacao_completa(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        h1 = rh.calcular_hash(c1)
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15))
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.77)]
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                hoje=date(2026, 1, 20))
+        rh.caminho_snapshot(h1).unlink()  # remove o snapshot ANTIGO (não o ativo)
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+        self.assertTrue(any(h1 in m for m in msgs))
+
+    def test_snapshot_antigo_aceito_adulterado_reprova_verificacao_completa(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        h1 = rh.calcular_hash(c1)
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15))
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.78)]
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                hoje=date(2026, 1, 20))
+        rh.caminho_snapshot(h1).write_bytes(b'lixo adulterado')
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+
+    def test_hash_invalido_no_manifesto_reprova(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        df = pd.read_csv(rh.PROVENIENCIA_PATH)
+        df.loc[0, 'hash_sha256'] = 'não-é-um-hash-valido'
+        df.to_csv(rh.PROVENIENCIA_PATH, index=False)
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+        self.assertTrue(any('formato' in m for m in msgs))
+
+    def test_caminho_de_snapshot_incompativel_reprova(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        df = pd.read_csv(rh.PROVENIENCIA_PATH)
+        df.loc[0, 'caminho_snapshot'] = 'data/roni_snapshots/outro_arquivo.txt'
+        df.to_csv(rh.PROVENIENCIA_PATH, index=False)
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+        self.assertTrue(any('estrutura aprovada' in m for m in msgs))
+
+    def test_verificacao_e_somente_leitura_mesmo_detectando_problema(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        h = rh.calcular_hash(conteudo)
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        rh.caminho_snapshot(h).write_bytes(b'lixo')
+        hash_historico_antes = rh.calcular_hash(rh.HISTORICO_PATH.read_bytes())
+        hash_prov_antes = rh.calcular_hash(rh.PROVENIENCIA_PATH.read_bytes())
+        rh.verificar_integridade_roni()
+        self.assertEqual(hash_historico_antes, rh.calcular_hash(rh.HISTORICO_PATH.read_bytes()))
+        self.assertEqual(hash_prov_antes, rh.calcular_hash(rh.PROVENIENCIA_PATH.read_bytes()))
+        self.assertTrue(rh.caminho_snapshot(h).exists())  # nunca sobrescrito/removido
+
+
+# ══════════════════════════════════════════════════════
+# Fase ENSO-RONI-MIGRAÇÃO 2.2 — Correção 4: unicidade e cobertura
+# (complementa os testes a10/a10b/a10c/a11 já no Grupo A)
+# ══════════════════════════════════════════════════════
+class UnicidadeECoberturaTestCase(IsolamentoMixin, unittest.TestCase):
+
+    def test_reducao_de_cobertura_em_relacao_a_serie_ativa_e_rejeitada(self):
+        """Demonstra que a política já existente de `comparar_series`/
+        `decidir_promocao` (cobertura_reduzida) cobre exatamente o caso
+        de 'início truncado em relação ao que já está ativo' — não é
+        necessário duplicar essa regra dentro do validador estrutural
+        (que opera sobre um documento isolado, sem saber o que está
+        ativo). Uma série sintética começando DEPOIS do início já
+        ativo, mesmo sendo internamente consecutiva, é rejeitada."""
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        truncada_no_inicio = SERIE_BASE[3:]  # remove os 3 primeiros trimestres
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(truncada_no_inicio).encode('utf-8'),
+                                    hoje=date(2026, 1, 20))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_cobertura_reduzida')
+        # A série ativa preserva a cobertura completa original.
+        df = rh._ler_serie_persistida()
+        self.assertEqual(len(df), len(SERIE_BASE))
+
+    def test_crescimento_legitimo_da_cobertura_e_promovido(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        estendida = SERIE_BASE + [('JFM', 2026, 1.40)]
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(estendida).encode('utf-8'),
+                                    hoje=date(2026, 2, 10))
+        self.assertEqual(r['estado_promocao'], 'promovida')
+        self.assertEqual(len(rh._ler_serie_persistida()), len(estendida))
+
+    def test_validador_estrutural_nao_fixa_contagem_de_observacoes(self):
+        """O validador aceita séries sintéticas de qualquer tamanho —
+        não há nenhuma verificação de 'exatamente 921' ou de início em
+        1950 dentro de `parse_roni_serie_completa`; essa contagem é só
+        uma propriedade EMPÍRICA da fonte real hoje, nunca um requisito
+        codificado."""
+        pequena, _ = rh.parse_roni_serie_completa(_serie_sintetica([('DJF', 2030, 0.5)]))
+        self.assertEqual(len(pequena), 1)
+        grande, _ = rh.parse_roni_serie_completa(FIXTURE_TEXTO)
+        self.assertEqual(len(grande), 921)  # propriedade observada da fixture real, não exigida pelo código
+
+
+# ══════════════════════════════════════════════════════
+# Fase ENSO-RONI-MIGRAÇÃO 2.2 — Correção 5: imutabilidade do manifesto
+# ══════════════════════════════════════════════════════
+class ImutabilidadeDoManifestoTestCase(IsolamentoMixin, unittest.TestCase):
+
+    def test_reprocessamento_preserva_integralmente_o_registro_original(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                aquisicao_id='AQ-ORIGINAL')
+        prov_antes, _ = rh.ler_proveniencia_seguro()
+        linha_antes = prov_antes[prov_antes['aquisicao_id'] == 'AQ-ORIGINAL'].iloc[0].to_dict()
+
+        # Reprocessa a MESMA aquisição (mesmo id, mesmos fatos) —
+        # mesmo chamada bem depois, com `coletado_em_utc` interno
+        # recalculado por esta 2ª chamada (datetime.now()) — o
+        # registro ORIGINAL deve permanecer intocado.
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                aquisicao_id='AQ-ORIGINAL')
+        prov_depois, _ = rh.ler_proveniencia_seguro()
+        linha_depois = prov_depois[prov_depois['aquisicao_id'] == 'AQ-ORIGINAL'].iloc[0].to_dict()
+
+        # dict == trata NaN != NaN (semântica de float) — comparar via
+        # repr evita um falso negativo só por isso; o que importa é que
+        # TODOS os campos, inclusive coletado_em_utc, sejam idênticos.
+        self.assertEqual(repr(linha_antes), repr(linha_depois))
+        self.assertEqual(len(prov_depois), 1)  # nunca duplica
+
+    def test_conflito_de_identificador_com_hash_diferente_e_rejeitado(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        c2 = _serie_sintetica(SERIE_BASE[:-1] + [('DJF', 2026, 4.90)]).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-X')
+        r2 = rh.processar_aquisicao(conteudo_bytes=c2, hoje=date(2026, 1, 15), aquisicao_id='AQ-X')
+        self.assertEqual(r2['estado_promocao'], 'rejeitada_conflito_aquisicao')
+        # O registro original de AQ-X nunca foi sobrescrito.
+        prov, _ = rh.ler_proveniencia_seguro()
+        self.assertEqual(len(prov[prov['aquisicao_id'] == 'AQ-X']), 1)
+        self.assertEqual(prov[prov['aquisicao_id'] == 'AQ-X'].iloc[0]['hash_sha256'],
+                          rh.calcular_hash(c1))
+
+    def test_nova_coleta_com_conteudo_identico_gera_novo_registro_distinto(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 16), aquisicao_id='AQ-2')
+        prov, _ = rh.ler_proveniencia_seguro()
+        self.assertEqual(len(prov), 2)  # duas observações reais e distintas, nunca fundidas
+
+    def test_manifesto_inicial_real_tem_dois_registros_do_mesmo_hash_por_coletas_distintas(self):
+        """Achado documentado (Seção 8.2): o manifesto inicial da Fase
+        2 tinha 2 linhas com o mesmo hash e aquisicao_id DIFERENTES
+        (ids derivados de timestamps ~13s apart) — evidência disponível
+        (ids distintos) confirma que são duas COLETAS reais distintas
+        do mesmo conteúdo, não um reprocessamento do mesmo id. Este
+        teste reproduz esse padrão isoladamente para confirmar que o
+        código atual trata esse caso exatamente assim (2 registros
+        preservados, nenhum tratado como conflito)."""
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                aquisicao_id='20261126T194759Z')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15),
+                                aquisicao_id='20261126T195819.363274Z')
+        prov, _ = rh.ler_proveniencia_seguro()
+        self.assertEqual(len(prov), 2)
+        self.assertEqual(prov['hash_sha256'].nunique(), 1)
+        self.assertEqual(prov['aquisicao_id'].nunique(), 2)
+
+    def test_manifesto_com_linha_malformada_bloqueia_novas_escritas(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        with rh.PROVENIENCIA_PATH.open('a', encoding='utf-8') as f:
+            f.write('linha,com,campos,incompativeis,com,o,cabecalho,' + ','.join(['x'] * 15) + '\n')
+        conteudo_novo = _serie_sintetica(SERIE_BASE + [('JFM', 2026, 1.40)]).encode('utf-8')
+        r = rh.processar_aquisicao(conteudo_bytes=conteudo_novo, hoje=date(2026, 2, 10))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_manifesto_problema')
+        # A série ativa NÃO foi alterada por essa tentativa.
+        df = rh._ler_serie_persistida()
+        self.assertEqual(len(df), len(SERIE_BASE))
+
+    def test_manifesto_com_duplicidade_de_aquisicao_id_e_conflito_nao_corrupcao_estrutural(self):
+        # Duas linhas com o MESMO aquisicao_id mas fatos diferentes no
+        # arquivo (produzido fora do pipeline) não quebra a leitura
+        # (CSV estruturalmente válido) — mas o próximo registro desse
+        # id vira conflito explícito ao ser comparado.
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15), aquisicao_id='AQ-DUP')
+        df = pd.read_csv(rh.PROVENIENCIA_PATH)
+        linha_alterada = df.iloc[0].copy()
+        linha_alterada['hash_sha256'] = 'f' * 64
+        df2 = pd.concat([df, pd.DataFrame([linha_alterada])], ignore_index=True)
+        df2.to_csv(rh.PROVENIENCIA_PATH, index=False)
+        # A leitura em si não lança (CSV bem formado) — mas há 2 linhas
+        # para o mesmo id, com hashes diferentes: um estado que o
+        # próprio manifesto não deveria permitir produzir pelo
+        # pipeline normal (só por edição externa, como aqui).
+        prov, avisos = rh.ler_proveniencia_seguro()
+        self.assertEqual(len(prov[prov['aquisicao_id'] == 'AQ-DUP']), 2)
+
+    def test_serie_normalizada_ausente_com_manifesto_integro_e_reconstruivel(self):
+        """Cenário B (Seção 8.3): recuperação EXPLÍCITA, nunca
+        automática dentro de processar_aquisicao."""
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        conteudo_historico = rh.HISTORICO_PATH.read_bytes()
+        rh.HISTORICO_PATH.unlink()  # série normalizada AUSENTE
+
+        ok, avisos = rh.verificar_integridade_roni()
+        self.assertFalse(ok)  # ausência com manifesto/snapshot presentes é detectada
+
+        ok_rec, avisos_rec = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertTrue(ok_rec, avisos_rec)
+        self.assertEqual(rh.HISTORICO_PATH.read_bytes(), conteudo_historico)
+        ok2, avisos2 = rh.verificar_integridade_roni()
+        self.assertTrue(ok2, avisos2)
+
+    def test_serie_normalizada_corrompida_com_snapshot_integro_e_reconstruivel(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        conteudo_historico = rh.HISTORICO_PATH.read_bytes()
+        rh.HISTORICO_PATH.write_text(
+            PersistenciaERecuperacaoTestCase._CSV_CORROMPIDO, encoding='utf-8')
+
+        ok_rec, avisos_rec = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertTrue(ok_rec, avisos_rec)
+        self.assertEqual(rh.HISTORICO_PATH.read_bytes(), conteudo_historico)
+
+    def test_snapshot_ativo_corrompido_impede_reconstrucao_do_manifesto(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        h = rh.calcular_hash(conteudo)
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        rh.HISTORICO_PATH.unlink()
+        rh.caminho_snapshot(h).write_bytes(b'lixo')
+        ok_rec, avisos_rec = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertFalse(ok_rec, avisos_rec)
+        self.assertFalse(rh.HISTORICO_PATH.exists())  # nunca inventa/recria sem evidência válida
+
+    def test_recuperacao_sem_perder_aquisicoes_anteriores(self):
+        c1 = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=c1, hoje=date(2026, 1, 15), aquisicao_id='AQ-1')
+        revisada = SERIE_BASE[:-1] + [('DJF', 2026, 1.88)]
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(revisada).encode('utf-8'),
+                                hoje=date(2026, 1, 20), aquisicao_id='AQ-2')
+        prov_antes, _ = rh.ler_proveniencia_seguro()
+        self.assertEqual(len(prov_antes), 2)
+
+        rh.HISTORICO_PATH.unlink()
+        ok_rec, _ = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertTrue(ok_rec)
+
+        prov_depois, _ = rh.ler_proveniencia_seguro()
+        self.assertEqual(len(prov_depois), 2)  # as 2 aquisições anteriores continuam no manifesto
+        self.assertEqual(set(prov_antes['aquisicao_id']), set(prov_depois['aquisicao_id']))
+
+    def test_falha_de_recuperacao_impede_publicacao_inconsistente(self):
+        # Sem manifesto (Cenário C) a reconstrução falha — e
+        # verificar_integridade_roni(), a barreira usada pelos
+        # workflows operacionais, continua reprovando: nada que
+        # dependa dela publicaria esse estado.
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        rh.PROVENIENCIA_PATH.unlink()
+        ok_rec, _ = rh.reconstruir_serie_a_partir_do_manifesto()
+        self.assertFalse(ok_rec)
+        ok_verif, _ = rh.verificar_integridade_roni()
+        self.assertFalse(ok_verif)
 
 
 if __name__ == '__main__':

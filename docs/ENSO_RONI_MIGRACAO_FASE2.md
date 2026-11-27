@@ -284,8 +284,113 @@ sempre detecta algo a commitar, e o `git add data/` subsequente inclui
 corretamente qualquer snapshot novo ainda não rastreado. Nenhum
 workflow operacional foi alterado.
 
+## 10.2. Fase 2.2 — correções finais de integridade, revisão temporal e rastreabilidade
+
+Cinco achados confirmados por inspeção independente do código e corrigidos nesta fase (`scripts/roni_historico.py`, `tests/test_roni_historico.py` — nenhum outro arquivo tocado).
+
+**Correção 1 — janela de revisão oficial.** `decidir_promocao()` contava
+a janela de 2 meses do CPC a partir do **mês central** do trimestre —
+mas mês central, mês final, publicação inicial e primeira observação
+pelo sistema são eventos distintos. Reproduzido: para ASO/2026 (mês
+central set/2026), uma revisão legítima em dezembro já contava 3 meses
+pela regra antiga e seria rejeitada. Corrigido com
+`_referencia_disponibilidade()`: usa (1) uma data de publicação
+EFETIVAMENTE conhecida, se informada explicitamente (nunca inventada —
+só usada em fixtures de teste hipotéticas, já que a fonte real não
+publica essa data); ou, na ausência dela, (2) uma ESTIMATIVA pelo
+calendário do CPC (mês final + 1, coerente com a atualização "by the
+5th of each month" já confirmada). A aquisição inicial (dados desde
+1950) nunca passa por essa lógica para nenhum trimestre histórico —
+`comparar_series` não tem base prévia para "revisar" nada na primeira
+carga.
+
+**Correção 2 — alterações exclusivamente textuais.** Uma reaquisição
+com texto diferente mas valores climáticos idênticos criava um hash/
+snapshot novo, mas o mecanismo de reconstrução escaneava "qual é a
+linha mais recente aceita no manifesto" para decidir a âncora — o que
+podia apontar para esse hash novo sem a série ter sido de fato
+reescrita. Corrigido: a âncora de reconstrução agora é lida
+DIRETAMENTE da própria coluna `snapshot_sha256` da série (nunca
+inferida do manifesto); um texto diferente com valores idênticos ao
+ativo gera o novo estado `observada_texto_diferente_valor_identico`
+(Alternativa B, mais simples: registra a observação com seu próprio
+snapshot imutável, nunca troca a referência ativa sem reescrever a
+série). `alterou_texto` agora compara contra o hash ATIVO, não contra
+"o snapshot precisou ser criado".
+
+**Correção 3 — verificação efetiva de hash.** `reconstruir_da_snapshot()`
+lia o conteúdo e confiava no nome do arquivo sem recalcular o SHA-256.
+Corrigido: recalcula e compara antes de usar — detecta adulteração
+mesmo quando só espaços/quebras de linha mudam (sem alterar os valores
+climáticos). `verificar_integridade_roni()` passou a confirmar o hash
+de **todos** os snapshots de aquisições aceitas no manifesto, não só o
+ativo, e valida formato de hash e caminho registrado contra a
+estrutura aprovada.
+
+**Correção 4 — unicidade e cobertura.** `parse_roni_serie_completa()`
+colapsava duplicidades idênticas (`test_a10` antigo confirmava esse
+comportamento). Corrigido: qualquer duplicidade da chave ano/temporada
+— idêntica, divergente, ou coincidente só após arredondamento —
+rejeita o documento inteiro, nunca escolhe uma linha. A política de
+"não aceitar cobertura reduzida em relação à série ativa" já existia
+em `comparar_series`/`decidir_promocao` (demonstrado por teste, não
+reimplementado) — o validador estrutural em si nunca fixa contagem de
+observações nem uma data de início hardcoded (confirmado por teste:
+aceita séries sintéticas de qualquer tamanho).
+
+**Correção 5 — imutabilidade do manifesto e recuperação.**
+`_registrar_proveniencia()` fazia upsert (apaga e reinsere) por
+`aquisicao_id` — podia alterar timestamp/resultado de uma aquisição já
+concluída. Corrigido: reprocessar o MESMO id com os MESMOS fatos é
+agora um no-op idempotente (preserva o registro original, inclusive
+seu `coletado_em_utc`, capturado no início de `processar_aquisicao`,
+nunca no instante da persistência); o mesmo id com fatos incompatíveis
+é um `ConflitoDeAquisicao` explícito. `ler_proveniencia_seguro()`
+continua detectando corrupção, mas agora NINGUÉM prossegue com uma
+escrita quando ela é detectada — `_registrar_proveniencia()` recusa
+(levanta `BaseCorrompida`) em vez de reescrever o manifesto
+descartando linhas malformadas. Nova função explícita (não automática)
+`reconstruir_serie_a_partir_do_manifesto()` para o Cenário B (série
+ausente/corrompida, manifesto+snapshot íntegros) — nunca inventa dados,
+só reaplica o validador sobre um snapshot cujo hash já foi conferido.
+Cenário C (manifesto ausente com série presente) é tratado como perda
+de evidência, nunca como primeira inicialização — `processar_aquisicao()`
+recusa explicitamente processar qualquer coisa nessa condição, e
+`reconstruir_serie_a_partir_do_manifesto()` também falha (não há
+evidência suficiente para recuperação inequívoca).
+
+**Verificação do manifesto inicial real**: as 2 linhas com o mesmo
+hash (`1297887f...`) têm `aquisicao_id` DIFERENTES
+(`20261126T194759Z` e `20261126T195819.363274Z`, ~13s de diferença) —
+evidência disponível confirma que são duas COLETAS reais distintas do
+mesmo conteúdo (a 2ª, da verificação de idempotência da Fase 2), nunca
+um reprocessamento do mesmo id. Nenhum dado foi alterado ou inventado
+para resolver essa verificação.
+
+**Testes**: suíte RONI 65 → 105 (40 novos, 5 grupos:
+`JanelaRevisaoOficialTestCase`, `AlteracoesTextuaisTestCase`,
+`VerificacaoEfetivaDeHashTestCase`, `UnicidadeECoberturaTestCase`,
+`ImutabilidadeDoManifestoTestCase`). Regressão combinada: **275/275
+OK**. `verificar_dashboard.py` sobre os dados reais commitados (sem
+rede), com e sem `--pular-continuidade-serie-subst`: **APROVADO** —
+`✅ RONI histórico: série RONI íntegra: 921 observações, DJF/1950 a
+ASO/2026`. Snapshot inicial, série e proveniência reais permanecem
+byte a byte idênticos aos da Fase 2 (hash do snapshot confirmado igual
+ao nome do arquivo; nenhum `git diff` nos 3 arquivos de dados).
+
 ## 11. Limitações conhecidas
 
+- A política de disponibilidade (Correção 1, Fase 2.2) implementa só 2
+  dos 3 níveis descritos originalmente: data informada explicitamente
+  (nunca usada em produção hoje — não há fonte real para ela) e
+  estimativa pelo calendário. Um 3º nível, "primeira observação
+  comprovada pelo sistema" (rastrear quando cada trimestre
+  individualmente apareceu pela primeira vez como novo numa aquisição
+  real), exigiria uma extensão de esquema maior (uma coluna por
+  trimestre no manifesto ou numa tabela própria) — não implementado
+  nesta fase por não ser necessário para corrigir o defeito confirmado
+  (contagem pelo mês central); fica registrado como possível refinamento
+  futuro, não como lacuna da correção atual.
 - O arquivo `RONI.ascii.txt` não se autodeclara ERSSTv6 — a versão é
   uma constante do módulo, confirmada por evidência institucional
   externa (catálogo + PNS 26-05), não extraída do conteúdo. Uma futura
