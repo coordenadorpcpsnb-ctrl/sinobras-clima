@@ -56,6 +56,10 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # tests.test_roni_historico (Fase ENSO-RONI-MIGRAÇÃO 2.1): série
+      # histórica RONI, snapshots e proveniência — fixture congelada
+      # (tests/_roni_ascii_fixture.txt), sem rede real, mesmo padrão
+      # de isolamento dos demais módulos desta lista.
       - name: Testes unitários — parsers, índices, dados ausentes, datas/trimestres
         run: |
           python -m unittest -v \
@@ -64,7 +68,8 @@ jobs:
             tests.test_fetch_fallback \
             tests.test_cobertura_temporal_precipitacao \
             tests.test_enso_integridade_fase3a \
-            tests.test_enso_integridade_fase3b0
+            tests.test_enso_integridade_fase3b0 \
+            tests.test_roni_historico
 
       - name: Sumário
         if: always()
