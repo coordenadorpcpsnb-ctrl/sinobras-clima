@@ -361,11 +361,20 @@ evidência suficiente para recuperação inequívoca).
 
 **Verificação do manifesto inicial real**: as 2 linhas com o mesmo
 hash (`1297887f...`) têm `aquisicao_id` DIFERENTES
-(`20261126T194759Z` e `20261126T195819.363274Z`, ~13s de diferença) —
-evidência disponível confirma que são duas COLETAS reais distintas do
-mesmo conteúdo (a 2ª, da verificação de idempotência da Fase 2), nunca
-um reprocessamento do mesmo id. Nenhum dado foi alterado ou inventado
-para resolver essa verificação.
+(`20261126T194759Z` e `20261126T195819.363274Z`, ~13s de diferença).
+Isso confirma apenas que o código os trata como 2 observações
+distintas, nunca fundidas e nunca um conflito (ids diferentes não
+disparam `ConflitoDeAquisicao`, que exige o MESMO id). **Correção
+(Fase 2.2A, Seção 10)**: a afirmação anterior de que isso "confirma
+duas coletas reais distintas à NOAA" foi retirada — ids diferentes com
+o mesmo hash, isoladamente, não demonstram duas consultas reais e
+independentes (poderiam, por exemplo, refletir dois ids gerados em
+sequência rápida para o mesmo conteúdo já obtido, como a verificação de
+idempotência da Fase 2). Não há nos 3 artefatos reais nenhuma evidência
+adicional (ex.: data de publicação informada por fonte externa) que
+resolva essa ambiguidade. Documentada como limitação aberta (seção 11);
+os registros e seus timestamps históricos reais permanecem exatamente
+como estão, sem alteração.
 
 **Testes**: suíte RONI 65 → 105 (40 novos, 5 grupos:
 `JanelaRevisaoOficialTestCase`, `AlteracoesTextuaisTestCase`,
@@ -378,8 +387,131 @@ ASO/2026`. Snapshot inicial, série e proveniência reais permanecem
 byte a byte idênticos aos da Fase 2 (hash do snapshot confirmado igual
 ao nome do arquivo; nenhum `git diff` nos 3 arquivos de dados).
 
+## 10.3. Fase 2.2A — consolidação: ordem de validação, fonte única da versão ativa e recuperação
+
+Atividade de **consolidação** da implementação existente (não uma nova
+fase de arquitetura) — revisão independente da Fase 2.2 confirmou as 5
+correções daquela fase como satisfatórias e pediu só a reorganização de
+`processar_aquisicao()` para fechar uma lacuna de ordem de operações,
+mais a unificação de uma regra que ainda tinha mais de uma
+implementação. Alterações localizadas em `scripts/roni_historico.py`,
+`tests/test_roni_historico.py` e este documento — nenhuma reescrita
+integral do módulo, nenhuma alteração em `scripts/update_indices.py`
+(avaliado e confirmado não indispensável — ver abaixo).
+
+**Achado real (Seção 4)**: `processar_aquisicao()` gravava a série
+normalizada (`_gravar_serie_historico`) ANTES de validar a identidade
+da aquisição (`aquisicao_id`) contra o manifesto — um conflito de
+identificador só era detectado depois que a nova série já tinha sido
+escrita. Corrigido: a identidade da aquisição e a saúde do estado já
+existente são validadas **antes** de qualquer decodificação, análise ou
+escrita. Reprocessar uma aquisição já concluída (mesmos fatos) é
+idempotente e devolve o resultado ORIGINAL sem nenhuma escrita, mesmo
+quando essa aquisição é antiga e já foi superada por uma promoção
+posterior — nesse caso, a versão ATIVA nunca é alterada ou revertida.
+Um identificador repetido com fatos incompatíveis é rejeitado antes de
+qualquer gravação.
+
+**Fonte única de verdade (Seção 5)**: nova função `_ultima_promocao_valida(prov)`
+— "a linha com `estado_promocao == 'promovida'` mais recente por
+`coletado_em_utc`" — reutilizada por `verificar_integridade_roni()`,
+`processar_aquisicao()` e `reconstruir_serie_a_partir_do_manifesto()`,
+eliminando 2 implementações divergentes da mesma regra. Corrigido um
+bug real de regressão: o cruzamento em `verificar_integridade_roni()`
+aceitava o hash ativo se ele correspondesse a **qualquer** promoção do
+histórico (`.any()`), inclusive uma já superada por uma promoção mais
+recente — agora exige correspondência exatamente com a última promoção
+válida. Reproduzido por teste dedicado
+(`test_serie_presa_numa_promocao_antiga_ja_superada_e_reprovada`) antes
+da correção.
+
+**Validação de estado pré-existente (Seção 6)**: `processar_aquisicao()`
+agora distingue, antes de preparar qualquer promoção nova: Cenário A
+(primeira inicialização — nenhuma série/manifesto, mesmo com um
+snapshot órfão sem relação alguma — tratado no Passo 3 como possível
+colisão de hash, nunca como "estado anterior inconsistente"); Cenário B
+(manifesto com promoção registrada, série ausente/vazia — nunca tratado
+como primeira aquisição, recuperação sempre explícita via
+`reconstruir_serie_a_partir_do_manifesto()`); Cenário C (série presente,
+manifesto ausente — perda de evidência, nunca inicialização); Cenários
+D/E (manifesto e série presentes, mas divergentes ou com snapshot
+corrompido — reaproveita `verificar_integridade_roni()` integralmente,
+sem duplicar a lógica de hash).
+
+**Validação estrutural mínima do manifesto (Seção 7)**: nova
+`_validar_estrutura_manifesto()`, integrada em `ler_proveniencia_seguro()`
+(logo todo chamador — leitura, escrita e recuperação — se beneficia sem
+mudança adicional): colunas obrigatórias presentes; `aquisicao_id`
+único (duplicata rejeitada mesmo quando os registros são idênticos,
+nunca escolhendo arbitrariamente uma linha); nenhum campo obrigatório
+ausente/vazio; `estado_promocao` reconhecido. "Lido sem lançar exceção"
+nunca é interpretado como "íntegro".
+
+**Ordem de persistência (Seção 8)**: confirmada e testada a ordem
+recomendada — (1) validar identidade + estado existente; (2) decidir a
+promoção; (3) persistir/verificar o snapshot; (4) registrar
+atomicamente a promoção no manifesto; (5) gerar a série normalizada,
+só se `'promovida'`; (6) verificar a consistência final antes de
+devolver sucesso. Teste dedicado simula uma interrupção real entre os
+passos 4 e 5 (`_gravar_serie_historico` falhando depois do manifesto já
+ter registrado a promoção) e confirma: a inconsistência é detectável
+por `verificar_integridade_roni()` (nunca silenciosa) e a série é
+reconstruível a partir da última promoção registrada — nunca uma
+atomicidade conjunta inventada entre os dois arquivos. Um teste
+separado confirma que uma falha ANTES do passo 4 (escrita do manifesto)
+preserva a base anterior exatamente como estava, sem ser confundida com
+uma inconsistência real.
+
+**`scripts/update_indices.py` — avaliado, nenhuma mudança necessária**:
+o ponto de integração já trata `resultado_roni['ultimo'] is None` como
+"preserva o `const RONI` já publicado, não sobrescreve" — contrato que
+cobre genericamente todos os novos estados de rejeição introduzidos
+nesta fase (`rejeitada_estado_existente_inconsistente`,
+`rejeitada_serie_ausente_com_manifesto_integro`,
+`rejeitada_manifesto_perdido`, `rejeitada_inconsistencia_pos_escrita`),
+sem precisar de nenhum caso novo. A barreira de publicação
+(`verificar_dashboard.py`, item 14) já chama
+`verificar_integridade_roni()` incondicionalmente antes de qualquer
+publicação.
+
+**Correção da Seção 10 (framing, não fato novo)**: a afirmação da Fase
+2.2 de que os 2 registros iniciais do manifesto real (mesmo hash,
+`aquisicao_id` diferentes) "confirmam duas coletas reais distintas à
+NOAA" foi **retirada** — ids diferentes com o mesmo hash, isoladamente,
+não demonstram isso (poderiam refletir, por exemplo, dois ids gerados
+em sequência rápida para o mesmo conteúdo já obtido, como a verificação
+de idempotência da própria Fase 2). Documentado como limitação aberta
+(seção 11); os 2 registros e seus timestamps históricos reais
+permanecem exatamente como estão, sem nenhuma alteração.
+
+**Testes**: suíte RONI 105 → **117** (12 novos/reescritos: expansão do
+teste de conflito de identificador com verificação completa de estado;
+`FonteUnicaDaVersaoAtivaTestCase`, 4 testes; `CenariosDeAceitacaoTestCase`,
+7 testes; reforço do teste de duplicidade de `aquisicao_id` para
+reprovação estrutural). Regressão combinada relevante:
+`tests.test_roni_historico` **117/117**, `tests.test_update_indices`
+**74/74**, `tests.test_regressao_cientifica_enso_ci` +
+`tests.test_cobertura_temporal_precipitacao` +
+`tests.test_verificar_dashboard` + `tests.test_verificar_dashboard_enso_auto`
++ `tests.test_enso_roni_fase4b1` **84/84**. `verificar_dashboard.py`
+sobre os dados reais commitados (sem rede), com e sem
+`--pular-continuidade-serie-subst`: **APROVADO** nas duas execuções —
+`✅ RONI histórico: série RONI íntegra: 921 observações, DJF/1950 a
+ASO/2026`. `data/roni_historico.csv`, `data/roni_proveniencia.csv` e o
+snapshot inicial (`1297887f...`) permanecem byte a byte idênticos — `git
+diff --name-only data/` vazio durante toda a fase.
+
 ## 11. Limitações conhecidas
 
+- **(Fase 2.2A)** Os 2 registros iniciais do manifesto real têm o
+  mesmo hash e `aquisicao_id` diferentes (~13s de diferença) — isso
+  não demonstra, por si só, duas consultas reais e independentes à
+  NOAA (poderia refletir, por exemplo, dois ids gerados em sequência
+  rápida para o mesmo conteúdo já obtido, como a verificação de
+  idempotência da própria Fase 2). Não há nos 3 artefatos reais
+  nenhuma evidência adicional que resolva essa ambiguidade. Os
+  registros e seus timestamps históricos reais permanecem exatamente
+  como estão — nunca alterados para investigar isso.
 - A política de disponibilidade (Correção 1, Fase 2.2) implementa só 2
   dos 3 níveis descritos originalmente: data informada explicitamente
   (nunca usada em produção hoje — não há fonte real para ela) e

@@ -123,6 +123,20 @@ HISTORICO_COLUNAS = [
 _ESTADOS_ACEITOS = ('promovida', 'reaproveitada_sem_mudanca',
                     'observada_texto_diferente_valor_identico')
 
+# Todo `estado_promocao` que o módulo é capaz de produzir — usado só
+# para detectar um valor NÃO reconhecido no manifesto (Seção 7), nunca
+# para inferir comportamento a partir dele.
+_ESTADOS_RECONHECIDOS = _ESTADOS_ACEITOS + (
+    'rejeitada_base_corrompida', 'rejeitada_cobertura_reduzida',
+    'rejeitada_conflito_aquisicao', 'rejeitada_estado_existente_inconsistente',
+    'rejeitada_estrutural', 'rejeitada_falha_coleta',
+    'rejeitada_inconsistencia_pos_escrita', 'rejeitada_manifesto_perdido',
+    'rejeitada_manifesto_problema', 'rejeitada_revisao_historica_inesperada',
+    'rejeitada_serie_ausente_com_manifesto_integro', 'rejeitada_snapshot_corrompido',
+)
+
+_CAMPOS_OBRIGATORIOS_PROVENIENCIA = ('aquisicao_id', 'coletado_em_utc', 'url', 'estado_promocao')
+
 
 class SerieRejeitada(Exception):
     """Uso interno — nunca propagada para fora de `processar_aquisicao()`."""
@@ -472,10 +486,9 @@ def reconstruir_serie_a_partir_do_manifesto():
         return False, avisos_leitura + ['manifesto corrompido — recuperação não é segura']
     if prov.empty:
         return False, ['manifesto ausente ou vazio — impossível reconstruir sem inventar dados']
-    promovidas = prov[prov['estado_promocao'] == 'promovida']
-    if promovidas.empty:
+    ultima = _ultima_promocao_valida(prov)
+    if ultima is None:
         return False, ['nenhuma promoção registrada no manifesto — impossível reconstruir']
-    ultima = promovidas.sort_values('coletado_em_utc').iloc[-1]
     h = ultima['hash_sha256']
     if not _hash_valido(h):
         return False, [f'hash registrado para a última promoção é inválido: {h!r}']
@@ -494,10 +507,54 @@ def reconstruir_serie_a_partir_do_manifesto():
 # ══════════════════════════════════════════════════════
 # PROVENIÊNCIA — evidência histórica imutável
 # ══════════════════════════════════════════════════════
+def _validar_estrutura_manifesto(prov):
+    """
+    Validação ESTRUTURAL mínima do manifesto (Fase 2.2A, Seção 7) —
+    "lido sem lançar exceção" nunca é interpretado como "íntegro".
+    Confirma: colunas obrigatórias presentes; `aquisicao_id` único
+    (duplicata é rejeitada MESMO quando os registros são idênticos —
+    nunca escolhe arbitrariamente a primeira ou a última linha; isso só
+    pode ter sido produzido por edição externa, já que o fluxo normal
+    de `_registrar_proveniencia` trata id repetido como no-op/conflito
+    ANTES de escrever); nenhum campo obrigatório ausente/vazio;
+    `estado_promocao` reconhecido.
+
+    Retorna lista de problemas (vazia == estrutura válida). Não
+    reverifica hash/caminho de snapshot aqui — isso é
+    `verificar_integridade_roni()`, para não duplicar essa lógica.
+    """
+    if prov is None or prov.empty:
+        return []
+
+    faltantes = [c for c in PROVENIENCIA_COLUNAS if c not in prov.columns]
+    if faltantes:
+        return [f'manifesto sem a(s) coluna(s) obrigatória(s): {faltantes}']
+
+    problemas = []
+    duplicados = sorted(prov['aquisicao_id'][prov['aquisicao_id'].duplicated()].unique().tolist())
+    if duplicados:
+        problemas.append(f'aquisicao_id duplicado no manifesto (mesmo id em mais de uma linha, '
+                          f'rejeitado mesmo se os registros forem idênticos): {duplicados}')
+
+    for campo in _CAMPOS_OBRIGATORIOS_PROVENIENCIA:
+        vazios = prov[prov[campo].isna() | (prov[campo].astype(str).str.strip() == '')]
+        if not vazios.empty:
+            problemas.append(f"campo obrigatório {campo!r} ausente/vazio em {len(vazios)} "
+                              f"linha(s) do manifesto")
+
+    desconhecidos = sorted(set(prov['estado_promocao'].astype(str).unique())
+                            - set(_ESTADOS_RECONHECIDOS))
+    if desconhecidos:
+        problemas.append(f'estado_promocao não reconhecido no manifesto: {desconhecidos}')
+
+    return problemas
+
+
 def ler_proveniencia_seguro():
     """Lê `roni_proveniencia.csv`. Retorna (df, avisos) — `avisos`
     NUNCA vazio quando alguma linha teve que ser descartada por
-    corrupção estrutural (nunca silenciosamente ignorado pelo
+    corrupção estrutural OU quando a estrutura do manifesto falha a
+    validação mínima da Seção 7 (nunca silenciosamente ignorado pelo
     chamador: tanto `_registrar_proveniencia` quanto
     `verificar_integridade_roni` tratam `avisos` não-vazio como falha
     explícita, nunca como mero aviso informativo — Fase 2.2, Correção
@@ -505,12 +562,34 @@ def ler_proveniencia_seguro():
     if not PROVENIENCIA_PATH.exists():
         return pd.DataFrame(columns=PROVENIENCIA_COLUNAS), []
     try:
-        return pd.read_csv(PROVENIENCIA_PATH), []
+        df = pd.read_csv(PROVENIENCIA_PATH)
+        avisos = []
     except Exception:
         df = pd.read_csv(PROVENIENCIA_PATH, engine='python', on_bad_lines='skip')
-        return df, ['roni_proveniencia.csv continha linha(s) malformada(s) (possível '
-                    'interrupção durante gravação anterior) — descartada(s) apenas nesta '
-                    'leitura diagnóstica, NUNCA reescritas no arquivo']
+        avisos = ['roni_proveniencia.csv continha linha(s) malformada(s) (possível '
+                  'interrupção durante gravação anterior) — descartada(s) apenas nesta '
+                  'leitura diagnóstica, NUNCA reescritas no arquivo']
+    return df, avisos + _validar_estrutura_manifesto(df)
+
+
+def _ultima_promocao_valida(prov):
+    """Fonte de verdade ÚNICA para "qual é a versão ativa, segundo o
+    manifesto" (Fase 2.2A, Seção 5) — reutilizada por
+    `verificar_integridade_roni()`, `processar_aquisicao()` e
+    `reconstruir_serie_a_partir_do_manifesto()`, para nunca ter 3
+    implementações independentes da mesma regra. Ordem inequívoca e
+    documentada: entre as linhas com `estado_promocao == 'promovida'`
+    (o único evento que de fato reescreve `roni_historico.csv` — uma
+    observação textual sem mudança de valor ou uma aquisição rejeitada
+    NUNCA contam, mesmo que aceitas), a mais recente por
+    `coletado_em_utc`. Retorna a linha (Series do pandas) ou `None` se
+    não houver nenhuma promoção."""
+    if prov is None or prov.empty:
+        return None
+    promovidas = prov[prov['estado_promocao'] == 'promovida']
+    if promovidas.empty:
+        return None
+    return promovidas.sort_values('coletado_em_utc').iloc[-1]
 
 
 def _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, primeiro, ultimo,
@@ -787,14 +866,25 @@ def verificar_integridade_roni():
     if not ok_recon:
         return False, msgs or ['série ativa não corresponde ao seu próprio snapshot referenciado']
 
+    # Fase 2.2A, Seção 5: a série ativa precisa corresponder
+    # EXATAMENTE à última promoção válida (ordem inequívoca por
+    # `coletado_em_utc`, via `_ultima_promocao_valida` — a mesma função
+    # usada por `processar_aquisicao()`/`reconstruir_serie_a_partir_
+    # do_manifesto()`) — nunca "existe alguma promoção com esse hash em
+    # algum ponto do histórico", que aceitaria incorretamente uma série
+    # presa numa promoção antiga já superada.
     hash_ativo = df['snapshot_sha256'].iloc[-1]
-    tem_promocao = (not prov.empty) and (
-        (prov['estado_promocao'] == 'promovida') & (prov['hash_sha256'] == hash_ativo)
-    ).any()
-    if not tem_promocao:
+    ultima_promocao = _ultima_promocao_valida(prov)
+    if ultima_promocao is None:
         return False, msgs + [f'série ativa referencia o snapshot {hash_ativo}, mas o manifesto '
-                               f'não registra nenhuma promoção com esse hash — possível '
-                               f'interrupção entre a gravação da série e do manifesto']
+                               f'não registra nenhuma promoção — possível interrupção entre a '
+                               f'gravação da série e do manifesto, ou manifesto perdido']
+    if ultima_promocao['hash_sha256'] != hash_ativo:
+        return False, msgs + [f'série ativa referencia o snapshot {hash_ativo}, mas a última '
+                               f'promoção válida do manifesto aponta para '
+                               f'{ultima_promocao["hash_sha256"]!r} — possível interrupção entre '
+                               f'a gravação da série e do manifesto, ou série presa numa '
+                               f'promoção já superada']
 
     primeiro = df.sort_values('mes_central').iloc[0]
     ultimo_real = ultimo_da_serie_ativa()
@@ -815,6 +905,23 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
     promoção, grava snapshot/manifesto/série quando aplicável, e
     devolve o trimestre mais recente da série EFETIVAMENTE ativa após
     esta execução — o mesmo valor que deve alimentar `const RONI`.
+
+    Ordem (Fase 2.2A, Seção 8 — nunca grava nada antes de validar):
+      1. Identidade da aquisição (`aquisicao_id`) E saúde do estado já
+         existente, ambas ANTES de decodificar/analisar o conteúdo
+         novo. Um `aquisicao_id` repetido com os MESMOS fatos
+         (url+hash) é reprocessamento idempotente — devolve o
+         resultado ORIGINAL sem nenhuma escrita; com fatos
+         incompatíveis, é conflito explícito, também sem nenhuma
+         escrita (achado real da Fase 2.2A, Seção 4: a ordem antiga
+         gravava a série ANTES de detectar o conflito).
+      2. Validar/decidir a promoção sobre o conteúdo novo.
+      3. Persistir o snapshot (imutável, verificado).
+      4. Registrar atomicamente a promoção no manifesto.
+      5. Gerar a série normalizada, só se `estado == 'promovida'`.
+      6. Verificar a consistência final antes de devolver sucesso —
+         nunca entrega ao chamador (e ao card) um valor que a própria
+         verificação de integridade reprovaria.
 
     `datas_publicacao_informadas`: ver `_referencia_disponibilidade` —
     opcional, só repassado por um chamador que já comprovou uma data de
@@ -841,118 +948,152 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
             return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_falha_coleta',
                     'avisos': [f'falha ao buscar {url}: {e}'], 'aquisicao_id': aquisicao_id}
 
+    hash_sha256 = calcular_hash(conteudo_bytes)
+
+    # Passo 1a: identidade da aquisição — ANTES de qualquer análise ou
+    # gravação (Seção 4). O manifesto precisa estar legível para isso;
+    # se não estiver, nada mais é tentado.
+    prov, avisos_manifesto_leitura = ler_proveniencia_seguro()
+    if avisos_manifesto_leitura:
+        return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_problema',
+                'avisos': avisos_manifesto_leitura, 'aquisicao_id': aquisicao_id}
+
+    if not prov.empty:
+        ja_existe = prov[prov['aquisicao_id'] == aquisicao_id]
+        if not ja_existe.empty:
+            existente = ja_existe.iloc[0]
+            if str(existente['url']) == str(url) and str(existente['hash_sha256']) == str(hash_sha256):
+                # Reprocessamento idempotente de uma aquisição já
+                # CONCLUÍDA: devolve o resultado ORIGINAL, sem
+                # reclassificar como conflito só porque a base já a
+                # incorporou, e sem nenhuma escrita. Se for antiga (já
+                # superada por uma promoção posterior), 'ultimo' é a
+                # série ATUALMENTE ativa — nunca restaura uma versão
+                # anterior nem altera a versão ativa.
+                return {'ultimo': ultimo_da_serie_ativa(),
+                        'estado_promocao': existente['estado_promocao'],
+                        'avisos': [], 'aquisicao_id': aquisicao_id}
+            return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_conflito_aquisicao',
+                    'avisos': [f'aquisicao_id {aquisicao_id!r} já registrado com url/hash '
+                               f'incompatíveis — registro original preservado, nenhuma escrita '
+                               f'realizada por esta tentativa'],
+                    'aquisicao_id': aquisicao_id}
+
+    # Passo 1b (Seção 6): saúde do estado JÁ EXISTENTE, independente do
+    # conteúdo desta aquisição — nunca usa uma base já inconsistente
+    # como referência de comparação nem promove por cima dela. Cada
+    # cenário (B/C/D/E) tem seu próprio rótulo, nunca um genérico só —
+    # um snapshot órfão sem manifesto nem série (sem nenhuma promoção
+    # jamais concluída) não é "estado inconsistente": é só uma possível
+    # colisão de hash desta própria aquisição, tratada no Passo 3.
+    try:
+        antiga_df = _ler_serie_persistida()
+    except BaseCorrompida as e:
+        return {'ultimo': None, 'estado_promocao': 'rejeitada_base_corrompida',
+                'avisos': [str(e)], 'aquisicao_id': aquisicao_id}
+
+    serie_existe = antiga_df is not None and not antiga_df.empty
+
+    # Cenário C: série presente mas manifesto ausente — nunca
+    # confundido com primeira inicialização (os dois sempre nascem
+    # juntos na primeira promoção).
+    if serie_existe and not PROVENIENCIA_PATH.exists():
+        return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_perdido',
+                'avisos': ['data/roni_historico.csv existe mas data/roni_proveniencia.csv '
+                           'está ausente — evidência de aquisições anteriores foi perdida; '
+                           'nunca reinicializado silenciosamente como se fosse a primeira '
+                           'aquisição; use reconstruir_serie_a_partir_do_manifesto() só se o '
+                           'manifesto for recuperado por outro meio'],
+                'aquisicao_id': aquisicao_id}
+
+    # Cenário B: manifesto já com promoção registrada, mas série
+    # normalizada ausente/vazia — nunca tratado como primeira
+    # aquisição (perderia o histórico já promovido); a recuperação é
+    # sempre explícita (reconstruir_serie_a_partir_do_manifesto()),
+    # nunca automática dentro desta função.
+    if not serie_existe and PROVENIENCIA_PATH.exists() and _ultima_promocao_valida(prov) is not None:
+        return {'ultimo': None, 'estado_promocao': 'rejeitada_serie_ausente_com_manifesto_integro',
+                'avisos': ['data/roni_historico.csv ausente/vazio mas o manifesto já registra '
+                           'promoção(ões) anteriores — nunca tratado como primeira aquisição; '
+                           'use reconstruir_serie_a_partir_do_manifesto() explicitamente'],
+                'aquisicao_id': aquisicao_id}
+
+    # Cenários D/E: com manifesto e série ambos presentes, confirma que
+    # continuam íntegros e correspondentes ANTES de preparar esta
+    # promoção — reaproveita a verificação completa já existente, sem
+    # reimplementar a lógica de hash/correspondência aqui.
+    if serie_existe and PROVENIENCIA_PATH.exists():
+        ok_estado, avisos_estado = verificar_integridade_roni()
+        if not ok_estado:
+            return {'ultimo': None, 'estado_promocao': 'rejeitada_estado_existente_inconsistente',
+                    'avisos': avisos_estado, 'aquisicao_id': aquisicao_id}
+
     try:
         texto = conteudo_bytes.decode('utf-8')
     except UnicodeDecodeError:
-        try:
-            _registrar_proveniencia(aquisicao_id, coletado_em_utc, url,
-                                     calcular_hash(conteudo_bytes), None, None, None,
-                                     'rejeitada_estrutural', 'conteúdo não é UTF-8 válido',
-                                     alterou_texto=None, alterou_valores=None)
-        except (BaseCorrompida, ConflitoDeAquisicao) as e:
-            return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_problema',
-                    'avisos': [str(e)], 'aquisicao_id': aquisicao_id}
+        _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, None, None, None,
+                                 'rejeitada_estrutural', 'conteúdo não é UTF-8 válido',
+                                 alterou_texto=None, alterou_valores=None)
         return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_estrutural',
                 'avisos': ['conteúdo não é UTF-8 válido — documento rejeitado'],
                 'aquisicao_id': aquisicao_id}
 
     lista, avisos = parse_roni_serie_completa(texto)
-    hash_sha256 = calcular_hash(conteudo_bytes)
 
     if lista is None:
-        try:
-            _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, None, None,
-                                     None, 'rejeitada_estrutural', '; '.join(avisos),
-                                     alterou_texto=None, alterou_valores=None)
-        except (BaseCorrompida, ConflitoDeAquisicao) as e:
-            return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_problema',
-                    'avisos': avisos + [str(e)], 'aquisicao_id': aquisicao_id}
+        _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, None, None,
+                                 None, 'rejeitada_estrutural', '; '.join(avisos),
+                                 alterou_texto=None, alterou_valores=None)
         return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_estrutural',
                 'avisos': avisos, 'aquisicao_id': aquisicao_id}
 
-    try:
-        antiga_df = _ler_serie_persistida()
-    except BaseCorrompida as e:
-        try:
-            _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, lista[0],
-                                     lista[-1], len(lista), 'rejeitada_base_corrompida', str(e),
-                                     alterou_texto=None, alterou_valores=None)
-        except (BaseCorrompida, ConflitoDeAquisicao):
-            pass  # a base já corrompida é o problema primário a reportar
-        return {'ultimo': None, 'estado_promocao': 'rejeitada_base_corrompida',
-                'avisos': avisos + [str(e)], 'aquisicao_id': aquisicao_id}
-
-    # Fase 2.2, Correção 5 (Cenário C): a série se lê normalmente (não é
-    # o caso de BaseCorrompida acima) e tem conteúdo real, mas NENHUM
-    # manifesto existe — isso só ocorre se o manifesto existiu e foi
-    # perdido (os dois são sempre criados juntos na primeira promoção).
-    # Nunca tratado como primeira aquisição; nada é escrito.
-    if antiga_df is not None and not antiga_df.empty and not PROVENIENCIA_PATH.exists():
-        return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_perdido',
-                'avisos': avisos + ['data/roni_historico.csv existe mas data/roni_proveniencia.csv '
-                                     'está ausente — evidência de aquisições anteriores foi '
-                                     'perdida; nunca reinicializado silenciosamente como se fosse '
-                                     'a primeira aquisição; ver '
-                                     'reconstruir_serie_a_partir_do_manifesto() só se o manifesto '
-                                     'for recuperado por outro meio'],
-                'aquisicao_id': aquisicao_id}
-
+    # `antiga_df` já foi lida e confirmada saudável no Passo 1b — nunca
+    # relida aqui (conteúdo não muda entre os dois pontos dentro desta
+    # mesma chamada).
     comparacao = comparar_series(antiga_df, lista)
     estado, motivo = decidir_promocao(comparacao, hoje, datas_publicacao_informadas)
 
-    # Snapshot sempre gravado/reaproveitado — preserva a evidência
+    # Passo 3: persistir e verificar o snapshot — preserva a evidência
     # recebida de forma identificável mesmo em rejeição, nunca só
-    # quando promovida.
+    # quando promovida. `gravar_snapshot` já confere byte a byte quando
+    # reaproveita um arquivo existente; a escrita de um arquivo novo é
+    # atômica (tmp + replace).
     try:
-        status_snapshot = gravar_snapshot(hash_sha256, conteudo_bytes)
+        gravar_snapshot(hash_sha256, conteudo_bytes)
     except SerieRejeitada as e:
-        try:
-            _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, lista[0],
-                                     lista[-1], len(lista), 'rejeitada_snapshot_corrompido', str(e),
-                                     alterou_texto=None, alterou_valores=None)
-        except (BaseCorrompida, ConflitoDeAquisicao):
-            pass
+        _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, lista[0],
+                                 lista[-1], len(lista), 'rejeitada_snapshot_corrompido', str(e),
+                                 alterou_texto=None, alterou_valores=None)
         return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_snapshot_corrompido',
                 'avisos': avisos + [str(e)], 'aquisicao_id': aquisicao_id}
 
+    # Fonte de verdade ÚNICA para "qual é o hash ativo segundo o
+    # manifesto" (Seção 5) — `_ultima_promocao_valida`, a mesma função
+    # usada por `verificar_integridade_roni()` e
+    # `reconstruir_serie_a_partir_do_manifesto()`. `prov` já foi lido no
+    # Passo 1a — ainda válido aqui, nada escreveu no manifesto desde
+    # então.
+    ultima_promocao_antes = _ultima_promocao_valida(prov)
+    hash_ativo_atual = ultima_promocao_antes['hash_sha256'] if ultima_promocao_antes is not None else None
+
     # Fase 2.2, Correção 2: "nada mudou" pode significar duas coisas
-    # bem diferentes — mesmo hash reobservado (nada de novo, nem
-    # textual) vs. hash NOVO (texto diferente) cujos valores batem com
-    # a série já ativa. O segundo caso nunca deve se tornar a nova
-    # âncora de reconstrução sem de fato reescrever a série — optamos
-    # pela Alternativa B (mais simples): registrar a observação com seu
-    # próprio snapshot imutável, sem trocar a referência ativa.
-    hash_ativo_atual = (antiga_df['snapshot_sha256'].iloc[-1]
-                        if antiga_df is not None and not antiga_df.empty else None)
+    # bem diferentes — mesmo hash reobservado vs. hash NOVO (texto
+    # diferente) cujos valores batem com a série já ativa. O segundo
+    # caso nunca deve se tornar a nova âncora sem reescrever a série de
+    # fato — Alternativa B: registra a observação com seu próprio
+    # snapshot imutável, sem trocar a referência ativa.
     if estado == 'reaproveitada_sem_mudanca' and hash_ativo_atual is not None \
             and hash_sha256 != hash_ativo_atual:
         estado = 'observada_texto_diferente_valor_identico'
 
-    # `alterou_texto` representa diferença em relação à versão de
-    # COMPARAÇÃO (o hash ativo da série), nunca apenas "o arquivo de
-    # snapshot precisou ser criado" (Fase 2.2, Correção 2) — os dois só
-    # coincidem quando a série ainda não existe.
     alterou_texto = (hash_sha256 != hash_ativo_atual)
     alterou_valores = bool(comparacao['valores_revisados']) or bool(comparacao['trimestres_novos'])
-
-    # Confirma a legibilidade do manifesto ANTES de gravar a série —
-    # nunca reescreve `roni_historico.csv` e só depois descobre que o
-    # manifesto estava corrompido (isso deixaria a série promovida sem
-    # o registro correspondente, exatamente a inconsistência que o
-    # Cenário F detecta depois). Preserva tudo exatamente como está.
-    if PROVENIENCIA_PATH.exists():
-        _, avisos_manifesto = ler_proveniencia_seguro()
-        if avisos_manifesto:
-            return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_problema',
-                    'avisos': avisos + avisos_manifesto, 'aquisicao_id': aquisicao_id}
 
     for d in lista:
         d['versao_metodologica'] = VERSAO_METODOLOGICA
         d['snapshot_sha256'] = hash_sha256
 
-    if estado == 'promovida':
-        _gravar_serie_historico(lista)
-
+    # Passo 4: registrar atomicamente a promoção no manifesto.
     try:
         _registrar_proveniencia(aquisicao_id, coletado_em_utc, url, hash_sha256, lista[0],
                                  lista[-1], len(lista), estado, motivo, alterou_texto, alterou_valores)
@@ -962,6 +1103,22 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
     except BaseCorrompida as e:
         return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_manifesto_problema',
                 'avisos': avisos + [str(e)], 'aquisicao_id': aquisicao_id}
+
+    # Passo 5: gerar a série normalizada — só depois do manifesto já
+    # registrar a promoção (nunca antes: Seção 4). Se houver
+    # interrupção exatamente aqui, o Cenário F já é detectável por
+    # `verificar_integridade_roni()`/`reconstruir_serie_a_partir_do_
+    # manifesto()` na próxima execução.
+    if estado == 'promovida':
+        _gravar_serie_historico(lista)
+
+        # Passo 6: verificar a consistência final antes de devolver
+        # sucesso — nunca entrega um valor que a própria verificação de
+        # integridade reprovaria.
+        ok_final, avisos_final = serie_ativa_corresponde_ao_snapshot()
+        if not ok_final:
+            return {'ultimo': None, 'estado_promocao': 'rejeitada_inconsistencia_pos_escrita',
+                    'avisos': avisos + avisos_final, 'aquisicao_id': aquisicao_id}
 
     return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': estado,
             'avisos': avisos, 'aquisicao_id': aquisicao_id}
