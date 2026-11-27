@@ -17,6 +17,8 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts'))
 import roni_historico as rh  # noqa: E402
 
@@ -429,6 +431,33 @@ class PersistenciaERecuperacaoTestCase(IsolamentoMixin, unittest.TestCase):
         self.assertEqual(r['estado_promocao'], 'rejeitada_estrutural')
         self.assertFalse(rh.HISTORICO_PATH.exists())
 
+    _CSV_CORROMPIDO = (
+        'temporada,ano,mes_inicial,mes_central,mes_final,valor,versao_metodologica,snapshot_sha256\n'
+        'DJF,2025,2024-12,2025-01,2025-02,0.1,ERSSTv6,abc\n'
+        'JFM,2025,2025-01,2025-02,2025-03,0.2,ERSSTv6,abc,CAMPO,EXTRA\n'  # linhas com nº de campos divergente
+    )
+
+    def test_d7_base_corrompida_nunca_e_confundida_com_ausente(self):
+        # Simula roni_historico.csv EXISTENTE mas corrompido (linhas com
+        # número de campos divergente — nunca o mesmo caso de "primeira
+        # aquisição, arquivo nunca existiu").
+        rh.HISTORICO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        rh.HISTORICO_PATH.write_text(self._CSV_CORROMPIDO, encoding='utf-8')
+        r = rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                    hoje=date(2026, 1, 15))
+        self.assertEqual(r['estado_promocao'], 'rejeitada_base_corrompida')
+        self.assertIsNone(r['ultimo'])
+        # A base corrompida NUNCA é silenciosamente sobrescrita por uma
+        # nova inicialização — o conteúdo corrompido original permanece.
+        self.assertEqual(rh.HISTORICO_PATH.read_text(encoding='utf-8'), self._CSV_CORROMPIDO)
+
+    def test_d8_serie_ativa_corresponde_ao_snapshot_reporta_base_corrompida(self):
+        rh.HISTORICO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        rh.HISTORICO_PATH.write_text(self._CSV_CORROMPIDO, encoding='utf-8')
+        ok, avisos = rh.serie_ativa_corresponde_ao_snapshot()
+        self.assertFalse(ok)
+        self.assertTrue(avisos)
+
     def test_d6_nenhum_arquivo_temporario_apos_fluxo_completo(self):
         rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
                                 hoje=date(2026, 1, 15))
@@ -466,17 +495,111 @@ class CompatibilidadeTestCase(IsolamentoMixin, unittest.TestCase):
         self.assertIsNone(r['ultimo'])
 
     def test_e5_modulo_nunca_referencia_dashboard_html(self):
-        # O módulo pode MENCIONAR 'const RONI' em prosa (explicando que
-        # alimenta esse card), mas nunca abre/edita docs/index.html nem
-        # referencia a variável DASHBOARD usada em update_indices.py.
+        # O módulo pode MENCIONAR docs/index.html ou 'const RONI' em
+        # prosa (explicando por que nunca compara contra eles), mas
+        # nunca importa/usa a variável DASHBOARD (o Path real do HTML
+        # em update_indices.py/verificar_dashboard.py) nem abre esse
+        # arquivo para leitura/escrita.
         texto_modulo = Path(rh.__file__).read_text(encoding='utf-8')
-        self.assertNotIn('index.html', texto_modulo)
-        self.assertNotIn('DASHBOARD', texto_modulo)
+        self.assertNotIn('DASHBOARD =', texto_modulo)
+        self.assertNotIn('DASHBOARD.read', texto_modulo)
+        self.assertNotIn('DASHBOARD.write', texto_modulo)
 
     def test_e6_modulo_nunca_referencia_modelos_cientificos(self):
         texto_modulo = Path(rh.__file__).read_text(encoding='utf-8')
         for termo in ('SARIMAX', 'XGBoost', 'n34_l23', 'tsa_l23', 'pdo_l23', 'CAD', 'ETP'):
             self.assertNotIn(termo, texto_modulo)
+
+
+# ══════════════════════════════════════════════════════
+# verificar_integridade_roni() — verificação somente leitura
+# ══════════════════════════════════════════════════════
+class VerificarIntegridadeRoniTestCase(IsolamentoMixin, unittest.TestCase):
+
+    def test_nenhum_artefato_nao_e_falha(self):
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertTrue(ok)
+        self.assertTrue(msgs)
+
+    def test_estado_valido_apos_promocao(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertTrue(ok, msgs)
+
+    def test_snapshot_ausente_reprovado(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        for f in rh.SNAPSHOTS_DIR.glob('*.txt'):
+            f.unlink()
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok)
+        self.assertTrue(msgs)
+
+    def test_hash_divergente_conteudo_do_snapshot_alterado(self):
+        conteudo = _serie_sintetica(SERIE_BASE).encode('utf-8')
+        hash_ = rh.calcular_hash(conteudo)
+        rh.processar_aquisicao(conteudo_bytes=conteudo, hoje=date(2026, 1, 15))
+        # Adultera o CONTEÚDO do arquivo de snapshot sem renomeá-lo —
+        # o nome ainda diz `hash_`, mas o conteúdo não bate mais.
+        rh.caminho_snapshot(hash_).write_bytes(_serie_sintetica(SERIE_BASE[:-1]).encode('utf-8'))
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+
+    def test_manifesto_ausente_reprovado(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        rh.PROVENIENCIA_PATH.unlink()
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok)
+        self.assertIn('nenhuma aquisição promovida', ' '.join(msgs))
+
+    def test_serie_adulterada_valor_alterado_reprovada(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        df = rh._ler_serie_persistida()
+        df.loc[df.index[-1], 'valor'] = 99.0  # adulteração direta, fora do pipeline
+        df.to_csv(rh.HISTORICO_PATH, index=False)
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+
+    def test_serie_adulterada_duplicidade_reprovada(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        df = rh._ler_serie_persistida()
+        duplicada = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+        duplicada.to_csv(rh.HISTORICO_PATH, index=False)
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+
+    def test_serie_adulterada_lacuna_interna_reprovada(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        df = rh._ler_serie_persistida()
+        reduzida = df.drop(df.index[5]).reset_index(drop=True)  # remove um trimestre do meio
+        reduzida.to_csv(rh.HISTORICO_PATH, index=False)
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok, msgs)
+
+    def test_base_corrompida_reprovada_explicitamente(self):
+        rh.HISTORICO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        rh.HISTORICO_PATH.write_text(PersistenciaERecuperacaoTestCase._CSV_CORROMPIDO,
+                                      encoding='utf-8')
+        ok, msgs = rh.verificar_integridade_roni()
+        self.assertFalse(ok)
+        self.assertTrue(msgs)
+
+    def test_preservacao_dos_arquivos_durante_a_verificacao(self):
+        rh.processar_aquisicao(conteudo_bytes=_serie_sintetica(SERIE_BASE).encode('utf-8'),
+                                hoje=date(2026, 1, 15))
+        hash_historico_antes = rh.calcular_hash(rh.HISTORICO_PATH.read_bytes())
+        hash_prov_antes = rh.calcular_hash(rh.PROVENIENCIA_PATH.read_bytes())
+        n_snapshots_antes = len(list(rh.SNAPSHOTS_DIR.glob('*.txt')))
+        for _ in range(3):
+            rh.verificar_integridade_roni()
+        self.assertEqual(hash_historico_antes, rh.calcular_hash(rh.HISTORICO_PATH.read_bytes()))
+        self.assertEqual(hash_prov_antes, rh.calcular_hash(rh.PROVENIENCIA_PATH.read_bytes()))
+        self.assertEqual(n_snapshots_antes, len(list(rh.SNAPSHOTS_DIR.glob('*.txt'))))
 
 
 if __name__ == '__main__':

@@ -113,6 +113,18 @@ class SerieRejeitada(Exception):
     """Uso interno — nunca propagada para fora de `processar_aquisicao()`."""
 
 
+class BaseCorrompida(Exception):
+    """Levantada por `_ler_serie_persistida()` quando `roni_historico.csv`
+    EXISTE mas não pôde ser lido/interpretado — nunca confundida com
+    "ainda não existe" (Fase ENSO-RONI-MIGRAÇÃO 2.1, achado da revisão
+    direcionada: tratar os dois casos como a mesma coisa permitiria
+    reinicializar silenciosamente sobre uma base corrompida, descartando
+    a evidência de que havia algo ali antes). Convertida por
+    `processar_aquisicao()` num estado de rejeição explícito
+    (`rejeitada_base_corrompida`) — nunca propagada ao chamador externo,
+    e nunca tratada como "nada a comparar, segue em frente"."""
+
+
 # ══════════════════════════════════════════════════════
 # AQUISIÇÃO (bytes brutos — nunca a via decode(errors='replace') do
 # fetch() legado de update_indices.py, que perderia a fidelidade dos
@@ -296,9 +308,15 @@ def reconstruir_da_snapshot(hash_sha256):
 # SÉRIE NORMALIZADA (produto derivado do snapshot promovido)
 # ══════════════════════════════════════════════════════
 def _ler_serie_persistida():
+    """`None` = legitimamente ainda não existe (primeira aquisição).
+    Lança `BaseCorrompida` se o arquivo EXISTE mas não pôde ser lido —
+    nunca devolve `None` nesse caso (ver docstring de `BaseCorrompida`)."""
     if not HISTORICO_PATH.exists():
         return None
-    return pd.read_csv(HISTORICO_PATH, dtype={'temporada': str})
+    try:
+        return pd.read_csv(HISTORICO_PATH, dtype={'temporada': str})
+    except Exception as e:
+        raise BaseCorrompida(f'{HISTORICO_PATH} existe mas não pôde ser lido: {e}')
 
 
 def _serie_para_dataframe(lista):
@@ -320,8 +338,14 @@ def _gravar_serie_historico(lista):
 def ultimo_da_serie_ativa():
     """Último trimestre da série ATIVA (persistida) — é este valor,
     nunca um recém-buscado e ainda não promovido, que deve alimentar o
-    card RONI do dashboard."""
-    df = _ler_serie_persistida()
+    card RONI do dashboard. Base corrompida devolve `None` aqui (não há
+    valor confiável a entregar) — mas quem orquestra a aquisição
+    (`processar_aquisicao`) registra essa condição separadamente como
+    `rejeitada_base_corrompida`, nunca como "nenhuma série ainda"."""
+    try:
+        df = _ler_serie_persistida()
+    except BaseCorrompida:
+        return None
     if df is None or df.empty:
         return None
     r = df.sort_values('mes_central').iloc[-1]
@@ -334,7 +358,10 @@ def serie_ativa_corresponde_ao_snapshot():
     aquisição PROMOVIDA registrada no manifesto. Garante que a série
     normalizada nunca é um produto que só existe 'no papel', divorciado
     do snapshot que a gerou."""
-    df_ativa = _ler_serie_persistida()
+    try:
+        df_ativa = _ler_serie_persistida()
+    except BaseCorrompida as e:
+        return False, [str(e)]
     if df_ativa is None or df_ativa.empty:
         return True, []
     prov, avisos_leitura = ler_proveniencia_seguro()
@@ -478,6 +505,88 @@ def decidir_promocao(comparacao, hoje):
 
 
 # ══════════════════════════════════════════════════════
+# VERIFICAÇÃO SOMENTE LEITURA (usada por verificar_dashboard.py)
+# ══════════════════════════════════════════════════════
+def verificar_integridade_roni():
+    """
+    Verificação ESTRITAMENTE DE LEITURA dos 3 artefatos RONI — nunca
+    consulta a NOAA, nunca grava, recupera ou recalibra nada; nunca
+    reimplementa o parser (delega inteiramente a
+    `serie_ativa_corresponde_ao_snapshot`/`reconstruir_da_snapshot`/
+    `ultimo_da_lista`, já existentes). Usada por
+    `scripts/verificar_dashboard.py` como barreira antes de publicar —
+    nunca compara o valor persistido aqui contra `docs/index.html`
+    (`const RONI` pode legitimamente estar atrás da série mais recente
+    por defasagem normal de publicação; essa comparação não é
+    objetivo desta função).
+
+    Confirma: (1) existência dos artefatos (ausência total = "nada a
+    verificar ainda", não falha — a migração pode estar em curso);
+    (2) se a série existe, é consistente com o manifesto e com os
+    snapshots existindo; (3) manifesto legível; (4) série normalizada
+    corresponde integralmente ao snapshot da última aquisição
+    promovida/reaproveitada; (5) ausência de duplicidade/lacuna
+    interna (reaplicando o validador estrito sobre o PRÓPRIO snapshot
+    ativo); (6) o último registro é identificado corretamente.
+
+    Retorna (ok: bool, mensagens: [str]) — nunca lança, nunca modifica
+    nenhum arquivo em disco.
+    """
+    msgs = []
+    algum_artefato = (HISTORICO_PATH.exists() or PROVENIENCIA_PATH.exists()
+                       or (SNAPSHOTS_DIR.exists() and any(SNAPSHOTS_DIR.iterdir())))
+    if not algum_artefato:
+        return True, ['artefatos RONI (histórico/proveniência/snapshots) ainda não '
+                       'inicializados — nada a verificar nesta execução']
+
+    try:
+        df = _ler_serie_persistida()
+    except BaseCorrompida as e:
+        return False, [str(e)]
+
+    if df is None or df.empty:
+        if PROVENIENCIA_PATH.exists() or (SNAPSHOTS_DIR.exists() and any(SNAPSHOTS_DIR.iterdir())):
+            return False, ['data/roni_historico.csv ausente/vazio, mas já há manifesto e/ou '
+                            'snapshot registrado — estado inconsistente']
+        return True, ['série histórica RONI ainda vazia — nada a verificar']
+
+    ok_recon, avisos_recon = serie_ativa_corresponde_ao_snapshot()
+    msgs.extend(avisos_recon)
+    if not ok_recon:
+        return False, msgs or ['série ativa não corresponde ao snapshot da última aquisição '
+                                'promovida/reaproveitada']
+
+    prov, avisos_leitura = ler_proveniencia_seguro()
+    msgs.extend(avisos_leitura)
+    validas = prov[prov['estado_promocao'].isin(['promovida', 'reaproveitada_sem_mudanca'])] \
+        if not prov.empty else prov
+    if validas.empty:
+        return False, msgs + ['nenhuma aquisição promovida/reaproveitada no manifesto, mas a '
+                               'série ativa existe']
+    ultima = validas.sort_values('coletado_em_utc').iloc[-1]
+
+    # Unicidade e continuidade: reaplica o validador estrito sobre o
+    # PRÓPRIO snapshot ativo (nunca sobre dados novos) — qualquer
+    # duplicata/lacuna já teria reprovado a promoção original, mas
+    # confirma que o conteúdo persistido não foi corrompido depois.
+    lista_recon, avisos_parse = reconstruir_da_snapshot(ultima['hash_sha256'])
+    msgs.extend(avisos_parse)
+    if lista_recon is None:
+        return False, msgs
+
+    ultimo_esperado = ultimo_da_lista(lista_recon)
+    ultimo_real = ultimo_da_serie_ativa()
+    if ultimo_real != ultimo_esperado:
+        return False, msgs + [f'último registro da série ativa ({ultimo_real}) diverge do '
+                               f'último registro reconstruído do snapshot ({ultimo_esperado})']
+
+    primeiro = df.sort_values('mes_central').iloc[0]
+    msgs.append(f'série RONI íntegra: {len(df)} observações, {primeiro["temporada"]}/'
+                f'{int(primeiro["ano"])} a {ultimo_real["seas"]}/{ultimo_real["ano"]}')
+    return True, msgs
+
+
+# ══════════════════════════════════════════════════════
 # PONTO DE ENTRADA ÚNICO
 # ══════════════════════════════════════════════════════
 def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_bytes=None):
@@ -528,7 +637,15 @@ def processar_aquisicao(url=RONI_URL, hoje=None, aquisicao_id=None, conteudo_byt
         return {'ultimo': ultimo_da_serie_ativa(), 'estado_promocao': 'rejeitada_estrutural',
                 'avisos': avisos, 'aquisicao_id': aquisicao_id}
 
-    antiga_df = _ler_serie_persistida()
+    try:
+        antiga_df = _ler_serie_persistida()
+    except BaseCorrompida as e:
+        _registrar_proveniencia(aquisicao_id, url, hash_sha256, lista[0], lista[-1], len(lista),
+                                 'rejeitada_base_corrompida', str(e),
+                                 alterou_texto=None, alterou_valores=None)
+        return {'ultimo': None, 'estado_promocao': 'rejeitada_base_corrompida',
+                'avisos': avisos + [str(e)], 'aquisicao_id': aquisicao_id}
+
     comparacao = comparar_series(antiga_df, lista)
     estado, motivo = decidir_promocao(comparacao, hoje)
 

@@ -141,17 +141,22 @@ def _serie_subst_fixture_csv(com_lacuna):
 def _montar_arvore_isolada_verificador(raiz, serie_subst_csv_texto):
     """Copia só o que `scripts/verificar_dashboard.py` precisa para
     rodar como subprocesso real (igual a indices_semanal.yml/
-    update.yml o chamam) — `verificar_dashboard.py` e sua única
-    dependência local `proveniencia_indices.py`, e o `docs/index.html`
-    REAL (não é isso que está sob teste aqui) — com um
-    `data/serie_subst.csv` FIXTURE no lugar do real. Como
-    `verificar_dashboard.py` resolve `ROOT = Path(__file__).parent.parent`,
-    rodar o binário copiado faz `SERIE_SUBST`/`DASHBOARD` apontarem para
-    esta árvore isolada, nunca para o repositório real."""
+    update.yml o chamam) — `verificar_dashboard.py` e suas dependências
+    locais `proveniencia_indices.py`/`roni_historico.py` (Fase
+    ENSO-RONI-MIGRAÇÃO 2.1), e o `docs/index.html` REAL (não é isso que
+    está sob teste aqui) — com um `data/serie_subst.csv` FIXTURE no
+    lugar do real. Deliberadamente SEM `data/roni_historico.csv`/
+    `roni_proveniencia.csv`/`roni_snapshots/` — a verificação RONI
+    (leitura) trata a ausência total desses artefatos como "nada a
+    verificar ainda", nunca como falha, então a árvore isolada permanece
+    válida sem eles. Como `verificar_dashboard.py` resolve
+    `ROOT = Path(__file__).parent.parent`, rodar o binário copiado faz
+    `SERIE_SUBST`/`DASHBOARD` apontarem para esta árvore isolada, nunca
+    para o repositório real."""
     (raiz / 'scripts').mkdir(parents=True)
     (raiz / 'docs').mkdir()
     (raiz / 'data').mkdir()
-    for nome in ('verificar_dashboard.py', 'proveniencia_indices.py'):
+    for nome in ('verificar_dashboard.py', 'proveniencia_indices.py', 'roni_historico.py'):
         shutil.copy(ROOT / 'scripts' / nome, raiz / 'scripts' / nome)
     shutil.copy(ROOT / 'docs' / 'index.html', raiz / 'docs' / 'index.html')
     (raiz / 'data' / 'serie_subst.csv').write_text(serie_subst_csv_texto, encoding='utf-8')

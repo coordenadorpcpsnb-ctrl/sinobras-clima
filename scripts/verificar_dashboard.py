@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 import proveniencia_indices as prov
+import roni_historico as roni_hist
 
 ROOT      = Path(__file__).parent.parent
 DASHBOARD = ROOT / 'docs' / 'index.html'
@@ -833,6 +834,25 @@ def main(pular_continuidade_serie_subst=False):
             ok('proveniência de tsa/pdo em serie_subst.csv consistente com os registros '
                'existentes (sem divergência de valor, registro órfão, valor inválido ou '
                'chave duplicada)')
+
+    # ── 14. integridade dos artefatos históricos do RONI (Fase
+    #        ENSO-RONI-MIGRAÇÃO 2.1) — SOMENTE LEITURA: nunca consulta a
+    #        NOAA, nunca grava/recupera/recalibra nada; delega
+    #        inteiramente a roni_historico.verificar_integridade_roni()
+    #        (que por sua vez reaproveita o validador estrito já
+    #        existente — nenhuma segunda implementação de parser aqui).
+    #        Roda INCONDICIONALMENTE, inclusive com
+    #        --pular-continuidade-serie-subst (essa flag é exclusiva da
+    #        checagem de continuidade mensal de serie_subst.csv — ver
+    #        item 7; nunca desativa esta checagem). Nunca compara o
+    #        valor persistido aqui contra docs/index.html — const RONI
+    #        pode legitimamente estar atrás da série mais recente por
+    #        defasagem normal de publicação, isso não é um erro.
+    ok_roni, msgs_roni = roni_hist.verificar_integridade_roni()
+    for m in msgs_roni:
+        (ok if ok_roni else erro)(f'RONI histórico: {m}')
+    if ok_roni and not msgs_roni:
+        ok('artefatos históricos do RONI íntegros')
 
     # ── resultado ───────────────────────────────────────────────────────
     print(f"\n{'='*58}")

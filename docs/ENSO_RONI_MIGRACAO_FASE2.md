@@ -207,6 +207,83 @@ reconsultada só para gerar hash):
   `.github/workflows/ci.yml`.
 - Nenhum workflow foi alterado nesta fase.
 
+## 10.1. Fase 2.1 — CI, verificação de integridade somente leitura e correção de uma lacuna real
+
+**SHA completo do commit inicial desta migração**: `361bf00e60db9f1457620efb425d7e223786eeb2`.
+
+**Inclusão na CI**: `.github/workflows/ci.yml`, Job A, passou a incluir
+`tests.test_roni_historico` na mesma lista `python -m unittest -v`
+dos demais módulos (nenhum módulo existente removido/alterado). Job B
+já incluía `tests.test_verificar_dashboard`/
+`tests.test_verificar_dashboard_enso_auto` — nenhuma alteração
+necessária ali para cobrir a nova verificação de integridade.
+
+**Verificação de integridade somente leitura**: nova função
+`roni_historico.verificar_integridade_roni()` — nunca consulta a NOAA,
+nunca grava/recupera/recalibra nada, nunca reimplementa o parser
+(delega a `serie_ativa_corresponde_ao_snapshot`/
+`reconstruir_da_snapshot`/`ultimo_da_lista`, já existentes). Integrada
+a `scripts/verificar_dashboard.py` como item 14, incondicional
+(roda igual com ou sem `--pular-continuidade-serie-subst`, que é
+exclusiva da checagem de continuidade de `serie_subst.csv`). Nunca
+compara o valor persistido contra `docs/index.html` — `const RONI`
+pode legitimamente estar atrás da série mais recente por defasagem
+normal de publicação, isso nunca é tratado como erro.
+
+**Achado real da revisão direcionada** (corrigido nesta fase): a
+distinção entre "`roni_historico.csv` ainda não existe" (primeira
+aquisição, legítimo) e "`roni_historico.csv` existe mas está corrompido
+e ilegível" não existia — os dois casos produziam o mesmo resultado
+(`None`), o que permitiria reinicializar silenciosamente sobre uma base
+corrompida, descartando evidência de que havia algo ali antes. Corrigido
+com a exceção `BaseCorrompida`, nunca propagada ao chamador externo:
+`processar_aquisicao()` agora devolve o estado explícito
+`rejeitada_base_corrompida` nesse cenário, preserva o arquivo corrompido
+sem reescrevê-lo, e `ultimo_da_serie_ativa()`/
+`serie_ativa_corresponde_ao_snapshot()` degradam com segurança (`None`/
+`False`) em vez de lançar. 2 testes novos cobrem especificamente esse
+cenário (`test_d7`/`test_d8`), usando uma corrupção realista (linhas
+com número de campos divergente, que o parser C do pandas rejeita com
+`ParserError`) — uma simples sequência de bytes "lixo" não serviria de
+teste, porque o `pandas.read_csv` a interpreta como um cabeçalho de uma
+coluna só, sem lançar exceção alguma.
+
+**Correção de fixture de teste**: `tests/test_verificar_dashboard.py`
+(`_montar_arvore_isolada_verificador`) copiava só
+`verificar_dashboard.py`+`proveniencia_indices.py` para a árvore
+isolada usada por `ComandoExatoDoWorkflowSemanalTestCase` — ao tornar
+`roni_historico` uma dependência direta de `verificar_dashboard.py`,
+essas 5 chamadas de subprocesso passaram a falhar por `ImportError`
+(stdout vazio, returncode 1). Corrigido copiando também
+`roni_historico.py` para a árvore isolada; a ausência de
+`data/roni_historico.csv`/`roni_proveniencia.csv`/`roni_snapshots/`
+nessas árvores permanece válida — a verificação trata ausência total
+como "nada a verificar ainda", nunca como falha.
+
+**Testes locais (Seção 9)**: os 53 testes de `tests.test_roni_historico`
+reportados na Fase 2 **já estavam incluídos** no total de 200 testes
+daquele relatório — não eram adicionais. Nesta fase, a suíte cresceu de
+53 para **65** (12 novos: 2 para `BaseCorrompida`, 10 para
+`verificar_integridade_roni`). Regressão combinada desta fase: **235/235
+OK** (`test_roni_historico` + `test_update_indices` +
+`test_enso_roni_fase4b1` + `test_verificar_dashboard` +
+`test_verificar_dashboard_enso_auto` +
+`PreservacaoDeModelosCientificosTestCase` +
+`test_cobertura_temporal_precipitacao`). `verificar_dashboard.py` real
+(dados commitados, sem rede): **APROVADO**, com e sem
+`--pular-continuidade-serie-subst`, mostrando
+`✅ RONI histórico: série RONI íntegra: 921 observações, DJF/1950 a
+ASO/2026`.
+
+**Compatibilidade operacional**: confirmado que `data/roni_proveniencia.csv`
+(arquivo já versionado nesta fase) muda de conteúdo em TODA execução real
+de `processar_aquisicao()` — mesmo quando `reaproveitada_sem_mudanca`,
+grava uma nova linha com timestamp novo — então a barreira
+`git diff --quiet docs/index.html data/` de `indices_semanal.yml`
+sempre detecta algo a commitar, e o `git add data/` subsequente inclui
+corretamente qualquer snapshot novo ainda não rastreado. Nenhum
+workflow operacional foi alterado.
+
 ## 11. Limitações conhecidas
 
 - O arquivo `RONI.ascii.txt` não se autodeclara ERSSTv6 — a versão é
